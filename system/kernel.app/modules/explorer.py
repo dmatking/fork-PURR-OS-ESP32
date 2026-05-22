@@ -172,7 +172,7 @@ class ExplorerModule:
         clk = '{:02d}:{:02d}'.format((s // 60) % 60, s % 60)
         wifi_s = 'W+' if self._wifi else 'W-'
 
-        clk_x  = w - 5*cw - 4
+        clk_x  = w - 5*cw - 2
         wifi_x = clk_x - 2*cw - 6
 
         # Double-groove separator before tray
