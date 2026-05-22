@@ -1,0 +1,7 @@
+[wokwi]
+version = 1
+firmware = "micropython.bin"
+rfc2217ServerPort = 4000
+
+# MicroPython v1.24.1 for ESP32-S3 (generic)
+# Source: https://micropython.org/download/ESP32_GENERIC_S3/

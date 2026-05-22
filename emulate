@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# PURR OS emulator control script
+#
+# Usage:
+#   ./emulate                     start display + kernel (2x scale)
+#   ./emulate start               same
+#   ./emulate start --scale 4     start at 4x (big, pixel-accurate debug)
+#   ./emulate start --1to1        1 display-pixel = 1 screen pixel
+#   ./emulate stop                stop display + kernel
+#   ./emulate restart             restart kernel only (display stays open)
+#   ./emulate display             start display window only
+#   ./emulate kernel              start kernel only (display must be running)
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOG_FILE="/tmp/purr_kernel.log"
+DISPLAY_PID_FILE="$SCRIPT_DIR/.emulator_display.pid"
+
+SCALE=2
+ONE_TO_ONE=""
+CMD="${1:-start}"
+[[ "$CMD" != "start" && "$CMD" != "stop" && "$CMD" != "restart" \
+   && "$CMD" != "display" && "$CMD" != "kernel" && "$CMD" != "log" ]] \
+  && CMD="start" || shift
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --scale) SCALE="$2"; shift 2 ;;
+        --1to1)  ONE_TO_ONE="--1to1"; shift ;;
+        *)       shift ;;
+    esac
+done
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+stop_display() {
+    if [[ -f "$DISPLAY_PID_FILE" ]]; then
+        pid=$(cat "$DISPLAY_PID_FILE")
+        kill "$pid" 2>/dev/null && echo "  display stopped (pid $pid)"
+        rm -f "$DISPLAY_PID_FILE"
+    fi
+    pkill -f "emulator.py" 2>/dev/null
+}
+
+stop_kernel() {
+    pkill -f "micropython run.py" 2>/dev/null && echo "  kernel stopped"
+}
+
+start_display() {
+    local scale_arg="--scale $SCALE"
+    [[ -n "$ONE_TO_ONE" ]] && scale_arg="$ONE_TO_ONE"
+
+    python3 "$SCRIPT_DIR/emulator.py" $scale_arg \
+        --width 320 --height 240 &
+    echo $! > "$DISPLAY_PID_FILE"
+    echo "  display started  pid=$!  scale=${SCALE}x${ONE_TO_ONE:+  (1:1 mode)}"
+
+    # Wait until the TCP server is actually accepting connections (up to 5s)
+    echo -n "  waiting for display socket"
+    python3 - <<'EOF'
+import socket, time, sys
+for _ in range(25):
+    try:
+        s = socket.socket()
+        s.settimeout(0.2)
+        s.connect(('127.0.0.1', 8765))
+        s.close()
+        sys.exit(0)
+    except Exception:
+        time.sleep(0.2)
+        sys.stdout.write('.')
+        sys.stdout.flush()
+sys.exit(1)
+EOF
+    echo " ready"
+}
+
+cleanup() {
+    echo ""
+    echo "=== stopping PURR OS ==="
+    stop_kernel
+    stop_display
+    exit 0
+}
+
+# ── commands ─────────────────────────────────────────────────────────────────
+
+case "$CMD" in
+
+    start)
+        echo "=== PURR OS starting ==="
+        stop_kernel
+        stop_display
+        start_display
+        trap cleanup INT TERM
+        cd "$SCRIPT_DIR"
+        echo "  kernel starting  (logs below)"
+        echo "────────────────────────────────────────"
+        micropython run.py 2>&1 | tee "$LOG_FILE"
+        cleanup
+        ;;
+
+    stop)
+        echo "=== PURR OS stopping ==="
+        stop_kernel
+        stop_display
+        ;;
+
+    restart)
+        echo "=== restarting kernel ==="
+        stop_kernel
+        sleep 0.2
+        trap cleanup INT TERM
+        cd "$SCRIPT_DIR"
+        micropython run.py 2>&1 | tee "$LOG_FILE"
+        cleanup
+        ;;
+
+    display)
+        echo "=== starting display only ==="
+        stop_display
+        start_display
+        wait
+        ;;
+
+    kernel)
+        echo "=== starting kernel only ==="
+        trap cleanup INT TERM
+        cd "$SCRIPT_DIR"
+        micropython run.py 2>&1 | tee "$LOG_FILE"
+        cleanup
+        ;;
+
+    log)
+        tail -f "$LOG_FILE"
+        ;;
+
+    *)
+        echo "Usage: ./emulate [start|stop|restart|display|kernel|log] [--scale N] [--1to1]"
+        exit 1
+        ;;
+esac
