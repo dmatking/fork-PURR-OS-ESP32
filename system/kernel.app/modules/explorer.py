@@ -2,7 +2,7 @@ import uasyncio as asyncio
 import utime
 
 _BEAT_INTERVAL = 2000
-_REFRESH_MS    = 1000
+_REFRESH_MS    = 500
 _TASKBAR_H     = 32
 
 # Classic Windows CE 2.x silver palette
@@ -15,6 +15,16 @@ _START    = 0x0410  # WIN_TEAL Start button
 _SEL      = 0x000F  # WIN_BLUE selected item
 _FG_DARK  = 0x0000  # BLACK text on silver
 _FG_LIGHT = 0xFFFF  # WHITE text on dark backgrounds
+
+# Desktop icons
+_ICONS = [
+    {'name': 'My Device', 'x': 20, 'y': 20},
+    {'name': 'WordPad', 'x': 100, 'y': 20},
+    {'name': 'Recycle Bin', 'x': 20, 'y': 80},
+    {'name': 'My Documents', 'x': 100, 'y': 80},
+    {'name': 'Internet', 'x': 20, 'y': 140},
+    {'name': 'Messenger', 'x': 100, 'y': 140},
+]
 
 
 def _raised(ops, x, y, w, h, face):
@@ -48,10 +58,12 @@ class ExplorerModule:
         self._menu_open = False
         self._menu_sel  = 0
         self._menu_items = ['Apps', 'Settings', 'Shutdown']
-        self._applet_open = None  # 'wifi', 'bt', 'batt', or None
-        self._need_desktop = True
+        self._applet_open = None
+        self._icon_sel = 0
+        self._show_splash = True
+        self._splash_time = utime.ticks_ms()
         self._w     = 320
-        self._h     = 480
+        self._h     = 240
         self._scale = 2
         self._load_cfg()
 
@@ -77,8 +89,6 @@ class ExplorerModule:
             tray_task.cancel()
             key_task.cancel()
 
-    # ------------------------------------------------------------------
-
     async def _clock_loop(self):
         while True:
             self._draw()
@@ -89,12 +99,9 @@ class ExplorerModule:
             msg = await self._tray.get()
             if msg.get('wifi') is not None:
                 self._wifi = bool(msg['wifi'])
-                self._draw()
 
     async def _key_loop(self):
         applets = ['batt', 'bt', 'wifi']
-        applet_idx = 0
-
         while True:
             msg = await self._keys.get()
             if msg.get('event') != 'press':
@@ -103,70 +110,70 @@ class ExplorerModule:
 
             if self._applet_open:
                 if key == 'SELECT':
-                    # Toggle applet state
                     if self._applet_open == 'wifi':
                         self._wifi = not self._wifi
                     elif self._applet_open == 'bt':
                         self._bt = not self._bt
                     elif self._applet_open == 'batt':
                         self._batt = (self._batt + 10) % 110
-                    self._draw()
                 elif key == 'BACK':
                     self._applet_open = None
-                    self._draw()
                 elif key == 'LEFT' or key == 'RIGHT':
-                    # Switch between applets
                     idx = applets.index(self._applet_open)
                     if key == 'LEFT':
                         idx = (idx - 1) % len(applets)
                     else:
                         idx = (idx + 1) % len(applets)
                     self._applet_open = applets[idx]
-                    self._draw()
             elif key == 'SELECT':
                 self._menu_open = not self._menu_open
                 self._menu_sel = 0
-                self._need_desktop = True
-                self._draw()
             elif self._menu_open:
                 if key == 'UP':
                     self._menu_sel = (self._menu_sel - 1) % len(self._menu_items)
-                    self._draw()
                 elif key == 'DOWN':
                     self._menu_sel = (self._menu_sel + 1) % len(self._menu_items)
-                    self._draw()
                 elif key == 'BACK':
                     self._menu_open = False
-                    self._need_desktop = True
-                    self._draw()
             elif key == 'LEFT':
-                # Open applet when not in menu
                 self._applet_open = 'batt'
-                self._draw()
             elif key == 'RIGHT':
-                # Open WiFi applet
                 self._applet_open = 'wifi'
-                self._draw()
-
-    # ------------------------------------------------------------------
 
     def _draw(self):
         ops = []
-        w   = self._w
-        h   = self._h
-        sc  = self._scale
-        cw  = 8 * sc
-        ch  = 8 * sc
-        y_bar   = h - _TASKBAR_H
-        btn_y   = y_bar + 3
-        btn_h   = _TASKBAR_H - 6
-        ty      = y_bar + (_TASKBAR_H - ch) // 2
+        w = self._w
+        h = self._h
+        sc = self._scale
+        cw = 8 * sc
+        ch = 8 * sc
+        y_bar = h - _TASKBAR_H
+        btn_y = y_bar + 3
+        btn_h = _TASKBAR_H - 6
+        ty = y_bar + (_TASKBAR_H - ch) // 2
 
-        # Desktop fill (only when needed)
-        if self._need_desktop:
-            ops.append({'cmd': 'fill_rect', 'x': 0, 'y': 0,
-                        'w': w, 'h': y_bar, 'color': _DESKTOP})
-            self._need_desktop = False
+        # Check if splash should still show
+        if self._show_splash:
+            age_ms = utime.ticks_diff(utime.ticks_ms(), self._splash_time)
+            if age_ms > 2000:
+                self._show_splash = False
+            else:
+                self._draw_splash(ops)
+                ops.append({'cmd': 'show'})
+                self._core.publish('display', {'type': 'raw', 'ops': ops})
+                return
+
+        # Desktop + icons
+        ops.append({'cmd': 'fill_rect', 'x': 0, 'y': 0, 'w': w, 'h': y_bar, 'color': _DESKTOP})
+
+        # Draw icons
+        for i, icon in enumerate(_ICONS):
+            ix = icon['x'] * sc
+            iy = icon['y'] * sc
+            iw = 10 * cw
+            ih = 6 * ch
+            is_sel = (i == self._icon_sel and not self._menu_open and not self._applet_open)
+            self._draw_icon(ops, ix, iy, iw, ih, icon['name'], is_sel, cw, ch)
 
         # Applet popup
         if self._applet_open:
@@ -182,16 +189,29 @@ class ExplorerModule:
         ops.append({'cmd': 'show'})
         self._core.publish('display', {'type': 'raw', 'ops': ops})
 
-    # ------------------------------------------------------------------
-    # Taskbar
-    # ------------------------------------------------------------------
+    def _draw_splash(self, ops):
+        """Windows CE splash screen."""
+        w = self._w
+        h = self._h
+        ops.append({'cmd': 'fill', 'color': _START})
+        ops.append({'cmd': 'text', 's': 'Microsoft', 'x': w//2 - 40, 'y': h//2 - 30,
+                    'color': _FG_LIGHT})
+        ops.append({'cmd': 'text', 's': 'Windows CE', 'x': w//2 - 40, 'y': h//2 - 10,
+                    'color': _FG_LIGHT})
+
+    def _draw_icon(self, ops, x, y, w, h, name, selected, cw, ch):
+        """Draw a desktop icon."""
+        face = _SEL if selected else _BTN_FACE
+        fg = _FG_LIGHT if selected else _FG_DARK
+        _raised(ops, x, y, w, h, face)
+        ops.append({'cmd': 'text', 's': name, 'x': x + 4, 'y': y + h - ch - 4,
+                    'color': fg, 'bg': face})
 
     def _taskbar_ops(self, ops, w, sc, cw, ch, y_bar, btn_y, btn_h, ty):
-        # Silver background + top highlight
         ops.append({'cmd': 'fill_rect', 'x': 0, 'y': y_bar, 'w': w, 'h': _TASKBAR_H, 'color': _TASKBAR})
-        ops.append({'cmd': 'hline',     'x': 0, 'y': y_bar, 'w': w, 'color': _HI})
+        ops.append({'cmd': 'hline', 'x': 0, 'y': y_bar, 'w': w, 'color': _HI})
 
-        # --- Start button ---
+        # Start button
         btn_w = 5*cw + 8
         txt_x = 2 + (btn_w - 5*cw) // 2
         if self._menu_open:
@@ -203,78 +223,60 @@ class ExplorerModule:
             ops.append({'cmd': 'text', 's': 'Start', 'x': txt_x, 'y': ty,
                         'color': _FG_LIGHT, 'bg': _START})
 
-        # Double-groove separator after Start
+        # Separator
         sep1 = 2 + btn_w + 3
-        ops.append({'cmd': 'vline', 'x': sep1,   'y': btn_y, 'h': btn_h, 'color': _SH})
+        ops.append({'cmd': 'vline', 'x': sep1, 'y': btn_y, 'h': btn_h, 'color': _SH})
         ops.append({'cmd': 'vline', 'x': sep1+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
 
-        # --- System tray (right-to-left, 3px spacing) ---
-        s   = utime.ticks_ms() // 1000
+        # Tray
+        s = utime.ticks_ms() // 1000
         clk = '{:02d}:{:02d}'.format((s // 60) % 60, s % 60)
         wifi_s = 'W+' if self._wifi else 'W-'
         batt_s = 'B{}%'.format(self._batt)
         bt_s = 'BT+' if self._bt else 'BT-'
 
         gap = 3
-        clk_x  = w - 5*cw - 2
+        clk_x = w - 5*cw - 2
         wifi_x = clk_x - gap - 2*cw
-        bt_x   = wifi_x - gap - 3*cw
+        bt_x = wifi_x - gap - 3*cw
         batt_x = bt_x - gap - 4*cw
 
-        # Double-groove separator before tray
         tray_sep = batt_x - gap - 2
-        ops.append({'cmd': 'vline', 'x': tray_sep,   'y': btn_y, 'h': btn_h, 'color': _SH})
+        ops.append({'cmd': 'vline', 'x': tray_sep, 'y': btn_y, 'h': btn_h, 'color': _SH})
         ops.append({'cmd': 'vline', 'x': tray_sep+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
 
-        # Highlight applet if open
         batt_bg = _SEL if self._applet_open == 'batt' else _TASKBAR
         bt_bg = _SEL if self._applet_open == 'bt' else _TASKBAR
         wifi_bg = _SEL if self._applet_open == 'wifi' else _TASKBAR
-
         batt_fg = _FG_LIGHT if self._applet_open == 'batt' else _FG_DARK
         bt_fg = _FG_LIGHT if self._applet_open == 'bt' else _FG_DARK
         wifi_fg = _FG_LIGHT if self._applet_open == 'wifi' else _FG_DARK
 
-        ops.append({'cmd': 'text', 's': batt_s, 'x': batt_x, 'y': ty,
-                    'color': batt_fg, 'bg': batt_bg})
-        ops.append({'cmd': 'text', 's': bt_s,   'x': bt_x,   'y': ty,
-                    'color': bt_fg,   'bg': bt_bg})
-        ops.append({'cmd': 'text', 's': wifi_s, 'x': wifi_x, 'y': ty,
-                    'color': wifi_fg, 'bg': wifi_bg})
-        ops.append({'cmd': 'text', 's': clk,    'x': clk_x,  'y': ty,
-                    'color': _FG_DARK, 'bg': _TASKBAR})
+        ops.append({'cmd': 'text', 's': batt_s, 'x': batt_x, 'y': ty, 'color': batt_fg, 'bg': batt_bg})
+        ops.append({'cmd': 'text', 's': bt_s, 'x': bt_x, 'y': ty, 'color': bt_fg, 'bg': bt_bg})
+        ops.append({'cmd': 'text', 's': wifi_s, 'x': wifi_x, 'y': ty, 'color': wifi_fg, 'bg': wifi_bg})
+        ops.append({'cmd': 'text', 's': clk, 'x': clk_x, 'y': ty, 'color': _FG_DARK, 'bg': _TASKBAR})
 
     def _menu_ops(self, ops, cw, ch, y_bar):
-        menu_w   = 10*cw + 8
-        item_h   = ch + 4
+        menu_w = 10*cw + 8
+        item_h = ch + 4
         header_h = ch + 6
-        n        = len(self._menu_items)
-        menu_h   = header_h + n*item_h + 4
-        menu_y   = y_bar - menu_h
+        n = len(self._menu_items)
+        menu_h = header_h + n*item_h + 4
+        menu_y = y_bar - menu_h
 
-        # Outer raised panel
         _raised(ops, 0, menu_y, menu_w, menu_h, _BTN_FACE)
+        ops.append({'cmd': 'fill_rect', 'x': 1, 'y': menu_y+1, 'w': menu_w-2, 'h': header_h, 'color': _START})
+        ops.append({'cmd': 'text', 's': 'PURR  OS', 'x': 8, 'y': menu_y+3, 'color': _FG_LIGHT, 'bg': _START})
+        ops.append({'cmd': 'hline', 'x': 1, 'y': menu_y+header_h, 'w': menu_w-2, 'color': _SH})
 
-        # Title bar (teal strip)
-        ops.append({'cmd': 'fill_rect', 'x': 1, 'y': menu_y+1,
-                    'w': menu_w-2, 'h': header_h, 'color': _START})
-        ops.append({'cmd': 'text', 's': 'PURR  OS', 'x': 8, 'y': menu_y+3,
-                    'color': _FG_LIGHT, 'bg': _START})
-
-        # Divider between title and items
-        ops.append({'cmd': 'hline', 'x': 1, 'y': menu_y+header_h,
-                    'w': menu_w-2, 'color': _SH})
-
-        # Menu items
         items_top = menu_y + header_h + 2
         for i, item in enumerate(self._menu_items):
-            iy   = items_top + i*item_h
+            iy = items_top + i*item_h
             face = _SEL if i == self._menu_sel else _BTN_FACE
-            fg   = _FG_LIGHT if i == self._menu_sel else _FG_DARK
-            ops.append({'cmd': 'fill_rect', 'x': 2, 'y': iy,
-                        'w': menu_w-4, 'h': item_h, 'color': face})
-            ops.append({'cmd': 'text', 's': item, 'x': 8, 'y': iy+2,
-                        'color': fg, 'bg': face})
+            fg = _FG_LIGHT if i == self._menu_sel else _FG_DARK
+            ops.append({'cmd': 'fill_rect', 'x': 2, 'y': iy, 'w': menu_w-4, 'h': item_h, 'color': face})
+            ops.append({'cmd': 'text', 's': item, 'x': 8, 'y': iy+2, 'color': fg, 'bg': face})
 
     def _applet_ops(self, ops, cw, ch, y_bar):
         if not self._applet_open:
@@ -285,36 +287,22 @@ class ExplorerModule:
         app_x = 320 - app_w - 4
         app_y = y_bar - app_h - 4
 
-        # Applet window
         _raised(ops, app_x, app_y, app_w, app_h, _BTN_FACE)
-
-        # Title bar
-        ops.append({'cmd': 'fill_rect', 'x': app_x+1, 'y': app_y+1,
-                    'w': app_w-2, 'h': ch+4, 'color': _START})
+        ops.append({'cmd': 'fill_rect', 'x': app_x+1, 'y': app_y+1, 'w': app_w-2, 'h': ch+4, 'color': _START})
 
         if self._applet_open == 'wifi':
-            ops.append({'cmd': 'text', 's': 'WiFi', 'x': app_x+8, 'y': app_y+3,
-                        'color': _FG_LIGHT, 'bg': _START})
-            ops.append({'cmd': 'text', 's': 'Status: ' + ('ON' if self._wifi else 'OFF'),
-                        'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
-            ops.append({'cmd': 'text', 's': '[Enter to toggle]',
-                        'x': app_x+8, 'y': app_y+50, 'color': _FG_DARK})
+            ops.append({'cmd': 'text', 's': 'WiFi', 'x': app_x+8, 'y': app_y+3, 'color': _FG_LIGHT, 'bg': _START})
+            ops.append({'cmd': 'text', 's': 'Status: ' + ('ON' if self._wifi else 'OFF'), 'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
+            ops.append({'cmd': 'text', 's': '[Enter to toggle]', 'x': app_x+8, 'y': app_y+50, 'color': _FG_DARK})
 
         elif self._applet_open == 'bt':
-            ops.append({'cmd': 'text', 's': 'Bluetooth', 'x': app_x+8, 'y': app_y+3,
-                        'color': _FG_LIGHT, 'bg': _START})
-            ops.append({'cmd': 'text', 's': 'Status: ' + ('ON' if self._bt else 'OFF'),
-                        'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
-            ops.append({'cmd': 'text', 's': '[Enter to toggle]',
-                        'x': app_x+8, 'y': app_y+50, 'color': _FG_DARK})
+            ops.append({'cmd': 'text', 's': 'Bluetooth', 'x': app_x+8, 'y': app_y+3, 'color': _FG_LIGHT, 'bg': _START})
+            ops.append({'cmd': 'text', 's': 'Status: ' + ('ON' if self._bt else 'OFF'), 'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
+            ops.append({'cmd': 'text', 's': '[Enter to toggle]', 'x': app_x+8, 'y': app_y+50, 'color': _FG_DARK})
 
         elif self._applet_open == 'batt':
-            ops.append({'cmd': 'text', 's': 'Battery', 'x': app_x+8, 'y': app_y+3,
-                        'color': _FG_LIGHT, 'bg': _START})
-            ops.append({'cmd': 'text', 's': 'Level: {}%'.format(self._batt),
-                        'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
-
-    # ------------------------------------------------------------------
+            ops.append({'cmd': 'text', 's': 'Battery', 'x': app_x+8, 'y': app_y+3, 'color': _FG_LIGHT, 'bg': _START})
+            ops.append({'cmd': 'text', 's': 'Level: {}%'.format(self._batt), 'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
 
     async def _heartbeat(self):
         while True:
