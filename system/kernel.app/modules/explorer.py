@@ -42,7 +42,11 @@ class ExplorerModule:
     def __init__(self, core):
         self._core  = core
         self._tray  = core.subscribe('explorer.tray')
+        self._keys  = core.subscribe('input.key')
         self._wifi  = False
+        self._menu_open = False
+        self._menu_sel  = 0
+        self._menu_items = ['Apps', 'Settings', 'Shutdown']
         self._need_desktop = True
         self._w     = 320
         self._h     = 240
@@ -63,11 +67,13 @@ class ExplorerModule:
     async def run(self):
         beat_task = asyncio.create_task(self._heartbeat())
         tray_task = asyncio.create_task(self._tray_loop())
+        key_task = asyncio.create_task(self._key_loop())
         try:
             await self._clock_loop()
         finally:
             beat_task.cancel()
             tray_task.cancel()
+            key_task.cancel()
 
     # ------------------------------------------------------------------
 
@@ -82,6 +88,29 @@ class ExplorerModule:
             if msg.get('wifi') is not None:
                 self._wifi = bool(msg['wifi'])
                 self._draw()
+
+    async def _key_loop(self):
+        while True:
+            msg = await self._keys.get()
+            if msg.get('event') != 'press':
+                continue
+            key = msg.get('key')
+            if key == 'SELECT':
+                self._menu_open = not self._menu_open
+                self._menu_sel = 0
+                self._need_desktop = True
+                self._draw()
+            elif self._menu_open:
+                if key == 'UP':
+                    self._menu_sel = (self._menu_sel - 1) % len(self._menu_items)
+                    self._draw()
+                elif key == 'DOWN':
+                    self._menu_sel = (self._menu_sel + 1) % len(self._menu_items)
+                    self._draw()
+                elif key == 'BACK':
+                    self._menu_open = False
+                    self._need_desktop = True
+                    self._draw()
 
     # ------------------------------------------------------------------
 
@@ -103,6 +132,10 @@ class ExplorerModule:
                         'w': w, 'h': y_bar, 'color': _DESKTOP})
             self._need_desktop = False
 
+        # Start menu overlay
+        if self._menu_open:
+            self._menu_ops(ops, cw, ch, y_bar)
+
         # Taskbar
         self._taskbar_ops(ops, w, sc, cw, ch, y_bar, btn_y, btn_h, ty)
 
@@ -121,9 +154,14 @@ class ExplorerModule:
         # --- Start button ---
         btn_w = 5*cw + 8           # "Start" 5 chars + 4px each side
         txt_x = 2 + (btn_w - 5*cw) // 2
-        _raised(ops, 2, btn_y, btn_w, btn_h, _START)
-        ops.append({'cmd': 'text', 's': 'Start', 'x': txt_x, 'y': ty,
-                    'color': _FG_LIGHT, 'bg': _START})
+        if self._menu_open:
+            _pressed(ops, 2, btn_y, btn_w, btn_h, _START)
+            ops.append({'cmd': 'text', 's': 'Start', 'x': txt_x+1, 'y': ty+1,
+                        'color': _FG_LIGHT, 'bg': _START})
+        else:
+            _raised(ops, 2, btn_y, btn_w, btn_h, _START)
+            ops.append({'cmd': 'text', 's': 'Start', 'x': txt_x, 'y': ty,
+                        'color': _FG_LIGHT, 'bg': _START})
 
         # Double-groove separator after Start
         sep1 = 2 + btn_w + 3
@@ -151,6 +189,38 @@ class ExplorerModule:
                     'color': _FG_DARK, 'bg': _TASKBAR})
         ops.append({'cmd': 'text', 's': clk,    'x': clk_x,  'y': ty,
                     'color': _FG_DARK, 'bg': _TASKBAR})
+
+    def _menu_ops(self, ops, cw, ch, y_bar):
+        menu_w   = 10*cw + 8            # 168 on scale=2
+        item_h   = ch + 4               # 20
+        header_h = ch + 6               # 22
+        n        = len(self._menu_items)
+        menu_h   = header_h + n*item_h + 4
+        menu_y   = y_bar - menu_h
+
+        # Outer raised panel
+        _raised(ops, 0, menu_y, menu_w, menu_h, _BTN_FACE)
+
+        # Title bar (teal strip)
+        ops.append({'cmd': 'fill_rect', 'x': 1, 'y': menu_y+1,
+                    'w': menu_w-2, 'h': header_h, 'color': _START})
+        ops.append({'cmd': 'text', 's': 'PURR  OS', 'x': 8, 'y': menu_y+3,
+                    'color': _FG_LIGHT, 'bg': _START})
+
+        # Divider between title and items
+        ops.append({'cmd': 'hline', 'x': 1, 'y': menu_y+header_h,
+                    'w': menu_w-2, 'color': _SH})
+
+        # Menu items
+        items_top = menu_y + header_h + 2
+        for i, item in enumerate(self._menu_items):
+            iy   = items_top + i*item_h
+            face = _SEL if i == self._menu_sel else _BTN_FACE
+            fg   = _FG_LIGHT if i == self._menu_sel else _FG_DARK
+            ops.append({'cmd': 'fill_rect', 'x': 2, 'y': iy,
+                        'w': menu_w-4, 'h': item_h, 'color': face})
+            ops.append({'cmd': 'text', 's': item, 'x': 8, 'y': iy+2,
+                        'color': fg, 'bg': face})
 
     # ------------------------------------------------------------------
 
