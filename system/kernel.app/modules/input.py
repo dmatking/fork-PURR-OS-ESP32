@@ -13,8 +13,10 @@ KEY_RIGHT  = 'RIGHT'
 KEY_SELECT = 'SELECT'
 KEY_BACK   = 'BACK'
 
-# Emulator support (placeholder for future)
-_emu = None
+try:
+    import _purr_emulator as _emu
+except ImportError:
+    _emu = None
 
 
 class InputModule:
@@ -66,6 +68,12 @@ class InputModule:
     async def _poll_loop(self):
         import utime
         while True:
+            # Drain emulator-injected keys
+            if _emu is not None and _emu.injected_keys:
+                ev = _emu.injected_keys.pop(0)
+                if ev.get('key'):
+                    self._core.publish('input.key', {'key': ev['key'], 'event': 'press'})
+
             now = utime.ticks_ms()
             for pin, keycode in self._buttons:
                 state = pin.value()

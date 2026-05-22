@@ -22,6 +22,15 @@ BG      = '#000000'
 CHROME  = '#1e1e1e'
 BORDER  = '#3a3a3a'
 
+_KEY_MAP = {
+    'Return':    'SELECT',
+    'Escape':    'BACK',
+    'Up':        'UP',
+    'Down':      'DOWN',
+    'Left':      'LEFT',
+    'Right':     'RIGHT',
+}
+
 
 class PurrDisplay:
     def __init__(self, width, height, scale, port):
@@ -63,11 +72,34 @@ class PurrDisplay:
         fs = max(7, int(8 * scale * 0.78))
         self._font = ('Menlo', fs)
 
+        # ── Keyboard bindings ────────────────────────────────────────────────
+        self._bind_keys()
+        self.canvas.focus_set()
+
         # ── TCP server ───────────────────────────────────────────────────────
         self._running = True
         threading.Thread(target=self._serve, daemon=True).start()
 
         self.root.protocol('WM_DELETE_WINDOW', self._quit)
+
+    def _bind_keys(self):
+        for tk_key, keycode in _KEY_MAP.items():
+            self.canvas.bind('<{}>'.format(tk_key),
+                            lambda e, k=keycode: self._on_key(k))
+
+    def _on_key(self, keycode):
+        with self._conn_lock:
+            conn = self._conn
+        if not conn:
+            return
+        try:
+            msg = json.dumps({'cmd': 'key', 'key': keycode}) + '\n'
+            conn.sendall(msg.encode())
+            self.root.after(0, self._set_status, '→ {}'.format(keycode), '#0f0')
+            self.root.after(200, self._set_status, '● kernel connected', '#4ec94e')
+        except Exception:
+            with self._conn_lock:
+                self._conn = None
 
     # ── Server ───────────────────────────────────────────────────────────────
 

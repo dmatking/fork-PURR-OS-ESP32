@@ -13,9 +13,13 @@ import builtins
 PROJECT_ROOT = os.getcwd()
 
 # ── 0. Emulator shared state ─────────────────────────────────────────────────
-#    Placeholder for future emulator support
+#    Injected before any kernel code runs so _purr_emulator is importable.
 
-_emu_mod = None
+class _EmuState:
+    injected_keys = []
+
+_emu_mod = _EmuState()
+sys.modules['_purr_emulator'] = _emu_mod
 
 def _exists(path):
     try:
@@ -283,6 +287,35 @@ class _SocketDisplay:
                 break
             except Exception:
                 time.sleep(0.2)
+        if self._sock:
+            try:
+                import _thread
+                _thread.start_new_thread(self._read_keys, ())
+            except ImportError:
+                pass
+
+    def _read_keys(self):
+        import json
+        buf = ''
+        while self._sock:
+            try:
+                chunk = self._sock.recv(256)
+                if not chunk:
+                    break
+                buf += chunk.decode('utf-8', errors='replace')
+                while '\n' in buf:
+                    line, buf = buf.split('\n', 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+                        if msg.get('cmd') == 'key':
+                            _emu_mod.injected_keys.append(msg)
+                    except Exception:
+                        pass
+            except Exception:
+                break
 
     def _send(self, **kw):
         if not self._sock:
