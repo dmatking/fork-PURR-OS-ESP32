@@ -2,37 +2,7 @@ import uasyncio as asyncio
 import utime
 
 _BEAT_INTERVAL = 2000
-_REFRESH_MS    = 1000
-_TASKBAR_H     = 32
-
-# Classic Windows CE 2.x silver palette
-_DESKTOP  = 0x0410  # WIN_TEAL desktop
-_TASKBAR  = 0xC618  # LIGHT_GRAY silver taskbar
-_BTN_FACE = 0xC618  # LIGHT_GRAY button face
-_HI       = 0xFFFF  # WHITE   bevel top/left highlight
-_SH       = 0x4208  # DARK_GRAY bevel bottom/right shadow
-_START    = 0x0410  # WIN_TEAL Start button
-_SEL      = 0x000F  # WIN_BLUE selected item
-_FG_DARK  = 0x0000  # BLACK text on silver
-_FG_LIGHT = 0xFFFF  # WHITE text on dark backgrounds
-
-
-def _raised(ops, x, y, w, h, face):
-    """Draw a raised 3D button rectangle."""
-    ops.append({'cmd': 'fill_rect', 'x': x+1, 'y': y+1, 'w': w-2, 'h': h-2, 'color': face})
-    ops.append({'cmd': 'hline', 'x': x,     'y': y,     'w': w,   'color': _HI})
-    ops.append({'cmd': 'vline', 'x': x,     'y': y,     'h': h,   'color': _HI})
-    ops.append({'cmd': 'hline', 'x': x,     'y': y+h-1, 'w': w,   'color': _SH})
-    ops.append({'cmd': 'vline', 'x': x+w-1, 'y': y,     'h': h,   'color': _SH})
-
-
-def _pressed(ops, x, y, w, h, face):
-    """Draw a pressed (sunken) 3D button rectangle."""
-    ops.append({'cmd': 'fill_rect', 'x': x+1, 'y': y+1, 'w': w-2, 'h': h-2, 'color': face})
-    ops.append({'cmd': 'hline', 'x': x,     'y': y,     'w': w,   'color': _SH})
-    ops.append({'cmd': 'vline', 'x': x,     'y': y,     'h': h,   'color': _SH})
-    ops.append({'cmd': 'hline', 'x': x,     'y': y+h-1, 'w': w,   'color': _HI})
-    ops.append({'cmd': 'vline', 'x': x+w-1, 'y': y,     'h': h,   'color': _HI})
+_REFRESH_MS    = 100
 
 
 class ExplorerModule:
@@ -40,18 +10,11 @@ class ExplorerModule:
 
     def __init__(self, core):
         self._core  = core
-        self._tray  = core.subscribe('explorer.tray')
         self._keys  = core.subscribe('input.key')
-        self._wifi  = False
-        self._bt    = False
-        self._batt  = 75
-        self._menu_open = False
-        self._menu_sel  = 0
-        self._menu_items = ['Apps', 'Settings', 'Shutdown']
-        self._applet_open = None
-        self._w     = 320
-        self._h     = 240
-        self._scale = 2
+        self._last_key = None
+        self._last_key_time = 0
+        self._w = 320
+        self._h = 240
         self._load_cfg()
 
     def _load_cfg(self):
@@ -61,198 +24,49 @@ class ExplorerModule:
                 cfg = json.load(f)
             res = cfg.get('display_res', [128, 64])
             self._w, self._h = res[0], res[1]
-            self._scale = 2 if self._w >= 200 else 1
         except Exception:
             pass
 
     async def run(self):
         beat_task = asyncio.create_task(self._heartbeat())
-        tray_task = asyncio.create_task(self._tray_loop())
         key_task = asyncio.create_task(self._key_loop())
         try:
-            await self._clock_loop()
+            await self._draw_loop()
         finally:
             beat_task.cancel()
-            tray_task.cancel()
             key_task.cancel()
 
-    async def _clock_loop(self):
+    async def _key_loop(self):
+        while True:
+            msg = await self._keys.get()
+            key = msg.get('key')
+            event = msg.get('event')
+            if key and event == 'press':
+                self._last_key = key
+                self._last_key_time = utime.ticks_ms()
+                print('[explorer] key: {}'.format(key))
+
+    async def _draw_loop(self):
         while True:
             self._draw()
             await asyncio.sleep_ms(_REFRESH_MS)
 
-    async def _tray_loop(self):
-        while True:
-            msg = await self._tray.get()
-            if msg.get('wifi') is not None:
-                self._wifi = bool(msg['wifi'])
-
-    async def _key_loop(self):
-        applets = ['batt', 'bt', 'wifi']
-        while True:
-            msg = await self._keys.get()
-            if msg.get('event') != 'press':
-                continue
-            key = msg.get('key')
-
-            if self._applet_open:
-                if key == 'SELECT':
-                    if self._applet_open == 'wifi':
-                        self._wifi = not self._wifi
-                    elif self._applet_open == 'bt':
-                        self._bt = not self._bt
-                    elif self._applet_open == 'batt':
-                        self._batt = (self._batt + 10) % 110
-                elif key == 'BACK':
-                    self._applet_open = None
-                elif key == 'LEFT' or key == 'RIGHT':
-                    idx = applets.index(self._applet_open)
-                    if key == 'LEFT':
-                        idx = (idx - 1) % len(applets)
-                    else:
-                        idx = (idx + 1) % len(applets)
-                    self._applet_open = applets[idx]
-            elif key == 'SELECT':
-                self._menu_open = not self._menu_open
-                self._menu_sel = 0
-            elif self._menu_open:
-                if key == 'UP':
-                    self._menu_sel = (self._menu_sel - 1) % len(self._menu_items)
-                elif key == 'DOWN':
-                    self._menu_sel = (self._menu_sel + 1) % len(self._menu_items)
-                elif key == 'BACK':
-                    self._menu_open = False
-            elif key == 'LEFT':
-                self._applet_open = 'batt'
-            elif key == 'RIGHT':
-                self._applet_open = 'wifi'
-
     def _draw(self):
         ops = []
-        w = self._w
-        h = self._h
-        sc = self._scale
-        cw = 8 * sc
-        ch = 8 * sc
-        y_bar = h - _TASKBAR_H
-        btn_y = y_bar + 3
-        btn_h = _TASKBAR_H - 6
-        ty = y_bar + (_TASKBAR_H - ch) // 2
 
-        # Clear desktop
-        ops.append({'cmd': 'fill_rect', 'x': 0, 'y': 0, 'w': w, 'h': y_bar, 'color': _DESKTOP})
+        # Clear screen
+        ops.append({'cmd': 'fill', 'color': 0})
 
-        # Applet popup
-        if self._applet_open:
-            self._applet_ops(ops, cw, ch, y_bar)
-
-        # Start menu overlay
-        if self._menu_open:
-            self._menu_ops(ops, cw, ch, y_bar)
-
-        # Taskbar
-        self._taskbar_ops(ops, w, sc, cw, ch, y_bar, btn_y, btn_h, ty)
+        # Display current key
+        if self._last_key:
+            age_ms = utime.ticks_diff(utime.ticks_ms(), self._last_key_time)
+            if age_ms < 1000:
+                ops.append({'cmd': 'text', 's': 'Key: {}'.format(self._last_key), 'x': 20, 'y': 50, 'color': 1})
+            else:
+                self._last_key = None
 
         ops.append({'cmd': 'show'})
         self._core.publish('display', {'type': 'raw', 'ops': ops})
-
-    def _taskbar_ops(self, ops, w, sc, cw, ch, y_bar, btn_y, btn_h, ty):
-        ops.append({'cmd': 'fill_rect', 'x': 0, 'y': y_bar, 'w': w, 'h': _TASKBAR_H, 'color': _TASKBAR})
-        ops.append({'cmd': 'hline', 'x': 0, 'y': y_bar, 'w': w, 'color': _HI})
-
-        # Start button (left)
-        btn_w = 5*cw + 8
-        txt_x = 2 + (btn_w - 5*cw) // 2
-        if self._menu_open:
-            _pressed(ops, 2, btn_y, btn_w, btn_h, _START)
-            ops.append({'cmd': 'text', 's': 'Start', 'x': txt_x+1, 'y': ty+1,
-                        'color': _FG_LIGHT, 'bg': _START})
-        else:
-            _raised(ops, 2, btn_y, btn_w, btn_h, _START)
-            ops.append({'cmd': 'text', 's': 'Start', 'x': txt_x, 'y': ty,
-                        'color': _FG_LIGHT, 'bg': _START})
-
-        # Separator after Start
-        sep1 = 2 + btn_w + 3
-        ops.append({'cmd': 'vline', 'x': sep1, 'y': btn_y, 'h': btn_h, 'color': _SH})
-        ops.append({'cmd': 'vline', 'x': sep1+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
-
-        # Separator before tray (right side)
-        tray_sep = w - (4*cw + 3*cw + 2*cw + 5*cw + 20)
-        ops.append({'cmd': 'vline', 'x': tray_sep, 'y': btn_y, 'h': btn_h, 'color': _SH})
-        ops.append({'cmd': 'vline', 'x': tray_sep+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
-
-        # Tray items (right side)
-        s = utime.ticks_ms() // 1000
-        clk = '{:02d}:{:02d}'.format((s // 60) % 60, s % 60)
-        wifi_s = 'W+' if self._wifi else 'W-'
-        batt_s = 'B{}%'.format(self._batt)
-        bt_s = 'BT+' if self._bt else 'BT-'
-
-        gap = 4
-        clk_x = w - 5*cw - 4
-        wifi_x = clk_x - gap - 2*cw
-        bt_x = wifi_x - gap - 3*cw
-        batt_x = bt_x - gap - 4*cw
-
-        batt_bg = _SEL if self._applet_open == 'batt' else _TASKBAR
-        bt_bg = _SEL if self._applet_open == 'bt' else _TASKBAR
-        wifi_bg = _SEL if self._applet_open == 'wifi' else _TASKBAR
-        batt_fg = _FG_LIGHT if self._applet_open == 'batt' else _FG_DARK
-        bt_fg = _FG_LIGHT if self._applet_open == 'bt' else _FG_DARK
-        wifi_fg = _FG_LIGHT if self._applet_open == 'wifi' else _FG_DARK
-
-        ops.append({'cmd': 'text', 's': batt_s, 'x': batt_x, 'y': ty, 'color': batt_fg, 'bg': batt_bg})
-        ops.append({'cmd': 'text', 's': bt_s, 'x': bt_x, 'y': ty, 'color': bt_fg, 'bg': bt_bg})
-        ops.append({'cmd': 'text', 's': wifi_s, 'x': wifi_x, 'y': ty, 'color': wifi_fg, 'bg': wifi_bg})
-        ops.append({'cmd': 'text', 's': clk, 'x': clk_x, 'y': ty, 'color': _FG_DARK, 'bg': _TASKBAR})
-
-    def _menu_ops(self, ops, cw, ch, y_bar):
-        menu_w = 10*cw + 8
-        item_h = ch + 4
-        header_h = ch + 6
-        n = len(self._menu_items)
-        menu_h = header_h + n*item_h + 4
-        menu_y = y_bar - menu_h
-
-        _raised(ops, 0, menu_y, menu_w, menu_h, _BTN_FACE)
-        ops.append({'cmd': 'fill_rect', 'x': 1, 'y': menu_y+1, 'w': menu_w-2, 'h': header_h, 'color': _START})
-        ops.append({'cmd': 'text', 's': 'PURR  OS', 'x': 8, 'y': menu_y+3, 'color': _FG_LIGHT, 'bg': _START})
-        ops.append({'cmd': 'hline', 'x': 1, 'y': menu_y+header_h, 'w': menu_w-2, 'color': _SH})
-
-        items_top = menu_y + header_h + 2
-        for i, item in enumerate(self._menu_items):
-            iy = items_top + i*item_h
-            face = _SEL if i == self._menu_sel else _BTN_FACE
-            fg = _FG_LIGHT if i == self._menu_sel else _FG_DARK
-            ops.append({'cmd': 'fill_rect', 'x': 2, 'y': iy, 'w': menu_w-4, 'h': item_h, 'color': face})
-            ops.append({'cmd': 'text', 's': item, 'x': 8, 'y': iy+2, 'color': fg, 'bg': face})
-
-    def _applet_ops(self, ops, cw, ch, y_bar):
-        if not self._applet_open:
-            return
-
-        app_w = 12*cw
-        app_h = 10*ch
-        app_x = 320 - app_w - 4
-        app_y = y_bar - app_h - 4
-
-        _raised(ops, app_x, app_y, app_w, app_h, _BTN_FACE)
-        ops.append({'cmd': 'fill_rect', 'x': app_x+1, 'y': app_y+1, 'w': app_w-2, 'h': ch+4, 'color': _START})
-
-        if self._applet_open == 'wifi':
-            ops.append({'cmd': 'text', 's': 'WiFi', 'x': app_x+8, 'y': app_y+3, 'color': _FG_LIGHT, 'bg': _START})
-            ops.append({'cmd': 'text', 's': 'Status: ' + ('ON' if self._wifi else 'OFF'), 'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
-            ops.append({'cmd': 'text', 's': '[Enter to toggle]', 'x': app_x+8, 'y': app_y+50, 'color': _FG_DARK})
-
-        elif self._applet_open == 'bt':
-            ops.append({'cmd': 'text', 's': 'Bluetooth', 'x': app_x+8, 'y': app_y+3, 'color': _FG_LIGHT, 'bg': _START})
-            ops.append({'cmd': 'text', 's': 'Status: ' + ('ON' if self._bt else 'OFF'), 'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
-            ops.append({'cmd': 'text', 's': '[Enter to toggle]', 'x': app_x+8, 'y': app_y+50, 'color': _FG_DARK})
-
-        elif self._applet_open == 'batt':
-            ops.append({'cmd': 'text', 's': 'Battery', 'x': app_x+8, 'y': app_y+3, 'color': _FG_LIGHT, 'bg': _START})
-            ops.append({'cmd': 'text', 's': 'Level: {}%'.format(self._batt), 'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
 
     async def _heartbeat(self):
         while True:
