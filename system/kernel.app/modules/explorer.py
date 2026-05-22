@@ -43,9 +43,12 @@ class ExplorerModule:
         self._tray  = core.subscribe('explorer.tray')
         self._keys  = core.subscribe('input.key')
         self._wifi  = False
+        self._bt    = False
+        self._batt  = 75
         self._menu_open = False
         self._menu_sel  = 0
         self._menu_items = ['Apps', 'Settings', 'Shutdown']
+        self._applet_open = None  # 'wifi', 'bt', 'batt', or None
         self._need_desktop = True
         self._w     = 320
         self._h     = 480
@@ -89,12 +92,38 @@ class ExplorerModule:
                 self._draw()
 
     async def _key_loop(self):
+        applets = ['batt', 'bt', 'wifi']
+        applet_idx = 0
+
         while True:
             msg = await self._keys.get()
             if msg.get('event') != 'press':
                 continue
             key = msg.get('key')
-            if key == 'SELECT':
+
+            if self._applet_open:
+                if key == 'SELECT':
+                    # Toggle applet state
+                    if self._applet_open == 'wifi':
+                        self._wifi = not self._wifi
+                    elif self._applet_open == 'bt':
+                        self._bt = not self._bt
+                    elif self._applet_open == 'batt':
+                        self._batt = (self._batt + 10) % 110
+                    self._draw()
+                elif key == 'BACK':
+                    self._applet_open = None
+                    self._draw()
+                elif key == 'LEFT' or key == 'RIGHT':
+                    # Switch between applets
+                    idx = applets.index(self._applet_open)
+                    if key == 'LEFT':
+                        idx = (idx - 1) % len(applets)
+                    else:
+                        idx = (idx + 1) % len(applets)
+                    self._applet_open = applets[idx]
+                    self._draw()
+            elif key == 'SELECT':
                 self._menu_open = not self._menu_open
                 self._menu_sel = 0
                 self._need_desktop = True
@@ -110,6 +139,14 @@ class ExplorerModule:
                     self._menu_open = False
                     self._need_desktop = True
                     self._draw()
+            elif key == 'LEFT':
+                # Open applet when not in menu
+                self._applet_open = 'batt'
+                self._draw()
+            elif key == 'RIGHT':
+                # Open WiFi applet
+                self._applet_open = 'wifi'
+                self._draw()
 
     # ------------------------------------------------------------------
 
@@ -130,6 +167,10 @@ class ExplorerModule:
             ops.append({'cmd': 'fill_rect', 'x': 0, 'y': 0,
                         'w': w, 'h': y_bar, 'color': _DESKTOP})
             self._need_desktop = False
+
+        # Applet popup
+        if self._applet_open:
+            self._applet_ops(ops, cw, ch, y_bar)
 
         # Start menu overlay
         if self._menu_open:
@@ -172,17 +213,35 @@ class ExplorerModule:
         clk = '{:02d}:{:02d}'.format((s // 60) % 60, s % 60)
         wifi_s = 'W+' if self._wifi else 'W-'
 
-        clk_x  = w - 5*cw - 2
-        wifi_x = clk_x - 2*cw - 6
+        clk_x  = w - 5*cw
+        wifi_x = clk_x - 3*cw - 4
+        bt_x   = wifi_x - 3*cw - 4
+        batt_x = bt_x - 3*cw - 4
 
         # Double-groove separator before tray
         tray_sep = wifi_x - 5
         ops.append({'cmd': 'vline', 'x': tray_sep,   'y': btn_y, 'h': btn_h, 'color': _SH})
         ops.append({'cmd': 'vline', 'x': tray_sep+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
 
-        # Tray contents
+        # Tray contents: battery, bluetooth, wifi, clock
+        batt_s = 'B{}%'.format(self._batt)
+        bt_s = 'BT+' if self._bt else 'BT-'
+
+        # Highlight applet if open
+        batt_bg = _SEL if self._applet_open == 'batt' else _TASKBAR
+        bt_bg = _SEL if self._applet_open == 'bt' else _TASKBAR
+        wifi_bg = _SEL if self._applet_open == 'wifi' else _TASKBAR
+
+        batt_fg = _FG_LIGHT if self._applet_open == 'batt' else _FG_DARK
+        bt_fg = _FG_LIGHT if self._applet_open == 'bt' else _FG_DARK
+        wifi_fg = _FG_LIGHT if self._applet_open == 'wifi' else _FG_DARK
+
+        ops.append({'cmd': 'text', 's': batt_s, 'x': batt_x, 'y': ty,
+                    'color': batt_fg, 'bg': batt_bg})
+        ops.append({'cmd': 'text', 's': bt_s,   'x': bt_x,   'y': ty,
+                    'color': bt_fg,   'bg': bt_bg})
         ops.append({'cmd': 'text', 's': wifi_s, 'x': wifi_x, 'y': ty,
-                    'color': _FG_DARK, 'bg': _TASKBAR})
+                    'color': wifi_fg, 'bg': wifi_bg})
         ops.append({'cmd': 'text', 's': clk,    'x': clk_x,  'y': ty,
                     'color': _FG_DARK, 'bg': _TASKBAR})
 
@@ -217,6 +276,44 @@ class ExplorerModule:
                         'w': menu_w-4, 'h': item_h, 'color': face})
             ops.append({'cmd': 'text', 's': item, 'x': 8, 'y': iy+2,
                         'color': fg, 'bg': face})
+
+    def _applet_ops(self, ops, cw, ch, y_bar):
+        if not self._applet_open:
+            return
+
+        app_w = 12*cw
+        app_h = 10*ch
+        app_x = 320 - app_w - 4
+        app_y = y_bar - app_h - 4
+
+        # Applet window
+        _raised(ops, app_x, app_y, app_w, app_h, _BTN_FACE)
+
+        # Title bar
+        ops.append({'cmd': 'fill_rect', 'x': app_x+1, 'y': app_y+1,
+                    'w': app_w-2, 'h': ch+4, 'color': _START})
+
+        if self._applet_open == 'wifi':
+            ops.append({'cmd': 'text', 's': 'WiFi', 'x': app_x+8, 'y': app_y+3,
+                        'color': _FG_LIGHT, 'bg': _START})
+            ops.append({'cmd': 'text', 's': 'Status: ' + ('ON' if self._wifi else 'OFF'),
+                        'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
+            ops.append({'cmd': 'text', 's': '[Enter to toggle]',
+                        'x': app_x+8, 'y': app_y+50, 'color': _FG_DARK})
+
+        elif self._applet_open == 'bt':
+            ops.append({'cmd': 'text', 's': 'Bluetooth', 'x': app_x+8, 'y': app_y+3,
+                        'color': _FG_LIGHT, 'bg': _START})
+            ops.append({'cmd': 'text', 's': 'Status: ' + ('ON' if self._bt else 'OFF'),
+                        'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
+            ops.append({'cmd': 'text', 's': '[Enter to toggle]',
+                        'x': app_x+8, 'y': app_y+50, 'color': _FG_DARK})
+
+        elif self._applet_open == 'batt':
+            ops.append({'cmd': 'text', 's': 'Battery', 'x': app_x+8, 'y': app_y+3,
+                        'color': _FG_LIGHT, 'bg': _START})
+            ops.append({'cmd': 'text', 's': 'Level: {}%'.format(self._batt),
+                        'x': app_x+8, 'y': app_y+30, 'color': _FG_DARK})
 
     # ------------------------------------------------------------------
 
