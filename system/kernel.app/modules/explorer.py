@@ -208,24 +208,23 @@ class ExplorerModule:
         ops.append({'cmd': 'vline', 'x': sep1,   'y': btn_y, 'h': btn_h, 'color': _SH})
         ops.append({'cmd': 'vline', 'x': sep1+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
 
-        # --- System tray (right-to-left) ---
+        # --- System tray (right-to-left, 3px spacing) ---
         s   = utime.ticks_ms() // 1000
         clk = '{:02d}:{:02d}'.format((s // 60) % 60, s % 60)
         wifi_s = 'W+' if self._wifi else 'W-'
-
-        clk_x  = w - 5*cw
-        wifi_x = clk_x - 3*cw - 4
-        bt_x   = wifi_x - 3*cw - 4
-        batt_x = bt_x - 3*cw - 4
-
-        # Double-groove separator before tray
-        tray_sep = wifi_x - 5
-        ops.append({'cmd': 'vline', 'x': tray_sep,   'y': btn_y, 'h': btn_h, 'color': _SH})
-        ops.append({'cmd': 'vline', 'x': tray_sep+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
-
-        # Tray contents: battery, bluetooth, wifi, clock
         batt_s = 'B{}%'.format(self._batt)
         bt_s = 'BT+' if self._bt else 'BT-'
+
+        gap = 3
+        clk_x  = w - 5*cw - 2
+        wifi_x = clk_x - gap - 2*cw
+        bt_x   = wifi_x - gap - 3*cw
+        batt_x = bt_x - gap - 4*cw
+
+        # Double-groove separator before tray
+        tray_sep = batt_x - gap - 2
+        ops.append({'cmd': 'vline', 'x': tray_sep,   'y': btn_y, 'h': btn_h, 'color': _SH})
+        ops.append({'cmd': 'vline', 'x': tray_sep+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
 
         # Highlight applet if open
         batt_bg = _SEL if self._applet_open == 'batt' else _TASKBAR
