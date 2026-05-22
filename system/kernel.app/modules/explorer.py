@@ -160,7 +160,7 @@ class ExplorerModule:
         ops.append({'cmd': 'fill_rect', 'x': 0, 'y': y_bar, 'w': w, 'h': _TASKBAR_H, 'color': _TASKBAR})
         ops.append({'cmd': 'hline', 'x': 0, 'y': y_bar, 'w': w, 'color': _HI})
 
-        # Start button
+        # Start button (left)
         btn_w = 5*cw + 8
         txt_x = 2 + (btn_w - 5*cw) // 2
         if self._menu_open:
@@ -172,27 +172,28 @@ class ExplorerModule:
             ops.append({'cmd': 'text', 's': 'Start', 'x': txt_x, 'y': ty,
                         'color': _FG_LIGHT, 'bg': _START})
 
-        # Separator
+        # Separator after Start
         sep1 = 2 + btn_w + 3
         ops.append({'cmd': 'vline', 'x': sep1, 'y': btn_y, 'h': btn_h, 'color': _SH})
         ops.append({'cmd': 'vline', 'x': sep1+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
 
-        # Tray
+        # Separator before tray (right side)
+        tray_sep = w - (4*cw + 3*cw + 2*cw + 5*cw + 20)
+        ops.append({'cmd': 'vline', 'x': tray_sep, 'y': btn_y, 'h': btn_h, 'color': _SH})
+        ops.append({'cmd': 'vline', 'x': tray_sep+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
+
+        # Tray items (right side)
         s = utime.ticks_ms() // 1000
         clk = '{:02d}:{:02d}'.format((s // 60) % 60, s % 60)
         wifi_s = 'W+' if self._wifi else 'W-'
         batt_s = 'B{}%'.format(self._batt)
         bt_s = 'BT+' if self._bt else 'BT-'
 
-        gap = 3
-        clk_x = w - 5*cw - 2
+        gap = 4
+        clk_x = w - 5*cw - 4
         wifi_x = clk_x - gap - 2*cw
         bt_x = wifi_x - gap - 3*cw
         batt_x = bt_x - gap - 4*cw
-
-        tray_sep = batt_x - gap - 2
-        ops.append({'cmd': 'vline', 'x': tray_sep, 'y': btn_y, 'h': btn_h, 'color': _SH})
-        ops.append({'cmd': 'vline', 'x': tray_sep+1, 'y': btn_y, 'h': btn_h, 'color': _HI})
 
         batt_bg = _SEL if self._applet_open == 'batt' else _TASKBAR
         bt_bg = _SEL if self._applet_open == 'bt' else _TASKBAR
