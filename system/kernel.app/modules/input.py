@@ -72,6 +72,7 @@ class InputModule:
             if _emu is not None and _emu.injected_keys:
                 ev = _emu.injected_keys.pop(0)
                 if ev.get('key'):
+                    print('[input] publishing key: {}'.format(ev['key']))
                     self._core.publish('input.key', {'key': ev['key'], 'event': 'press'})
 
             now = utime.ticks_ms()

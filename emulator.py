@@ -91,13 +91,16 @@ class PurrDisplay:
         with self._conn_lock:
             conn = self._conn
         if not conn:
+            print('[emulator] no connection, key dropped: {}'.format(keycode))
             return
         try:
             msg = json.dumps({'cmd': 'key', 'key': keycode}) + '\n'
+            print('[emulator] sending key: {}'.format(keycode))
             conn.sendall(msg.encode())
             self.root.after(0, self._set_status, '→ {}'.format(keycode), '#0f0')
             self.root.after(200, self._set_status, '● kernel connected', '#4ec94e')
-        except Exception:
+        except Exception as e:
+            print('[emulator] send error: {}'.format(e))
             with self._conn_lock:
                 self._conn = None
 

@@ -1,7 +1,7 @@
 {
   "device": "esp32_s3_box_3",
   "display": "ili9342",
-  "display_res": [320, 240],
+  "display_res": [320, 480],
   "display_pins": {
     "mosi": 6,
     "clk":  7,

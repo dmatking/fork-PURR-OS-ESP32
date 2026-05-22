@@ -289,32 +289,55 @@ class _SocketDisplay:
                 time.sleep(0.2)
         if self._sock:
             try:
+                self._sock.setblocking(False)
+            except Exception:
+                pass
+            try:
                 import _thread
                 _thread.start_new_thread(self._read_keys, ())
             except ImportError:
                 pass
 
     def _read_keys(self):
-        import json
+        import time
         buf = ''
+        print('[socket] reader thread started')
         while self._sock:
             try:
-                chunk = self._sock.recv(256)
+                try:
+                    chunk = self._sock.recv(256)
+                except OSError:
+                    time.sleep(0.05)
+                    continue
+                except Exception as e:
+                    print('[socket] recv error: {}'.format(e))
+                    time.sleep(0.05)
+                    continue
                 if not chunk:
+                    print('[socket] empty recv, connection closed')
                     break
-                buf += chunk.decode('utf-8', errors='replace')
+                print('[socket] recv: {} bytes'.format(len(chunk)))
+                buf += chunk.decode()
                 while '\n' in buf:
                     line, buf = buf.split('\n', 1)
                     line = line.strip()
                     if not line:
                         continue
-                    try:
-                        msg = json.loads(line)
-                        if msg.get('cmd') == 'key':
-                            _emu_mod.injected_keys.append(msg)
-                    except Exception:
-                        pass
-            except Exception:
+                    print('[socket] line: {}'.format(line))
+                    # Parse manually: {"cmd": "key", "key": "UP"}
+                    if '"cmd": "key"' in line and '"key"' in line:
+                        try:
+                            # Extract key value: "key": "UP"
+                            key_start = line.find('"key": "') + 8
+                            key_end = line.find('"', key_start)
+                            if key_start > 7 and key_end > key_start:
+                                keycode = line[key_start:key_end]
+                                print('[socket] queued key: {}'.format(keycode))
+                                _emu_mod.injected_keys.append({'cmd': 'key', 'key': keycode})
+                        except Exception as e:
+                            print('[socket] parse error: {}'.format(e))
+            except Exception as e:
+                print('[socket] read error: {}'.format(e))
                 break
 
     def _send(self, **kw):
