@@ -2,7 +2,7 @@ import uasyncio as asyncio
 import utime
 
 _BEAT_INTERVAL = 2000
-_REFRESH_MS    = 500
+_REFRESH_MS    = 1000
 _TASKBAR_H     = 32
 
 # Classic Windows CE 2.x silver palette
@@ -15,16 +15,6 @@ _START    = 0x0410  # WIN_TEAL Start button
 _SEL      = 0x000F  # WIN_BLUE selected item
 _FG_DARK  = 0x0000  # BLACK text on silver
 _FG_LIGHT = 0xFFFF  # WHITE text on dark backgrounds
-
-# Desktop icons
-_ICONS = [
-    {'name': 'My Device', 'x': 20, 'y': 20},
-    {'name': 'WordPad', 'x': 100, 'y': 20},
-    {'name': 'Recycle Bin', 'x': 20, 'y': 80},
-    {'name': 'My Documents', 'x': 100, 'y': 80},
-    {'name': 'Internet', 'x': 20, 'y': 140},
-    {'name': 'Messenger', 'x': 100, 'y': 140},
-]
 
 
 def _raised(ops, x, y, w, h, face):
@@ -59,9 +49,6 @@ class ExplorerModule:
         self._menu_sel  = 0
         self._menu_items = ['Apps', 'Settings', 'Shutdown']
         self._applet_open = None
-        self._icon_sel = 0
-        self._show_splash = True
-        self._splash_time = utime.ticks_ms()
         self._w     = 320
         self._h     = 240
         self._scale = 2
@@ -152,28 +139,8 @@ class ExplorerModule:
         btn_h = _TASKBAR_H - 6
         ty = y_bar + (_TASKBAR_H - ch) // 2
 
-        # Check if splash should still show
-        if self._show_splash:
-            age_ms = utime.ticks_diff(utime.ticks_ms(), self._splash_time)
-            if age_ms > 2000:
-                self._show_splash = False
-            else:
-                self._draw_splash(ops)
-                ops.append({'cmd': 'show'})
-                self._core.publish('display', {'type': 'raw', 'ops': ops})
-                return
-
-        # Desktop + icons
+        # Clear desktop
         ops.append({'cmd': 'fill_rect', 'x': 0, 'y': 0, 'w': w, 'h': y_bar, 'color': _DESKTOP})
-
-        # Draw icons
-        for i, icon in enumerate(_ICONS):
-            ix = icon['x'] * sc
-            iy = icon['y'] * sc
-            iw = 10 * cw
-            ih = 6 * ch
-            is_sel = (i == self._icon_sel and not self._menu_open and not self._applet_open)
-            self._draw_icon(ops, ix, iy, iw, ih, icon['name'], is_sel, cw, ch)
 
         # Applet popup
         if self._applet_open:
@@ -188,24 +155,6 @@ class ExplorerModule:
 
         ops.append({'cmd': 'show'})
         self._core.publish('display', {'type': 'raw', 'ops': ops})
-
-    def _draw_splash(self, ops):
-        """Windows CE splash screen."""
-        w = self._w
-        h = self._h
-        ops.append({'cmd': 'fill', 'color': _START})
-        ops.append({'cmd': 'text', 's': 'Microsoft', 'x': w//2 - 40, 'y': h//2 - 30,
-                    'color': _FG_LIGHT})
-        ops.append({'cmd': 'text', 's': 'Windows CE', 'x': w//2 - 40, 'y': h//2 - 10,
-                    'color': _FG_LIGHT})
-
-    def _draw_icon(self, ops, x, y, w, h, name, selected, cw, ch):
-        """Draw a desktop icon."""
-        face = _SEL if selected else _BTN_FACE
-        fg = _FG_LIGHT if selected else _FG_DARK
-        _raised(ops, x, y, w, h, face)
-        ops.append({'cmd': 'text', 's': name, 'x': x + 4, 'y': y + h - ch - 4,
-                    'color': fg, 'bg': face})
 
     def _taskbar_ops(self, ops, w, sc, cw, ch, y_bar, btn_y, btn_h, ty):
         ops.append({'cmd': 'fill_rect', 'x': 0, 'y': y_bar, 'w': w, 'h': _TASKBAR_H, 'color': _TASKBAR})
