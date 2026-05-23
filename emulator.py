@@ -22,6 +22,15 @@ BG      = '#000000'
 CHROME  = '#1e1e1e'
 BORDER  = '#3a3a3a'
 
+# ── Device presets ────────────────────────────────────────────────────────────
+# Use: python3 emulator.py --device ingenico
+DEVICES = {
+    'ingenico':  {'width': 320, 'height': 480, 'scale': 1, 'label': 'Ingenico Move 5000'},
+    'box3':      {'width': 320, 'height': 240, 'scale': 1, 'label': 'ESP32-S3-Box-3'},
+    'cattopad':  {'width': 320, 'height': 480, 'scale': 1, 'label': 'CattoPad'},
+    'heltec':    {'width': 128, 'height':  64, 'scale': 4, 'label': 'Heltec WiFi LoRa 32 V3'},
+}
+
 _KEY_MAP = {
     'Return':    'SELECT',
     'Escape':    'BACK',
@@ -33,7 +42,7 @@ _KEY_MAP = {
 
 
 class PurrDisplay:
-    def __init__(self, width, height, scale, port):
+    def __init__(self, width, height, scale, port, label=''):
         self.w     = width
         self.h     = height
         self.sc    = scale
@@ -43,7 +52,7 @@ class PurrDisplay:
 
         # ── tkinter window ──────────────────────────────────────────────────
         self.root = tk.Tk()
-        self.root.title('PURR OS  {}×{}  @{}x'.format(width, height, scale))
+        self.root.title('PURR OS  {}  {}×{}  @{}x'.format(label, width, height, scale))
         self.root.resizable(False, False)
         self.root.configure(bg=CHROME)
 
@@ -222,17 +231,26 @@ class PurrDisplay:
 
 def main():
     p = argparse.ArgumentParser(description='PURR OS display emulator')
-    p.add_argument('--scale',  type=int, default=2,
-                   help='Pixels per display pixel (default 2). Use 1 for 1:1.')
+    p.add_argument('--device', choices=list(DEVICES.keys()), default='ingenico',
+                   help='Device preset (default: ingenico). Sets width, height, scale.')
+    p.add_argument('--scale',  type=int, default=None,
+                   help='Override pixels per display pixel (default from device preset).')
     p.add_argument('--1to1',  dest='one_to_one', action='store_true',
                    help='1:1 mode — 1 display pixel = 1 screen pixel (same as --scale 1)')
-    p.add_argument('--width',  type=int, default=320)
-    p.add_argument('--height', type=int, default=240)
+    p.add_argument('--width',  type=int, default=None,
+                   help='Override display width in pixels.')
+    p.add_argument('--height', type=int, default=None,
+                   help='Override display height in pixels.')
     p.add_argument('--port',   type=int, default=PORT)
     args = p.parse_args()
 
-    scale = 1 if args.one_to_one else args.scale
-    PurrDisplay(args.width, args.height, scale, args.port).run()
+    preset = DEVICES[args.device]
+    width  = args.width  if args.width  is not None else preset['width']
+    height = args.height if args.height is not None else preset['height']
+    scale  = 1 if args.one_to_one else (args.scale if args.scale is not None else preset['scale'])
+    label  = preset['label']
+
+    PurrDisplay(width, height, scale, args.port, label).run()
 
 
 if __name__ == '__main__':

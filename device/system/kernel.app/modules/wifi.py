@@ -58,10 +58,12 @@ class WifiModule:
         self._publish_status()
 
     def _publish_status(self):
+        connected = self._sta.isconnected()
         self._core.publish('wifi.status', {
-            'connected': self._sta.isconnected(),
-            'ifconfig': self._sta.ifconfig() if self._sta.isconnected() else None,
+            'connected': connected,
+            'ifconfig': self._sta.ifconfig() if connected else None,
         })
+        self._core.publish('explorer.tray', {'wifi': connected})
 
     async def _heartbeat(self):
         while True:

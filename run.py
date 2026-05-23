@@ -2,18 +2,66 @@
 PURR OS — local dev runner (MicroPython Unix port).
 
 Patches hardware modules so the kernel runs on your Mac with no emulator.
-Run with:  micropython run.py
+Run with:  micropython run.py [device_root] [--device NAME]
+
+device_root defaults to ./device/ if it exists, else the current directory.
+--device NAME loads system/kernel.app/devices/NAME.json as device.json.
+The emulate script passes both automatically.
 """
 
 import sys
 import os
 import builtins
 
-# Run from the project root directory (same folder as this file)
-PROJECT_ROOT = os.getcwd()
+# ── Capture originals before any patching ────────────────────────────────────
+_real_stat    = os.stat
+_real_listdir = os.listdir
+_real_open    = builtins.open
+
+def _exists(path):
+    try:
+        _real_stat(path)
+        return True
+    except OSError:
+        return False
+
+# ── Parse argv: [device_root] [--device NAME] ────────────────────────────────
+_cwd         = os.getcwd()
+_device_name = None
+_positional  = []
+
+_i = 1
+while _i < len(sys.argv):
+    if sys.argv[_i] == '--device' and _i + 1 < len(sys.argv):
+        _device_name = sys.argv[_i + 1]
+        _i += 2
+    else:
+        _positional.append(sys.argv[_i])
+        _i += 1
+
+# ── Device root ──────────────────────────────────────────────────────────────
+# Kernel code uses absolute paths like /system/kernel.app/device.json.
+# PROJECT_ROOT is the local directory that maps to the device's / (root).
+
+if _positional:
+    PROJECT_ROOT = _positional[0]
+    if not PROJECT_ROOT.startswith('/'):
+        PROJECT_ROOT = _cwd + '/' + PROJECT_ROOT
+else:
+    _device = _cwd + '/device'
+    PROJECT_ROOT = _device if _exists(_device) else _cwd
+
+# ── Device profile: redirect device.json → devices/NAME.json ─────────────────
+_device_profile = None
+if _device_name:
+    _dp = PROJECT_ROOT + '/system/kernel.app/devices/' + _device_name + '.json'
+    if _exists(_dp):
+        _device_profile = _dp
+        print('[run] device profile: {}'.format(_device_name))
+    else:
+        print('[run] device profile not found: {} (using device.json)'.format(_device_name))
 
 # ── 0. Emulator shared state ─────────────────────────────────────────────────
-#    Injected before any kernel code runs so _purr_emulator is importable.
 
 class _EmuState:
     injected_keys = []
@@ -21,20 +69,17 @@ class _EmuState:
 _emu_mod = _EmuState()
 sys.modules['_purr_emulator'] = _emu_mod
 
-def _exists(path):
-    try:
-        os.stat(path)
-        return True
-    except OSError:
-        return False
-
-# ── 1. Rewrite absolute /paths → PROJECT_ROOT/paths ─────────────────────────
-#    The kernel uses paths like /system/kernel.app/device.json.
-#    On the Mac those don't exist, so we redirect them here.
-
-_real_open = builtins.open
+# ── 1. Redirect absolute paths → PROJECT_ROOT ────────────────────────────────
+# Kernel uses /system/..., /lib/..., /apps/..., /friends/... etc.
+# All those paths live under PROJECT_ROOT on the dev machine.
+#
+# MicroPython doesn't allow attribute assignment on built-in modules, so we
+# can't do `os.stat = patched_fn`. Instead we replace sys.modules['os'] with
+# a proxy that delegates unknown attributes to the real module.
 
 def _open(path, *args, **kwargs):
+    if _device_profile and isinstance(path, str) and path == '/system/kernel.app/device.json':
+        return _real_open(_device_profile, *args, **kwargs)
     if isinstance(path, str) and path.startswith('/') and not _exists(path):
         local = PROJECT_ROOT + path
         if _exists(local):
@@ -43,14 +88,42 @@ def _open(path, *args, **kwargs):
 
 builtins.open = _open
 
-# ── 2. Pre-populate sys.path ─────────────────────────────────────────────────
-#    The kernel inserts /lib and /system/kernel.app at runtime — those
-#    absolute paths won't resolve on Mac, but the local equivalents below
-#    are already present so imports still work.
+_real_os = sys.modules.get('os') or sys.modules.get('uos') or os
 
-sys.path.insert(0, PROJECT_ROOT + '/system/kernel.app')
+class _OsPatch:
+    def __getattr__(self, name):
+        return getattr(_real_os, name)
+
+    def stat(self, path):
+        if isinstance(path, str) and path.startswith('/'):
+            local = PROJECT_ROOT + path
+            try:
+                return _real_stat(local)
+            except OSError:
+                pass
+        return _real_stat(path)
+
+    def listdir(self, path='.'):
+        if isinstance(path, str) and path.startswith('/'):
+            local = PROJECT_ROOT + path
+            if _exists(local):
+                return _real_listdir(local)
+        return _real_listdir(path)
+
+_os_patch = _OsPatch()
+sys.modules['os']  = _os_patch
+sys.modules['uos'] = _os_patch
+
+# ── 2. Pre-populate sys.path ─────────────────────────────────────────────────
+# KITT adds /system/*.app and /lib to sys.path at runtime, but those absolute
+# paths won't resolve on Mac. Add the local equivalents now so imports work
+# before the kernel's own path setup runs.
+
+for _app in _real_listdir(PROJECT_ROOT + '/system'):
+    if _app.endswith('.app'):
+        sys.path.insert(0, PROJECT_ROOT + '/system/' + _app)
 sys.path.insert(0, PROJECT_ROOT + '/lib')
-sys.path.insert(0, PROJECT_ROOT)
+# Do NOT add PROJECT_ROOT itself — device/system/ would shadow system.app as a namespace package
 
 # ── 3. Mock: utime ───────────────────────────────────────────────────────────
 #    The real utime.sleep_ms would burn ~1s during hardware init delays.
@@ -204,8 +277,9 @@ class _TerminalDisplay:
         self.width  = width
         self.height = height
         self.scale  = scale
-        self._cw    = 8 * scale   # pixel width of one character cell
-        self._ch    = 8 * scale   # pixel height of one character cell
+        # Character size: always 8px, scale affects rendering only
+        self._cw    = 8        # pixel width of one character
+        self._ch    = 8        # pixel height of one character
         self._cols  = width  // self._cw
         self._rows  = height // self._ch
         self._grid  = [[' '] * self._cols for _ in range(self._rows)]
@@ -276,6 +350,7 @@ class _SocketDisplay:
         self.height = height
         self.scale  = scale
         self._sock  = None
+        self._recv_buf = ''
         import socket, time
         addr = socket.getaddrinfo('127.0.0.1', self._PORT)[0][-1]
         for attempt in range(8):          # retry for up to ~1.6s
@@ -292,60 +367,44 @@ class _SocketDisplay:
                 self._sock.setblocking(False)
             except Exception:
                 pass
-            try:
-                import _thread
-                _thread.start_new_thread(self._read_keys, ())
-            except ImportError:
-                pass
 
-    def _read_keys(self):
-        import time
-        buf = ''
-        print('[socket] reader thread started')
-        while self._sock:
-            try:
-                try:
-                    chunk = self._sock.recv(256)
-                except OSError:
-                    time.sleep(0.05)
+    def _poll_keys(self):
+        """Poll for incoming key messages from emulator (non-blocking)."""
+        if not self._sock:
+            return
+        try:
+            chunk = self._sock.recv(256)
+            if not chunk:
+                self._sock = None
+                return
+            self._recv_buf += chunk.decode()
+            while '\n' in self._recv_buf:
+                line, self._recv_buf = self._recv_buf.split('\n', 1)
+                line = line.strip()
+                if not line:
                     continue
-                except Exception as e:
-                    print('[socket] recv error: {}'.format(e))
-                    time.sleep(0.05)
-                    continue
-                if not chunk:
-                    print('[socket] empty recv, connection closed')
-                    break
-                print('[socket] recv: {} bytes'.format(len(chunk)))
-                buf += chunk.decode()
-                while '\n' in buf:
-                    line, buf = buf.split('\n', 1)
-                    line = line.strip()
-                    if not line:
-                        continue
-                    print('[socket] line: {}'.format(line))
-                    # Parse manually: {"cmd": "key", "key": "UP"}
-                    if '"cmd": "key"' in line and '"key"' in line:
-                        try:
-                            # Extract key value: "key": "UP"
-                            key_start = line.find('"key": "') + 8
-                            key_end = line.find('"', key_start)
-                            if key_start > 7 and key_end > key_start:
-                                keycode = line[key_start:key_end]
-                                print('[socket] queued key: {}'.format(keycode))
-                                _emu_mod.injected_keys.append({'cmd': 'key', 'key': keycode})
-                        except Exception as e:
-                            print('[socket] parse error: {}'.format(e))
-            except Exception as e:
-                print('[socket] read error: {}'.format(e))
-                break
+                # Parse: {"cmd": "key", "key": "UP"}
+                if '"cmd": "key"' in line and '"key"' in line:
+                    try:
+                        key_start = line.find('"key": "') + 8
+                        key_end = line.find('"', key_start)
+                        if key_start > 7 and key_end > key_start:
+                            keycode = line[key_start:key_end]
+                            _emu_mod.injected_keys.append({'key': keycode})
+                    except Exception:
+                        pass
+        except OSError:
+            pass  # No data available (normal when non-blocking)
+        except Exception:
+            self._sock = None
 
     def _send(self, **kw):
         if not self._sock:
             return
         try:
             import json
-            self._sock.send((json.dumps(kw) + '\n').encode())
+            msg = json.dumps(kw) + '\n'
+            self._sock.send(msg.encode())
         except Exception:
             self._sock = None
 
@@ -354,7 +413,9 @@ class _SocketDisplay:
     def hline(self, x, y, w, color):   self._send(cmd='hline',     x=x, y=y, w=w, color=color)
     def vline(self, x, y, h, color):   self._send(cmd='vline',     x=x, y=y, h=h, color=color)
     def text(self, s, x, y, color=1):  self._send(cmd='text',      s=s, x=x, y=y, color=color)
-    def show(self):                     self._send(cmd='show')
+    def show(self):
+        self._poll_keys()  # Check for keys from emulator
+        self._send(cmd='show')
 
 
 # Patch display_factory — try GUI socket first, fall back to terminal.

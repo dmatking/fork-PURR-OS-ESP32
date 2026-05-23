@@ -27,5 +27,10 @@ class Queue:
     def qsize(self):
         return len(self._items)
 
+    def get_nowait(self):
+        if not self._items:
+            raise IndexError('queue empty')
+        return self._items.pop(0)
+
     def empty(self):
         return not self._items

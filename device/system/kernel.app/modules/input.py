@@ -5,14 +5,6 @@ _BEAT_INTERVAL = 2000
 _POLL_INTERVAL = 50   # ms — button poll rate
 _DEBOUNCE_MS   = 80
 
-# Generic keycodes emitted on the 'input.key' channel
-KEY_UP     = 'UP'
-KEY_DOWN   = 'DOWN'
-KEY_LEFT   = 'LEFT'
-KEY_RIGHT  = 'RIGHT'
-KEY_SELECT = 'SELECT'
-KEY_BACK   = 'BACK'
-
 try:
     import _purr_emulator as _emu
 except ImportError:
@@ -42,23 +34,13 @@ class InputModule:
         cfg = self._load_cfg()
         btn_cfg = cfg.get('buttons', {})
 
-        # Map physical button names to generic keycodes
-        keymap = {
-            'user': KEY_SELECT,
-            'prg':  KEY_BACK,
-            'boot': KEY_SELECT,  # S3-Box-3 / generic single-button devices
-        }
-
         import utime
         now = utime.ticks_ms()
-        for btn_name, keycode in keymap.items():
-            pin_num = btn_cfg.get(btn_name)
-            if pin_num is None:
-                continue
+        for btn_name, pin_num in btn_cfg.items():
             pin = machine.Pin(pin_num, machine.Pin.IN, machine.Pin.PULL_UP)
-            self._buttons.append((pin, keycode))
-            self._last_state[keycode]  = 1   # pulled high = not pressed
-            self._last_change[keycode] = now
+            self._buttons.append((pin, btn_name))
+            self._last_state[btn_name]  = 1   # pulled high = not pressed
+            self._last_change[btn_name] = now
 
     def _load_cfg(self):
         import json
@@ -68,7 +50,7 @@ class InputModule:
     async def _poll_loop(self):
         import utime
         while True:
-            # Drain emulator-injected keys
+            # Drain emulator-injected keys — emulator speaks generic keycodes directly
             if _emu is not None and _emu.injected_keys:
                 ev = _emu.injected_keys.pop(0)
                 if ev.get('key'):
@@ -76,18 +58,18 @@ class InputModule:
                     self._core.publish('input.key', {'key': ev['key'], 'event': 'press'})
 
             now = utime.ticks_ms()
-            for pin, keycode in self._buttons:
+            for pin, btn_name in self._buttons:
                 state = pin.value()
-                last  = self._last_state[keycode]
-                age   = utime.ticks_diff(now, self._last_change[keycode])
+                last  = self._last_state[btn_name]
+                age   = utime.ticks_diff(now, self._last_change[btn_name])
 
                 if state != last and age >= _DEBOUNCE_MS:
-                    self._last_state[keycode]  = state
-                    self._last_change[keycode] = now
+                    self._last_state[btn_name]  = state
+                    self._last_change[btn_name] = now
                     if state == 0:  # active-low press
-                        self._core.publish('input.key', {'key': keycode, 'event': 'press'})
+                        self._core.publish('input.raw', {'button': btn_name, 'event': 'press'})
                     else:
-                        self._core.publish('input.key', {'key': keycode, 'event': 'release'})
+                        self._core.publish('input.raw', {'button': btn_name, 'event': 'release'})
 
             await asyncio.sleep_ms(_POLL_INTERVAL)
 

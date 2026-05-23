@@ -15,8 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="/tmp/purr_kernel.log"
 DISPLAY_PID_FILE="$SCRIPT_DIR/.emulator_display.pid"
 
-SCALE=2
+SCALE=1
 ONE_TO_ONE=""
+DEVICE="ingenico"
 CMD="${1:-start}"
 [[ "$CMD" != "start" && "$CMD" != "stop" && "$CMD" != "restart" \
    && "$CMD" != "display" && "$CMD" != "kernel" && "$CMD" != "log" ]] \
@@ -24,9 +25,10 @@ CMD="${1:-start}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --scale) SCALE="$2"; shift 2 ;;
-        --1to1)  ONE_TO_ONE="--1to1"; shift ;;
-        *)       shift ;;
+        --scale)  SCALE="$2"; shift 2 ;;
+        --1to1)   ONE_TO_ONE="--1to1"; shift ;;
+        --device) DEVICE="$2"; shift 2 ;;
+        *)        shift ;;
     esac
 done
 
@@ -49,8 +51,7 @@ start_display() {
     local scale_arg="--scale $SCALE"
     [[ -n "$ONE_TO_ONE" ]] && scale_arg="$ONE_TO_ONE"
 
-    python3 "$SCRIPT_DIR/emulator.py" $scale_arg \
-        --width 320 --height 240 &
+    python3 "$SCRIPT_DIR/emulator.py" $scale_arg --device "$DEVICE" &
     echo $! > "$DISPLAY_PID_FILE"
     echo "  display started  pid=$!  scale=${SCALE}x${ONE_TO_ONE:+  (1:1 mode)}"
 
@@ -95,7 +96,7 @@ case "$CMD" in
         cd "$SCRIPT_DIR"
         echo "  kernel starting  (logs below)"
         echo "────────────────────────────────────────"
-        micropython run.py 2>&1 | tee "$LOG_FILE"
+        micropython run.py "$SCRIPT_DIR/device" --device "$DEVICE" 2>&1 | tee "$LOG_FILE"
         cleanup
         ;;
 
@@ -111,7 +112,7 @@ case "$CMD" in
         sleep 0.2
         trap cleanup INT TERM
         cd "$SCRIPT_DIR"
-        micropython run.py 2>&1 | tee "$LOG_FILE"
+        micropython run.py "$SCRIPT_DIR/device" --device "$DEVICE" 2>&1 | tee "$LOG_FILE"
         cleanup
         ;;
 
@@ -126,7 +127,7 @@ case "$CMD" in
         echo "=== starting kernel only ==="
         trap cleanup INT TERM
         cd "$SCRIPT_DIR"
-        micropython run.py 2>&1 | tee "$LOG_FILE"
+        micropython run.py "$SCRIPT_DIR/device" --device "$DEVICE" 2>&1 | tee "$LOG_FILE"
         cleanup
         ;;
 
@@ -135,7 +136,7 @@ case "$CMD" in
         ;;
 
     *)
-        echo "Usage: ./emulate [start|stop|restart|display|kernel|log] [--scale N] [--1to1]"
+        echo "Usage: ./emulate [start|stop|restart|display|kernel|log] [--scale N] [--1to1] [--device ingenico|box3|cattopad|heltec]"
         exit 1
         ;;
 esac
