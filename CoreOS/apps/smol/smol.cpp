@@ -64,7 +64,7 @@ static void draw_desktop() {
     snprintf(hint, sizeof(hint), "%s BCK:menu", can_open ? "SEL:open" : "SEL:next");
 
     kitt.text_clear();
-    kitt.text_print(0, "PURR OS");
+    kitt.text_print(0, kitt.os_name());
     kitt.text_print(1, "----------------");
     for (int i = 0; i < LIST_ROWS; i++) {
         int  idx  = scroll_off + i;
@@ -100,7 +100,7 @@ static void draw_about() {
              kitt.display_width(), kitt.display_height());
 
     kitt.text_clear();
-    kitt.text_print(0, "PURR OS");
+    kitt.text_print(0, kitt.os_name());
     kitt.text_print(1, line_dev);
     kitt.text_print(2, line_res);
     kitt.text_print(3, line_mem);

@@ -23,6 +23,7 @@ static device_config_t cfg;
 static bool kitt_ready       = false;
 static bool kitt_flasher     = false;
 static bool display_pi_flag  = false;
+static char os_name_buf[16]  = "PUR OS";  // upgraded to "PURR OS" if LoRa init succeeds
 
 // Input ring buffer
 static constexpr int KEY_BUF_SIZE = 8;
@@ -202,11 +203,14 @@ bool KITT::init(const char* device_json_path) {
 
     // Step 11: LoRa
     if (cfg.lora) {
-        // Freq from region: US=915MHz, EU=868MHz
         uint32_t freq = (strcmp(cfg.lora_region, "EU") == 0) ? 868000000UL : 915000000UL;
         lora_manager_init(freq, 14);
-        if (!lora_manager_enabled())
-            log("KITT", "ERR:0x03 LoRa init fail");
+        if (lora_manager_enabled()) {
+            strncpy(os_name_buf, "PURR OS", sizeof(os_name_buf));
+            log("KITT", "lora OK — PURR OS");
+        } else {
+            log("KITT", "ERR:0x03 LoRa init fail — PUR OS");
+        }
     }
 
     // Step 13: Pi manager
@@ -344,6 +348,7 @@ bool        KITT::is_ready()          { return kitt_ready; }
 bool        KITT::is_in_flasher_mode(){ return kitt_flasher; }
 bool        KITT::is_verbose()        { return cfg.verbose_boot; }
 const char* KITT::device_name()       { return cfg.device; }
+const char* KITT::os_name()           { return os_name_buf; }
 
 // ── Display ───────────────────────────────────────────────────────────────────
 

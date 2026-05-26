@@ -87,6 +87,51 @@ All existing `.meow` bundles kept unchanged as porting reference:
 
 ---
 
+## [0.2.2] — 2026-05-26 — LoRa rewrite (RAK3172 UART AT), board.md correction
+
+### CoreOS — lora_manager rewrite
+- `lora_manager.h` — replaced SPI pin defines with `LORA_UART_TX` / `LORA_UART_RX` / `LORA_UART_BAUD`; pins marked TBD pending PCB verification
+- `lora_manager.cpp` — full rewrite from SPI (Heltec SX1262) to RAK3172 UART AT command protocol
+  - P2P mode (`AT+NWM=0`); configures freq, SF, BW, CR, TX power via `AT+PFREQ/PSF/PBW/PCR/PTP`
+  - Continuous RX window (`AT+PRECV=65535`); parses `+EVT:RXP2P:<rssi>:<snr>:<hex>` unsolicited events
+  - yield: closes RX window + `AT+SLEEP`; reclaim: re-applies full P2P config
+  - `lora_manager_update()` accumulates Serial2 bytes line-by-line for event parsing
+
+### Docs
+- `PURR_OS_docs/board.md` — corrected ESP32-S2 role (runs PURR OS, not HID-only); added note that UART2 connects to RAK3172 (pins TBD)
+
+---
+
+## [0.2.3] — 2026-05-26 — LoRa Kernels library
+
+### LoRa Kernels (new top-level folder)
+Drop-in lora_manager.h/.cpp pairs — identical public API, different radio backends.
+Copy any folder's contents into `CoreOS/system/kernel/modules/` to switch radios.
+
+| Folder | Radio | Interface | Notes |
+|--------|-------|-----------|-------|
+| `RAK3172/` | RAK3172 (STM32WL) | UART AT | P2P mode; active board target; TX/RX pins TBD |
+| `SX1262/` | SX1262 | SPI | Heltec V3 pin defaults; requires arduino-LoRa |
+| `SX1276_RFM95W/` | SX1276 / RFM95W | SPI | Generic breakout pin defaults; DIO0 not DIO1 |
+
+All three kernels implement the same function set:
+`init`, `update`, `deinit`, `enabled`, `set/get frequency/power/SF/BW/CR/sync`, `send`, `busy`, `data_available`, `read`, `yield`, `reclaim`, `yielded`
+
+---
+
+## [0.2.4] — 2026-05-26 — LoRa presence check, dynamic OS name
+
+### CoreOS — KITT
+- `kitt.h` — added `os_name()` to public API (115 methods total)
+- `kitt.cpp` — `os_name_buf` defaults to `"PUR OS"`; upgraded to `"PURR OS"` at boot if LoRa init succeeds; logged either way
+  - PUR OS = no radio / init failed
+  - PURR OS = LoRa confirmed present and responding
+
+### CoreOS — smol
+- `smol.cpp` — desktop header and About screen now use `kitt.os_name()` instead of hardcoded `"PURR OS"`
+
+---
+
 ## Pending / Next Steps
 
 - **MicroPython→KITT bindings** — C extension modules so userland .meow apps can call KITT APIs; required before any Python app runs under CoreOS

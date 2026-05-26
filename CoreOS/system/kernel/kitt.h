@@ -15,6 +15,7 @@ public:
     bool        is_in_flasher_mode();
     bool        is_verbose();
     const char* device_name();
+    const char* os_name();        // "PURR OS" if LoRa present, "PUR OS" if not
 
     // ── Display ──────────────────────────────────────────────────────────────
     uint16_t display_width();

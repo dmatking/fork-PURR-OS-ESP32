@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "Bash(where pdftoppm *)",
+      "Bash(git -C \"c:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython\" status)",
+      "Bash(git -C \"c:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython\" log --oneline -5)",
+      "Bash(git -C \"c:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython\" add .gitignore CHANGELOG.md \"PURR OS Layout OLD.md\" CattoHID/ CoreOS/ PURR_OS_docs/ Userland/ pre-rewrite/)",
+      "Bash(git -C \"c:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython\" rm \"PURR OS Layout.md\")",
+      "Bash(git -C c:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython commit -m ' *)",
+      "Bash(git -C \"c:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython\" config user.email \"zanderiscool185@gmail.com\")",
+      "Bash(git -C \"c:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython\" config user.name \"PastorCatto\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

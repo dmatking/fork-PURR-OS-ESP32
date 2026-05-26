@@ -3,11 +3,18 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-// RAK3172 UART connection from ESP32-S2.
-// TODO: verify pin numbers against PCB once board is in hand.
-#define LORA_UART_TX   -1   // TBD
-#define LORA_UART_RX   -1   // TBD
-#define LORA_UART_BAUD 115200
+// Radio: SX1276 / RFM95W — SPI direct, arduino-LoRa library
+// Drop-in target: generic SX1276/RFM95W breakout boards wired to SPI.
+// Copy this folder's lora_manager.h/.cpp into CoreOS/system/kernel/modules/ to activate.
+// Requires: LoRa (arduino-LoRa) in CMakeLists REQUIRES.
+
+// Adjust these pins to match your wiring.
+#define LORA_SCK   18
+#define LORA_MISO  19
+#define LORA_MOSI  23
+#define LORA_CS     5
+#define LORA_RST   14
+#define LORA_IRQ   26   // DIO0 on SX1276 (not DIO1 like SX1262)
 
 void   lora_manager_init(uint32_t freq_hz, uint8_t power_dbm);
 void   lora_manager_update();

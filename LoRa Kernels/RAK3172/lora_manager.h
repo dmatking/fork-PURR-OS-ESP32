@@ -3,8 +3,11 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-// RAK3172 UART connection from ESP32-S2.
-// TODO: verify pin numbers against PCB once board is in hand.
+// Radio: RAK3172 (STM32WL) — UART AT commands, LoRa P2P mode
+// Drop-in target: boards where the LoRa module is connected via UART (not SPI)
+// Copy this folder's lora_manager.h/.cpp into CoreOS/system/kernel/modules/ to activate.
+
+// TODO: verify TX/RX pin numbers against PCB once board is in hand.
 #define LORA_UART_TX   -1   // TBD
 #define LORA_UART_RX   -1   // TBD
 #define LORA_UART_BAUD 115200

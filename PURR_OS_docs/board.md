@@ -73,7 +73,10 @@ PCIe (CLK, TX, RX, EN, nRST, nWAKE, PWR_EN), VBUS_EN, USB_OTG_ID, USB2 (P/N), US
 | C103, C104 | 100n | Decoupling |
 | VDD | 3V3 | |
 
-**Role:** Pure USB HID keyboard controller. Not running PURR OS.
+**Additional connections (not fully captured in original PDF export):**
+- UART2 TX/RX → RAK3172 (pins TBD — verify against PCB)
+
+**Role:** Runs PURR OS (CoreOS/KITT). Standalone OS when CM5 absent; hardware bridge when CM5 present. Also drives keyboard matrix and outputs USB HID.
 
 ---
 
