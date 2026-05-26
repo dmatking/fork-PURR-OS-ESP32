@@ -37,7 +37,7 @@
 
 ### CoreOS — System Layer
 - `system/bridge/main.cpp` — JSON keymap loader; raw GPIO→generic keycode translation; radio yield/reclaim brokering for /friends/ firmware
-- `system/system/main.cpp` — shell launcher (picks smol.meow vs explorer.meow by display width); crash logger; memory threshold monitor; OTA staging via NVS boot flag
+- `system/system/main.cpp` — shell launcher (calls `smol_start()` for ≤128px displays, `app_launch(explorer.meow)` for large); crash logger; memory threshold monitor; OTA staging via NVS boot flag
 - `system/bridge/keymaps/heltec.json` — GPIO 0→SELECT, 47→BACK
 - `system/bridge/keymaps/cattopad_4x5.json` — directional + action keys
 
@@ -61,6 +61,29 @@ All existing `.meow` bundles kept unchanged as porting reference:
 - `finder.meow` — Mac-style filesystem browser
 - `smol.meow` — text shell for 128×64 OLED (Heltec V3/V4)
 - `purr_ui.meow` — tile grid launcher with drag-to-rearrange
+
+---
+
+## [0.2.1] — 2026-05-25 — smol C++ Rewrite
+
+### CoreOS — Built-in Apps (apps/)
+- `apps/smol/smol.h/.cpp` — full C++ rewrite of the `smol.meow` text shell; no MicroPython dependency
+  - 8-row × 16-char layout on 128×64 OLED: header, divider, 5-row scrollable app list, hint bar
+  - UP/DOWN/SELECT navigation; double-SELECT to confirm launch; BACK opens PURR menu
+  - PURR menu: About (device name, resolution, free RAM), System Info (RAM, CPU freq, uptime), Quit PURR OS (`esp_restart`)
+  - Adaptive refresh: 150ms while active, 3s when idle >3s
+  - Filters large-display-only apps (explorer, classicmac) from the list
+  - Graceful "no runtime yet" message when `app_launch` fails (MicroPython binding still pending)
+  - Child-process tracking: yields display and keys while a launched app is running
+
+### CoreOS — KITT API addition
+- `kitt.h` / `kitt.cpp` — added `get_key_event(generic_key_t*, bool*)`: reads injected generic keys directly from the ring buffer; intended for C++ shells that don't use LVGL
+
+### CoreOS — System Layer update
+- `system/system/main.cpp` — replaced `app_launch(smol.meow)` with `smol_start()` for ≤128px displays; large-display path unchanged
+
+### Build
+- `CMakeLists.txt` — added `apps/smol/smol.cpp` to SRCS; added `apps/smol` to INCLUDE_DIRS
 
 ---
 

@@ -19,11 +19,13 @@ idf_component_register(
         "system/kernel/modules/power_manager.cpp"
         "system/bridge/main.cpp"
         "system/system/main.cpp"
+        "apps/smol/smol.cpp"
     INCLUDE_DIRS
         "system/kernel"
         "system/kernel/modules"
         "system/bridge"
         "system/system"
+        "apps/smol"
     REQUIRES
         arduino
         lvgl

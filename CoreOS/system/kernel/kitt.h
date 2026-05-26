@@ -46,6 +46,7 @@ public:
     } generic_key_t;
 
     bool get_raw_key_event(raw_key_event_t* out);
+    bool get_key_event(generic_key_t* key, bool* pressed);
     void inject_key(generic_key_t key, bool pressed);
 
     typedef struct {

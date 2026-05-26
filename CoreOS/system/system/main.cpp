@@ -1,7 +1,7 @@
-// system.meow — app lifecycle manager, memory monitor, OTA handoff broker.
-// Sits between KITT and userland apps. Spawns explorer.meow at boot.
+// Sits between KITT and userland apps. Spawns the appropriate shell at boot.
 
 #include "../kernel/kitt.h"
+#include "../../apps/smol/smol.h"
 #include <Arduino.h>
 #include <SPIFFS.h>
 #include <Preferences.h>
@@ -69,29 +69,26 @@ static void system_task(void*) {
     kitt.apps_scan();
     kitt.firmware_scan();
 
-    // Launch explorer as the default shell
-    // Chooses smol.meow on small displays, explorer.meow on large ones
-    const char* shell = (kitt.display_width() <= 128)
-        ? "/apps/smol.meow"
-        : "/apps/explorer.meow";
-
-    Serial.printf("[sys] launching shell: %s\n", shell);
-    if (!kitt.app_launch(shell)) {
-        Serial.println("[sys] ERR: shell launch failed (MicroPython runtime pending)");
-        kitt.text_print(0, "PURR OS");
-        kitt.text_print(1, kitt.device_name());
-        kitt.text_print(2, "No shell");
+    // Launch the appropriate shell
+    if (kitt.display_width() <= 128) {
+        // Built-in C++ shell for 128×64 OLED (Heltec V3 / SSD1306)
+        Serial.println("[sys] launching smol (C++ OLED shell)");
+        smol_start();
+    } else {
+        // MicroPython explorer shell for larger displays (pending runtime)
+        const char* shell = "/apps/explorer.meow";
+        Serial.printf("[sys] launching shell: %s\n", shell);
+        if (!kitt.app_launch(shell)) {
+            Serial.println("[sys] ERR: shell launch failed (MicroPython runtime pending)");
+            kitt.text_print(0, "PURR OS");
+            kitt.text_print(1, kitt.device_name());
+            kitt.text_print(2, "No shell");
+        }
     }
 
     // System watchdog loop
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-
-        // Restart explorer if it crashed
-        if (!kitt.process_running(shell)) {
-            Serial.printf("[sys] shell died, relaunching: %s\n", shell);
-            kitt.app_launch(shell);
-        }
 
         // Log current memory
         KITT::memory_stats_t mem;

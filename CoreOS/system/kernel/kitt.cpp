@@ -414,6 +414,15 @@ bool KITT::get_raw_key_event(raw_key_event_t* out) {
     return true;
 }
 
+bool KITT::get_key_event(generic_key_t* key, bool* pressed) {
+    if (gen_buf_head == gen_buf_tail) return false;
+    GenKeyEvent ev = gen_key_buf[gen_buf_tail];
+    gen_buf_tail = (gen_buf_tail + 1) % GEN_KEY_BUF_SIZE;
+    *key     = ev.key;
+    *pressed = ev.pressed;
+    return true;
+}
+
 void KITT::inject_key(generic_key_t key, bool pressed) {
     check_reserved_combo(key, pressed);
     int next = (gen_buf_head + 1) % GEN_KEY_BUF_SIZE;
