@@ -1,0 +1,16 @@
+{
+  "device": "heltec_v3",
+  "display": "ssd1306",
+  "display_res": [128, 64],
+  "display_pins": { "sda": 17, "scl": 18, "rst": 21 },
+  "psram": false,
+  "flash": "8mb",
+  "pi_slot": false,
+  "radios": ["wifi", "lora"],
+  "lora_pins": { "sck": 9, "mosi": 10, "miso": 11, "cs": 8, "rst": 12, "busy": 13, "dio1": 14 },
+  "lora_psk": "AQ==",
+  "buttons": { "boot": 0, "user": 47 },
+  "keymap": { "boot": "SELECT", "user": "BACK" },
+  "led": 35,
+  "verbose": true
+}

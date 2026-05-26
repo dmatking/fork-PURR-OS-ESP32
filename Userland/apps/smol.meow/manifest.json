@@ -1,0 +1,10 @@
+{
+  "name": "Smol",
+  "version": "1.0.0",
+  "description": "Text-mode shell for 128x64 OLED displays (Heltec V3/V4)",
+  "is_lightweight": false,
+  "needs_wifi": false,
+  "needs_bt": false,
+  "needs_lora": false,
+  "min_ram_kb": 32
+}

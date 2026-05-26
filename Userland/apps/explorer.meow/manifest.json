@@ -1,0 +1,10 @@
+{
+  "name": "Explorer",
+  "version": "1.0.0",
+  "description": "Windows 95/CE desktop shell",
+  "is_lightweight": false,
+  "needs_wifi": false,
+  "needs_bt": false,
+  "needs_lora": false,
+  "min_ram_kb": 128
+}

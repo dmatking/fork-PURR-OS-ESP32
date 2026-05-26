@@ -1,0 +1,10 @@
+{
+  "UP":     "UP",
+  "DOWN":   "DOWN",
+  "LEFT":   "LEFT",
+  "RIGHT":  "RIGHT",
+  "SELECT": "SELECT",
+  "BACK":   "BACK",
+  "MENU":   "MENU",
+  "POWER":  "POWER"
+}

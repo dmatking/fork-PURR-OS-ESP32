@@ -1,0 +1,27 @@
+{
+  "device": "ingenico_move5000",
+  "display": "ili9488",
+  "display_res": [320, 480],
+  "display_pins": {
+    "mosi": 6,
+    "clk":  7,
+    "cs":   5,
+    "dc":   4,
+    "rst":  48,
+    "bl":   45
+  },
+  "touch": "ft6x36",
+  "touch_pins": { "sda": 39, "scl": 40 },
+  "psram": false,
+  "flash": "16mb",
+  "pi_slot": false,
+  "radios": ["wifi", "bt", "lora"],
+  "lora_pins": { "sck": 9, "mosi": 10, "miso": 11, "cs": 8, "rst": 12, "busy": 13, "dio1": 14 },
+  "lora_psk": "AQ==",
+  "buttons": { "boot": 0 },
+  "keymap": {
+    "boot": "SELECT"
+  },
+  "led": null,
+  "verbose": true
+}
