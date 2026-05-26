@@ -1,5 +1,6 @@
 #include "kitt.h"
 #include "device_config.h"
+#include "../micropython/mpython_runtime.h"
 #include "modules/display_ssd1306.h"
 #include "modules/display_ili9488.h"
 #include "modules/wifi_manager.h"
@@ -237,6 +238,10 @@ bool KITT::init(const char* device_json_path) {
         touch_mxt336t_init();
         log("KITT", "touch OK");
     }
+
+    // Step 15: MicroPython runtime
+    mpython_init();
+    log("KITT", "micropython ready");
 
     // Step 18: write KITT_READY to NVS
     nvs_prefs.begin("kitt_boot", false);
@@ -578,8 +583,7 @@ void KITT::firmware_get_entry(int i, firmware_entry_t* out) {
 }
 
 bool KITT::app_launch(const char* path) {
-    Serial.printf("[kitt] launch: %s (MicroPython runtime pending)\n", path);
-    return false;  // TODO: spawn MicroPython task with path
+    return mpython_exec_app(path);
 }
 
 bool KITT::firmware_launch(const char* path) {
@@ -587,9 +591,9 @@ bool KITT::firmware_launch(const char* path) {
     return false;
 }
 
-void     KITT::process_kill(const char*)          {}
-bool     KITT::process_running(const char*)        { return false; }
-uint32_t KITT::process_ram_usage_kb(const char*)   { return 0; }
+void     KITT::process_kill(const char* path)        { mpython_process_kill(path); }
+bool     KITT::process_running(const char* path)      { return mpython_process_running(path); }
+uint32_t KITT::process_ram_usage_kb(const char* path) { return mpython_process_ram_kb(path); }
 
 // ── Memory ────────────────────────────────────────────────────────────────────
 

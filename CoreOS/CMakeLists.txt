@@ -19,12 +19,15 @@ idf_component_register(
         "system/kernel/modules/power_manager.cpp"
         "system/bridge/main.cpp"
         "system/system/main.cpp"
+        "system/micropython/mpython_runtime.cpp"
+        "system/micropython/kitt_module.c"
         "apps/smol/smol.cpp"
     INCLUDE_DIRS
         "system/kernel"
         "system/kernel/modules"
         "system/bridge"
         "system/system"
+        "system/micropython"
         "apps/smol"
     REQUIRES
         arduino
@@ -37,6 +40,7 @@ idf_component_register(
         fatfs
         esp_adc
         app_update
+        micropython
 )
 
 # Watchdog and emergency are separate Arduino sketches / partitions.

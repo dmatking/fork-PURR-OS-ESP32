@@ -132,6 +132,29 @@ All three kernels implement the same function set:
 
 ---
 
+## [0.3.0] — 2026-05-26 — MicroPython runtime + `import kitt`
+
+### CoreOS — system/micropython/ (new)
+- `mpython_runtime.h` — C-compatible header: runtime API (`mpython_init`, `mpython_exec_app`, process queries) + `extern "C"` KITT bridge function declarations
+- `mpython_runtime.cpp` — C++ implementation
+  - Process table (4 slots): each .meow app gets its own FreeRTOS task + `TaskHandle_t`
+  - `mpython_exec_app(path)` — reads `<path>/main.py` from SPIFFS, launches into MicroPython task
+  - `mpython_process_running/kill/ram_kb` — process lifecycle queries
+  - All `c_kitt_*` bridge functions: thin `extern "C"` wrappers around the global `kitt` object (display, input, WiFi, LoRa, system, notifications)
+  - MicroPython heap: 256 KB static (increase if PSRAM available)
+- `kitt_module.c` — pure C MicroPython extension module; auto-registered via `MP_REGISTER_MODULE`
+  - `import kitt` available to all .meow Python apps
+  - Exports: `text_print`, `text_clear`, `display_width/height`, `os_name`, `device_name`, `poll_key`, `poll_key_pressed`, `KEY_*` constants, `wifi_connected/ssid/rssi/connect/disconnect`, `lora_enabled/available/rssi/send/read`, `free_ram`, `uptime_ms`, `battery_percent`, `cpu_mhz`, `notify`, `popup`
+
+### CoreOS — KITT wired up
+- `kitt.cpp` — `app_launch()` now calls `mpython_exec_app()`; `process_kill/running/ram_usage_kb` delegate to runtime; `mpython_init()` called at boot step 15
+- `CMakeLists.txt` — added `system/micropython/mpython_runtime.cpp`, `kitt_module.c`; added `micropython` to REQUIRES
+
+### Note
+The `micropython` ESP-IDF component must be added before this compiles. Add to `idf_component.yml` or clone into `components/micropython`. Existing .meow apps use the old IPC pub/sub API and will need porting to `import kitt`.
+
+---
+
 ## Pending / Next Steps
 
 - **MicroPython→KITT bindings** — C extension modules so userland .meow apps can call KITT APIs; required before any Python app runs under CoreOS
