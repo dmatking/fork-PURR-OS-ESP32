@@ -2,6 +2,7 @@
 
 #include "../kernel/kitt.h"
 #include "../../apps/smol/smol.h"
+#include "../../apps/launcher/launcher.h"
 #include <Arduino.h>
 #include <SPIFFS.h>
 #include <Preferences.h>
@@ -74,8 +75,13 @@ static void system_task(void*) {
         // Built-in C++ shell for 128×64 OLED (Heltec V3 / SSD1306)
         Serial.println("[sys] launching smol (C++ OLED shell)");
         smol_start();
+    } else if (strstr(kitt.device_name(), "cyd") != nullptr ||
+               kitt.display_width() == 320 && kitt.display_height() == 240) {
+        // CYD: resident launcher/OS (manages and boots other firmwares)
+        Serial.println("[sys] launching PURR OS launcher (CYD)");
+        launcher_start();
     } else {
-        // MicroPython explorer shell for larger displays (pending runtime)
+        // MicroPython explorer shell for other large displays (pending runtime)
         const char* shell = "/apps/explorer.meow";
         Serial.printf("[sys] launching shell: %s\n", shell);
         if (!kitt.app_launch(shell)) {

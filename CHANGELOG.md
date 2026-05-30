@@ -2,7 +2,51 @@
 
 ---
 
-## [0.2.0] — 2026-05-25 — C++ CoreOS Rewrite + CattoHID
+## [0.4.0] — 2026-05-29 — CYD target + standalone launcher OS
+
+### New target: CYD (ESP32-2432S028R)
+- `devices/cyd.json` — device profile: ILI9341 display, XPT2046 touch, WiFi+BT, 4MB flash
+
+### CoreOS — display_ili9341 (new)
+- `display_ili9341.h/.cpp` — ILI9341 driver; 320×240 landscape (rotation 1); LEDC backlight on GPIO21; double-buffer LVGL flush via TFT_eSPI
+
+### CoreOS — touch_xpt2046 (new)
+- `touch_xpt2046.h/.cpp` — XPT2046 resistive touch via software SPI (MOSI=32, MISO=39, SCLK=25, CS=33, IRQ=36); 4-sample averaging; calibrated to 320×240 landscape; registers as LVGL `LV_INDEV_TYPE_POINTER`
+
+### CoreOS — partition_manager (new, replaces flasher for CYD)
+- `partition_manager.h/.cpp` — multi-OTA partition manager
+  - Scans `ota_0`…`ota_3` at boot; detects valid images by ESP32 magic byte (0xE9)
+  - Per-slot names stored in NVS namespace `purr_pm`
+  - `pm_launch(slot)` — `esp_ota_set_boot_partition()` + `esp_restart()`; never returns
+  - `pm_install(slot, sd_path, name, cb)` — streams .bin from SD → `esp_ota_begin/write/end`; validates magic and size; progress callback for UI
+  - `pm_delete(slot)` — erase + clear NVS entry
+  - SD card on VSPI (CS=5, CLK=18, MOSI=23, MISO=19) at 20MHz
+
+### CoreOS — launcher app (new)
+- `apps/launcher/launcher.h/.cpp` — LVGL touch UI running on 320×240 CYD
+  - Dark-themed card layout: one card per OTA slot
+  - Occupied slot: firmware name, size, LAUNCH + DELETE buttons
+  - Empty slot: + INSTALL button → file picker from SD root
+  - Install screen: scrollable list of .bin/.purr files on SD; Flash button per file
+  - Progress screen: bar + status label updated during flash via `pm_progress_cb_t`
+  - Status bar: OS name, WiFi indicator, battery percent
+  - Spawns own FreeRTOS task (core 1, priority 2)
+
+### CoreOS — system layer
+- `system/system/main.cpp` — added CYD detection: if `display == 320×240`, routes to `launcher_start()` instead of MicroPython explorer shell
+
+### CoreOS — partition table
+- `partitions_cyd.csv` — 4MB CYD layout: factory (1.25MB PURR OS), ota_0 (1.375MB), ota_1 (1MB), spiffs (320KB)
+
+### CoreOS — KITT
+- `kitt.cpp` — added `ili9341` display init branch (Step 5); added `xpt2046` touch init branch with LVGL pointer indev registration (Step 12)
+
+### Build
+- `CMakeLists.txt` — added `display_ili9341.cpp`, `touch_xpt2046.cpp`, `partition_manager.cpp`, `apps/launcher/launcher.cpp`; added `esp_partition` to REQUIRES
+
+---
+
+## [0.3.0] — 2026-05-25 — C++ CoreOS Rewrite + CattoHID
 
 ### Project Restructure
 - Split repo into four top-level folders:

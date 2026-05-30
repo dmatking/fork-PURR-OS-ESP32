@@ -8,8 +8,11 @@ idf_component_register(
         "system/kernel/kitt.cpp"
         "system/kernel/device_config.cpp"
         "system/kernel/modules/display_ili9488.cpp"
+        "system/kernel/modules/display_ili9341.cpp"
         "system/kernel/modules/display_ssd1306.cpp"
         "system/kernel/modules/touch_mxt336t.cpp"
+        "system/kernel/modules/touch_xpt2046.cpp"
+        "system/kernel/modules/partition_manager.cpp"
         "system/kernel/modules/wifi_manager.cpp"
         "system/kernel/modules/bt_manager.cpp"
         "system/kernel/modules/lora_manager.cpp"
@@ -22,6 +25,7 @@ idf_component_register(
         "system/micropython/mpython_runtime.cpp"
         "system/micropython/kitt_module.c"
         "apps/smol/smol.cpp"
+        "apps/launcher/launcher.cpp"
     INCLUDE_DIRS
         "system/kernel"
         "system/kernel/modules"
@@ -29,6 +33,7 @@ idf_component_register(
         "system/system"
         "system/micropython"
         "apps/smol"
+        "apps/launcher"
     REQUIRES
         arduino
         lvgl
@@ -40,6 +45,7 @@ idf_component_register(
         fatfs
         esp_adc
         app_update
+        esp_partition
         micropython
 )
 

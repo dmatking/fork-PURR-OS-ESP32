@@ -3,11 +3,13 @@
 #include "../micropython/mpython_runtime.h"
 #include "modules/display_ssd1306.h"
 #include "modules/display_ili9488.h"
+#include "modules/display_ili9341.h"
 #include "modules/wifi_manager.h"
 #include "modules/bt_manager.h"
 #include "modules/lora_manager.h"
 #include "modules/power_manager.h"
 #include "modules/touch_mxt336t.h"
+#include "modules/touch_xpt2046.h"
 #include "modules/pi_manager.h"
 #include "modules/mtp_manager.h"
 #include "modules/flasher.h"
@@ -166,6 +168,9 @@ bool KITT::init(const char* device_json_path) {
     } else if (strcmp(cfg.display, "ili9488") == 0) {
         lv_init();
         display_ili9488_init();
+    } else if (strcmp(cfg.display, "ili9341") == 0) {
+        lv_init();
+        display_ili9341_init();
     } else {
         Serial.println("[kitt] ERR 0x02 unknown display type");
         return false;
@@ -233,10 +238,18 @@ bool KITT::init(const char* device_json_path) {
         lv_indev_drv_register(&indev_drv);
     }
 
-    // Step 12: touch (CattoPad only)
+    // Step 12: touch
     if (strcmp(cfg.touch, "mxt336t") == 0) {
         touch_mxt336t_init();
         log("KITT", "touch OK");
+    } else if (strcmp(cfg.touch, "xpt2046") == 0) {
+        touch_xpt2046_init();
+        static lv_indev_drv_t touch_drv;
+        lv_indev_drv_init(&touch_drv);
+        touch_drv.type    = LV_INDEV_TYPE_POINTER;
+        touch_drv.read_cb = touch_xpt2046_lvgl_read;
+        lv_indev_drv_register(&touch_drv);
+        log("KITT", "touch XPT2046 OK");
     }
 
     // Step 15: MicroPython runtime

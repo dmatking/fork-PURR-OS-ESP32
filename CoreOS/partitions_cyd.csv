@@ -1,0 +1,18 @@
+# PURR OS CYD (ESP32-2432S028R) partition table — 4MB flash
+# Flash: 4194304 bytes (0x400000)
+#
+# Factory = PURR OS permanent resident (never overwritten by OTA)
+# ota_0   = Firmware slot 0  (~1.4MB, fits most ESP32 projects)
+# ota_1   = Firmware slot 1  (~960KB, smaller firmwares / future use)
+# spiffs  = App config, keymap, crash logs
+#
+# To use: idf.py -p COM<n> flash  (or set CONFIG_PARTITION_TABLE_CUSTOM=y
+# and CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_cyd.csv" in sdkconfig)
+#
+# Name,    Type, SubType,  Offset,   Size,    Flags
+nvs,       data, nvs,      0x9000,   0x5000,
+otadata,   data, ota,      0xe000,   0x2000,
+factory,   app,  factory,  0x10000,  0x140000,
+ota_0,     app,  ota_0,    0x150000, 0x160000,
+ota_1,     app,  ota_1,    0x2B0000, 0x100000,
+spiffs,    data, spiffs,   0x3B0000, 0x050000,
