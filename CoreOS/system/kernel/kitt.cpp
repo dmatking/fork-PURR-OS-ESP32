@@ -1,24 +1,48 @@
 #include "kitt.h"
 #include "device_config.h"
-#include "../micropython/mpython_runtime.h"
 #include "modules/display_ssd1306.h"
-#include "modules/display_ili9488.h"
-#include "modules/display_ili9341.h"
 #include "modules/wifi_manager.h"
-#include "modules/bt_manager.h"
-#include "modules/lora_manager.h"
+#ifdef PURR_HAS_BT
+#  include "modules/bt_manager.h"
+#endif
 #include "modules/power_manager.h"
-#include "modules/touch_mxt336t.h"
-#include "modules/touch_xpt2046.h"
-#include "modules/pi_manager.h"
-#include "modules/mtp_manager.h"
-#include "modules/flasher.h"
+
+#ifdef PURR_HAS_LORA
+#  include "modules/lora_manager.h"
+#endif
+#ifdef PURR_DISPLAY_ILI9488
+#  include "modules/display_ili9488.h"
+#endif
+#ifdef PURR_DISPLAY_ILI9341
+#  include "modules/display_ili9341.h"
+#endif
+#ifdef PURR_HAS_TOUCH_MXT
+#  include "modules/touch_mxt336t.h"
+#endif
+#ifdef PURR_HAS_TOUCH_XPT2046
+#  include "modules/touch_xpt2046.h"
+#endif
+#ifdef PURR_HAS_PI_SLOT
+#  include "modules/pi_manager.h"
+#endif
+#ifdef PURR_HAS_MTP
+#  include "modules/mtp_manager.h"
+#endif
+#ifdef PURR_HAS_FLASHER
+#  include "modules/flasher.h"
+#endif
+#ifdef PURR_HAS_MICROPYTHON
+#  include "../micropython/mpython_runtime.h"
+#endif
 
 #include <Arduino.h>
 #include <SPIFFS.h>
-#include <lvgl.h>
 #include <nvs_flash.h>
 #include <Preferences.h>
+
+#ifdef PURR_HAS_LVGL
+#  include <lvgl.h>
+#endif
 
 // ── Internal state ─────────────────────────────────────────────────────────────
 
@@ -89,6 +113,7 @@ extern "C" void kitt_display_reclaim_from_pi() {
 
 // ── LVGL keypad input driver ───────────────────────────────────────────────────
 
+#ifdef PURR_HAS_LVGL
 static void lvgl_keypad_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     if (gen_buf_head == gen_buf_tail) {
         data->state = LV_INDEV_STATE_RELEASED;
@@ -98,7 +123,6 @@ static void lvgl_keypad_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     GenKeyEvent ev = gen_key_buf[gen_buf_tail];
     gen_buf_tail = (gen_buf_tail + 1) % GEN_KEY_BUF_SIZE;
     data->state = ev.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
-    // Map generic key to LVGL key
     switch (ev.key) {
         case KITT::KEY_UP:     data->key = LV_KEY_UP;     break;
         case KITT::KEY_DOWN:   data->key = LV_KEY_DOWN;   break;
@@ -110,6 +134,7 @@ static void lvgl_keypad_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         default:               data->key = 0;              break;
     }
 }
+#endif
 
 // ── GPIO polling ───────────────────────────────────────────────────────────────
 
@@ -165,12 +190,16 @@ bool KITT::init(const char* device_json_path) {
     // Step 5: init display
     if (strcmp(cfg.display, "ssd1306") == 0) {
         display_ssd1306_init();
+#ifdef PURR_DISPLAY_ILI9488
     } else if (strcmp(cfg.display, "ili9488") == 0) {
         lv_init();
         display_ili9488_init();
+#endif
+#ifdef PURR_DISPLAY_ILI9341
     } else if (strcmp(cfg.display, "ili9341") == 0) {
         lv_init();
         display_ili9341_init();
+#endif
     } else {
         Serial.println("[kitt] ERR 0x02 unknown display type");
         return false;
@@ -191,8 +220,16 @@ bool KITT::init(const char* device_json_path) {
     if (flash_flag) {
         kitt_flasher = true;
         log("KITT", "FLASHER MODE");
+#ifdef PURR_HAS_FLASHER
         flasher_run(&cfg);
         // never returns
+#else
+        log("KITT", "flasher not compiled in this build — clearing flag");
+        nvs_prefs.begin("kitt_boot", false);
+        nvs_prefs.putBool("flash_flag", false);
+        nvs_prefs.end();
+        kitt_flasher = false;
+#endif
     }
 
     // Step 9: WiFi
@@ -202,12 +239,15 @@ bool KITT::init(const char* device_json_path) {
     }
 
     // Step 10: BT
+#ifdef PURR_HAS_BT
     if (cfg.bt) {
         bt_manager_init();
         log("KITT", "bt OK");
     }
+#endif
 
     // Step 11: LoRa
+#ifdef PURR_HAS_LORA
     if (cfg.lora) {
         uint32_t freq = (strcmp(cfg.lora_region, "EU") == 0) ? 868000000UL : 915000000UL;
         lora_manager_init(freq, 14);
@@ -218,31 +258,40 @@ bool KITT::init(const char* device_json_path) {
             log("KITT", "ERR:0x03 LoRa init fail — PUR OS");
         }
     }
+#endif
 
     // Step 13: Pi manager
+#ifdef PURR_HAS_PI_SLOT
     if (cfg.pi_slot) {
         pi_manager_init();
         log("KITT", "pi mgr OK");
     }
+#endif
 
     // Step 14: power manager
     power_manager_init(cfg.cpu_max_mhz);
     last_battery_refresh = millis();
 
-    // Register LVGL keypad input device (ssd1306 path — no touch)
-    if (strcmp(cfg.display, "ssd1306") == 0) {
+    // Register LVGL keypad indev (large-display LVGL targets only — SSD1306 uses get_key_event directly)
+#ifdef PURR_HAS_LVGL
+    if (strcmp(cfg.display, "ssd1306") != 0) {
         static lv_indev_drv_t indev_drv;
         lv_indev_drv_init(&indev_drv);
         indev_drv.type    = LV_INDEV_TYPE_KEYPAD;
         indev_drv.read_cb = lvgl_keypad_read_cb;
         lv_indev_drv_register(&indev_drv);
     }
+#endif
 
     // Step 12: touch
+#ifdef PURR_HAS_TOUCH_MXT
     if (strcmp(cfg.touch, "mxt336t") == 0) {
         touch_mxt336t_init();
         log("KITT", "touch OK");
-    } else if (strcmp(cfg.touch, "xpt2046") == 0) {
+    }
+#endif
+#ifdef PURR_HAS_TOUCH_XPT2046
+    if (strcmp(cfg.touch, "xpt2046") == 0) {
         touch_xpt2046_init();
         static lv_indev_drv_t touch_drv;
         lv_indev_drv_init(&touch_drv);
@@ -251,10 +300,13 @@ bool KITT::init(const char* device_json_path) {
         lv_indev_drv_register(&touch_drv);
         log("KITT", "touch XPT2046 OK");
     }
+#endif
 
     // Step 15: MicroPython runtime
+#ifdef PURR_HAS_MICROPYTHON
     mpython_init();
     log("KITT", "micropython ready");
+#endif
 
     // Step 18: write KITT_READY to NVS
     nvs_prefs.begin("kitt_boot", false);
@@ -289,6 +341,7 @@ void KITT::update() {
     poll_gpio_inputs();
 
     // Touch polling
+#ifdef PURR_HAS_TOUCH_MXT
     if (strcmp(cfg.touch, "mxt336t") == 0) {
         touch_mxt336t_update();
         mxt_touch_event_t mev;
@@ -299,15 +352,20 @@ void KITT::update() {
             last_touch.contact_id = mev.contact_id;
         }
     }
+#endif
 
     // WiFi scan polling
     if (cfg.wifi) wifi_manager_update();
 
     // BT discovery polling
+#ifdef PURR_HAS_BT
     if (cfg.bt) bt_manager_update();
+#endif
 
     // Pi state polling
+#ifdef PURR_HAS_PI_SLOT
     if (cfg.pi_slot) pi_manager_update();
+#endif
 
     // Battery refresh every 60s
     if (now - last_battery_refresh >= 60000) {
@@ -322,9 +380,18 @@ void KITT::update() {
             ts.wifi_connected     = wifi_manager_connected();
             if (ts.wifi_connected) wifi_manager_get_ssid(ts.wifi_ssid, sizeof(ts.wifi_ssid));
             ts.wifi_rssi   = wifi_manager_rssi();
+#ifdef PURR_HAS_BT
             ts.bt_enabled  = cfg.bt && bt_manager_enabled();
+#else
+            ts.bt_enabled  = false;
+#endif
+#ifdef PURR_HAS_LORA
             ts.lora_enabled = cfg.lora && lora_manager_enabled();
             ts.lora_rssi    = cfg.lora ? lora_manager_rssi() : 0;
+#else
+            ts.lora_enabled = false;
+            ts.lora_rssi    = 0;
+#endif
             tray_cb(&ts);
         }
 
@@ -343,10 +410,16 @@ void KITT::update() {
 // ── Lifecycle ──────────────────────────────────────────────────────────────────
 
 void KITT::shutdown() {
-    if (cfg.wifi)   wifi_manager_deinit();
-    if (cfg.bt)     bt_manager_deinit();
-    if (cfg.lora)   lora_manager_deinit();
+    if (cfg.wifi) wifi_manager_deinit();
+#ifdef PURR_HAS_BT
+    if (cfg.bt)   bt_manager_deinit();
+#endif
+#ifdef PURR_HAS_LORA
+    if (cfg.lora) lora_manager_deinit();
+#endif
+#ifdef PURR_HAS_PI_SLOT
     if (cfg.pi_slot) pi_manager_deinit();
+#endif
     power_manager_deinit();
     kitt_ready = false;
     Serial.println("[kitt] shutdown");
@@ -488,6 +561,7 @@ bool KITT::wifi_yielded()                                   { return wifi_manage
 
 // ── Bluetooth ─────────────────────────────────────────────────────────────────
 
+#ifdef PURR_HAS_BT
 void KITT::bt_enable()                                          { bt_manager_enable(); }
 void KITT::bt_disable()                                         { bt_manager_disable(); }
 bool KITT::bt_enabled()                                         { return cfg.bt && bt_manager_enabled(); }
@@ -506,9 +580,30 @@ void KITT::bt_unpair(int i)                                     { bt_manager_unp
 void KITT::bt_yield()                                           { bt_manager_yield(); }
 void KITT::bt_reclaim()                                         { bt_manager_reclaim(); }
 bool KITT::bt_yielded()                                         { return bt_manager_yielded(); }
+#else
+void KITT::bt_enable()                                          {}
+void KITT::bt_disable()                                         {}
+bool KITT::bt_enabled()                                         { return false; }
+int  KITT::bt_paired_count()                                    { return 0; }
+void KITT::bt_get_paired_name(int, char* b, size_t l)           { if (l) b[0] = '\0'; }
+void KITT::bt_get_paired_addr(int, char* b, size_t l)           { if (l) b[0] = '\0'; }
+bool KITT::bt_device_connected(int)                             { return false; }
+void KITT::bt_start_discovery(uint32_t)                         {}
+void KITT::bt_stop_discovery()                                  {}
+bool KITT::bt_discovery_active()                                { return false; }
+int  KITT::bt_discovered_count()                                { return 0; }
+void KITT::bt_get_discovered_name(int, char* b, size_t l)       { if (l) b[0] = '\0'; }
+void KITT::bt_get_discovered_addr(int, char* b, size_t l)       { if (l) b[0] = '\0'; }
+void KITT::bt_pair(int)                                         {}
+void KITT::bt_unpair(int)                                       {}
+void KITT::bt_yield()                                           {}
+void KITT::bt_reclaim()                                         {}
+bool KITT::bt_yielded()                                         { return false; }
+#endif
 
 // ── LoRa ─────────────────────────────────────────────────────────────────────
 
+#ifdef PURR_HAS_LORA
 void     KITT::lora_enable()                            { lora_manager_reclaim(); }
 void     KITT::lora_disable()                           { lora_manager_deinit(); }
 bool     KITT::lora_enabled()                           { return cfg.lora && lora_manager_enabled(); }
@@ -526,10 +621,33 @@ bool     KITT::lora_send(const uint8_t* d, size_t l)    { return lora_manager_se
 bool     KITT::lora_busy()                              { return lora_manager_busy(); }
 bool     KITT::lora_data_available()                    { return lora_manager_data_available(); }
 size_t   KITT::lora_read(uint8_t* b, size_t l)          { return lora_manager_read(b, l); }
-void     KITT::lora_transmit_log(const char*)           {}  // TODO: chunked LoRa log TX
+void     KITT::lora_transmit_log(const char*)           {}
 void     KITT::lora_yield()                             { lora_manager_yield(); }
 void     KITT::lora_reclaim()                           { lora_manager_reclaim(); }
 bool     KITT::lora_yielded()                           { return lora_manager_yielded(); }
+#else
+void     KITT::lora_enable()                            {}
+void     KITT::lora_disable()                           {}
+bool     KITT::lora_enabled()                           { return false; }
+void     KITT::lora_set_frequency(uint32_t)             {}
+void     KITT::lora_set_power(uint8_t)                  {}
+void     KITT::lora_set_spreading_factor(uint8_t)       {}
+void     KITT::lora_set_bandwidth(uint32_t)             {}
+void     KITT::lora_set_coding_rate(uint8_t)            {}
+void     KITT::lora_set_sync_word(uint8_t)              {}
+uint32_t KITT::lora_get_frequency()                     { return 0; }
+uint8_t  KITT::lora_get_power()                         { return 0; }
+int      KITT::lora_get_rssi()                          { return 0; }
+float    KITT::lora_get_snr()                           { return 0.0f; }
+bool     KITT::lora_send(const uint8_t*, size_t)        { return false; }
+bool     KITT::lora_busy()                              { return false; }
+bool     KITT::lora_data_available()                    { return false; }
+size_t   KITT::lora_read(uint8_t*, size_t)              { return 0; }
+void     KITT::lora_transmit_log(const char*)           {}
+void     KITT::lora_yield()                             {}
+void     KITT::lora_reclaim()                           {}
+bool     KITT::lora_yielded()                           { return false; }
+#endif
 
 // ── Power ─────────────────────────────────────────────────────────────────────
 
@@ -540,10 +658,17 @@ bool KITT::battery_charging()       { return power_manager_battery_charging(); }
 void KITT::cpu_set_freq_mhz(int m)  { power_manager_cpu_set_freq(m); }
 int  KITT::cpu_get_freq_mhz()       { return power_manager_cpu_get_freq(); }
 
+#ifdef PURR_HAS_PI_SLOT
 void KITT::pi_rail_enable()         { if (cfg.pi_slot) pi_manager_power_on(); }
 void KITT::pi_rail_disable()        { if (cfg.pi_slot) pi_manager_power_off(); }
 bool KITT::pi_rail_enabled()        { return cfg.pi_slot && pi_manager_rail_enabled(); }
 bool KITT::pi_handshake_high()      { return cfg.pi_slot && pi_manager_handshake_high(); }
+#else
+void KITT::pi_rail_enable()         {}
+void KITT::pi_rail_disable()        {}
+bool KITT::pi_rail_enabled()        { return false; }
+bool KITT::pi_handshake_high()      { return false; }
+#endif
 
 // ── App & firmware scan ───────────────────────────────────────────────────────
 
@@ -596,7 +721,12 @@ void KITT::firmware_get_entry(int i, firmware_entry_t* out) {
 }
 
 bool KITT::app_launch(const char* path) {
+#ifdef PURR_HAS_MICROPYTHON
     return mpython_exec_app(path);
+#else
+    Serial.printf("[kitt] app_launch: %s — no MicroPython in this build\n", path);
+    return false;
+#endif
 }
 
 bool KITT::firmware_launch(const char* path) {
@@ -604,9 +734,27 @@ bool KITT::firmware_launch(const char* path) {
     return false;
 }
 
-void     KITT::process_kill(const char* path)        { mpython_process_kill(path); }
-bool     KITT::process_running(const char* path)      { return mpython_process_running(path); }
-uint32_t KITT::process_ram_usage_kb(const char* path) { return mpython_process_ram_kb(path); }
+void     KITT::process_kill(const char* path) {
+#ifdef PURR_HAS_MICROPYTHON
+    mpython_process_kill(path);
+#else
+    (void)path;
+#endif
+}
+bool     KITT::process_running(const char* path) {
+#ifdef PURR_HAS_MICROPYTHON
+    return mpython_process_running(path);
+#else
+    (void)path; return false;
+#endif
+}
+uint32_t KITT::process_ram_usage_kb(const char* path) {
+#ifdef PURR_HAS_MICROPYTHON
+    return mpython_process_ram_kb(path);
+#else
+    (void)path; return 0;
+#endif
+}
 
 // ── Memory ────────────────────────────────────────────────────────────────────
 

@@ -2,6 +2,29 @@
 
 ---
 
+## [0.4.1] — 2026-05-29 — Multi-target build system
+
+### Builder/ (new top-level folder)
+Enter this folder and run `./build.sh` — it resolves `CoreOS/` automatically.
+
+- `Builder/build.sh` — build wrapper; `--target heltec|cyd|tdeck`, `--mini`, `--clean`, `--flash PORT`, `--monitor PORT`
+  - Validates `IDF_PATH`, warns on missing MicroPython submodule or TBD LoRa pin stubs
+  - Copies `targets/<target>.defaults` → `CoreOS/sdkconfig.defaults`, cds into `CoreOS/`, runs `idf.py`
+- `Builder/targets/heltec.defaults` — 8MB flash, 80MHz, `partitions_heltec.csv`, ESP32-S3 240MHz, debug log level
+- `Builder/targets/cyd.defaults` — 4MB flash, 40MHz, `partitions_cyd.csv`, FatFS LFN, LVGL memory hint
+
+### CoreOS — `partitions_heltec.csv` (new)
+- 8MB Heltec layout: factory 2MB + ota_0 2MB + ota_1 2MB + spiffs ~1.9MB
+
+### CoreOS — `CMakeLists.txt` (rewritten)
+- Conditional on `TARGET_DEVICE` and `BUILD_MINI` CMake cache variables (set by `build.sh`)
+- Heltec: compiles `display_ssd1306`, `lora_manager`, `smol`; no LVGL, no fatfs, no esp_partition
+- CYD: compiles `display_ili9341`, `touch_xpt2046`, `partition_manager`, `launcher`; adds `lvgl`, `fatfs`, `esp_partition`
+- T-Deck: placeholder stub (smol shell until BB6 shell lands)
+- `--mini`: excludes `mpython_runtime.cpp` + `kitt_module.c` + `micropython` component; all shells still work
+
+---
+
 ## [0.4.0] — 2026-05-29 — CYD target + standalone launcher OS
 
 ### New target: CYD (ESP32-2432S028R)

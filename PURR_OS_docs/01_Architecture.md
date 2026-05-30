@@ -193,26 +193,51 @@ manifest.json:
 
 ---
 
-## Required Libraries (Arduino IDE)
+## Build Environment
 
-| Library | Purpose | Source |
+### Recommended: Arduino IDE (best LoRa support)
+
+**Arduino IDE is the recommended build environment for PURR OS**, particularly for any target with LoRa. The official Heltec board package includes a validated SX1262 library that is tested against Heltec V3 hardware and handles radio initialisation, frequency configuration, and packet TX/RX without manual register programming.
+
+#### Arduino IDE setup
+
+1. Install [Arduino IDE 2.x](https://www.arduino.cc/en/software)
+2. Add the Heltec board manager URL:
+   - `File → Preferences → Additional Boards Manager URLs`
+   - Paste: `https://github.com/Heltec-Aaron-Lee/WiFi_Kit_series/releases/download/0.0.7/package_heltec_esp32_index.json`
+3. Install the board package:
+   - `Tools → Board → Boards Manager` → search `Heltec ESP32` → install **Heltec ESP32 Series Dev-boards**
+4. Install libraries via `Tools → Manage Libraries`:
+
+| Library | Version | Purpose |
 |---|---|---|
-| `lvgl` | UI framework (v8.x recommended) | Arduino Library Manager |
-| `TFT_eSPI` | Display driver — ILI9488, SSD1306 | Arduino Library Manager |
-| `Heltec ESP32 Dev-Boards` | Official LoRa + OLED support | Heltec board manager |
-| `ArduinoJson` | device.json + manifest parsing | Arduino Library Manager |
-| `ESP32 BLE Arduino` | Bluetooth LE | Included with ESP32 board package |
-| `WiFi` | WiFi management | Included with ESP32 board package |
+| `Heltec ESP32 Dev-Boards` | latest | SX1262 LoRa driver + OLED — **required for LoRa** |
+| `lvgl` | 8.3.x | UI framework (ILI9341, ILI9488 targets) |
+| `TFT_eSPI` | latest | Display driver for ILI9341 / ILI9488 |
+| `ArduinoJson` | 7.x | device.json + keymap parsing |
 
-### Heltec Board Manager URL
+#### Selecting your board in Arduino IDE
+
+| Target | Arduino board selection |
+|---|---|
+| Heltec WiFi LoRa 32 V3 | `Heltec ESP32 Series Dev-boards → WiFi LoRa 32(V3)` |
+| CYD (ESP32-2432S028R) | `ESP32 Arduino → ESP32 Dev Module` |
+| T-Deck | `ESP32S3 Dev Module` |
+
+> **LoRa note:** The Heltec board package's LoRa library is calibrated for their specific SX1262 circuit (TCXO, RF switch, DIO1 wiring). Using a generic SX1262 Arduino library on a Heltec V3 may fail or produce incorrect output. Always prefer the Heltec-provided library on Heltec hardware.
+
+---
+
+### Alternative: ESP-IDF + build.sh
+
+For automated or CI builds, use the `Builder/` scripts. See `Builder/HOWTO.md` for full instructions. The ESP-IDF path uses the Arduino-ESP32 component layer (`espressif/arduino-esp32 >= 3.0.0`) so the same library code runs either way.
+
+```bash
+cd Builder
+./build.sh --target heltec --mini --flash COM5
 ```
-https://github.com/Heltec-Aaron-Lee/WiFi_Kit_series/releases/download/0.0.7/package_heltec_esp32_index.json
-```
 
-Add this to Arduino IDE under:
-`File → Preferences → Additional Boards Manager URLs`
-
-Then install: `Heltec ESP32 Series Dev-boards` from the Boards Manager.
+The `Builder/` path does **not** use the Heltec board package's LoRa library — it uses the `LoRa Kernels/SX1262/` drop-in instead. Both work; the Heltec board package path is easier for first-time setup and hardware debugging.
 
 ---
 

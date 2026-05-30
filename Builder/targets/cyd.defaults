@@ -1,0 +1,36 @@
+# PURR OS — CYD ESP32-2432S028R (ESP32)
+# Copied to sdkconfig.defaults by build.sh --target cyd
+# Then consumed by: idf.py set-target esp32 && idf.py build
+
+# Flash: 4MB, 40MHz, DIO mode
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_SPI_FLASH_SUPPORT_GD_CHIP=y
+
+# Partition table — points to partitions_cyd.csv
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_cyd.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+
+# Arduino-ESP32
+CONFIG_AUTOSTART_ARDUINO=y
+CONFIG_ARDUINO_SELECTIVE_COMPILATION=y
+
+# CPU: 240MHz
+CONFIG_ESP32_DEFAULT_CPU_FREQ_240=y
+
+# Logging: info for production launcher
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# SPIFFS
+CONFIG_SPIFFS_MAX_PARTITIONS=3
+
+# FatFS (SD card for firmware install)
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+
+# LVGL 8.3 — run idf.py menuconfig → Component config → LVGL to tune,
+# or add lv_conf.h to the project root and set LV_CONF_INCLUDE_SIMPLE=1
+# Minimum recommended settings (adjust in menuconfig if Kconfig names differ):
+CONFIG_LV_MEM_SIZE_KILOBYTES=32
