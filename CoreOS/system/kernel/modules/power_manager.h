@@ -2,9 +2,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// ADC1 pin for battery voltage divider (ADC2 unusable during WiFi)
-#define BATT_ADC_PIN   1
-#define BATT_CHG_PIN  34    // HIGH = charging (adjust per schematic)
+// Battery ADC — set to -1 on devices with no battery circuit
+#if defined(PURR_DISPLAY_ILI9341)
+#  define BATT_ADC_PIN  -1   // CYD: USB-powered, no battery divider
+#  define BATT_CHG_PIN  -1
+#else
+#  define BATT_ADC_PIN   1   // Heltec V3: ADC1_CH0 (GPIO 1)
+#  define BATT_CHG_PIN  34   // HIGH = charging
+#endif
 
 void power_manager_init(uint16_t cpu_max_mhz);
 void power_manager_update();

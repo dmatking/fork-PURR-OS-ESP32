@@ -1,6 +1,9 @@
 #include "kitt.h"
 #include "device_config.h"
-#include "modules/display_ssd1306.h"
+#include <ArduinoJson.h>
+#ifdef PURR_DISPLAY_SSD1306
+#  include "modules/display_ssd1306.h"
+#endif
 #include "modules/wifi_manager.h"
 #ifdef PURR_HAS_BT
 #  include "modules/bt_manager.h"
@@ -21,6 +24,9 @@
 #endif
 #ifdef PURR_HAS_TOUCH_XPT2046
 #  include "modules/touch_xpt2046.h"
+#endif
+#ifdef PURR_HAS_TOUCH_CST816S
+#  include "modules/touch_cst816s.h"
 #endif
 #ifdef PURR_HAS_PI_SLOT
 #  include "modules/pi_manager.h"
@@ -189,7 +195,9 @@ bool KITT::init(const char* device_json_path) {
 
     // Step 5: init display
     if (strcmp(cfg.display, "ssd1306") == 0) {
+#ifdef PURR_DISPLAY_SSD1306
         display_ssd1306_init();
+#endif
 #ifdef PURR_DISPLAY_ILI9488
     } else if (strcmp(cfg.display, "ili9488") == 0) {
         lv_init();
@@ -197,7 +205,9 @@ bool KITT::init(const char* device_json_path) {
 #endif
 #ifdef PURR_DISPLAY_ILI9341
     } else if (strcmp(cfg.display, "ili9341") == 0) {
+#ifdef PURR_HAS_LVGL
         lv_init();
+#endif
         display_ili9341_init();
 #endif
     } else {
@@ -272,7 +282,7 @@ bool KITT::init(const char* device_json_path) {
     power_manager_init(cfg.cpu_max_mhz);
     last_battery_refresh = millis();
 
-    // Register LVGL keypad indev (large-display LVGL targets only — SSD1306 uses get_key_event directly)
+    // Register LVGL keypad indev (LVGL targets only)
 #ifdef PURR_HAS_LVGL
     if (strcmp(cfg.display, "ssd1306") != 0) {
         static lv_indev_drv_t indev_drv;
@@ -293,12 +303,20 @@ bool KITT::init(const char* device_json_path) {
 #ifdef PURR_HAS_TOUCH_XPT2046
     if (strcmp(cfg.touch, "xpt2046") == 0) {
         touch_xpt2046_init();
+#ifdef PURR_HAS_LVGL
         static lv_indev_drv_t touch_drv;
         lv_indev_drv_init(&touch_drv);
         touch_drv.type    = LV_INDEV_TYPE_POINTER;
         touch_drv.read_cb = touch_xpt2046_lvgl_read;
         lv_indev_drv_register(&touch_drv);
+#endif
         log("KITT", "touch XPT2046 OK");
+    }
+#endif
+#ifdef PURR_HAS_TOUCH_CST816S
+    if (strcmp(cfg.touch, "cst816s") == 0) {
+        touch_cst816s_init();
+        log("KITT", "touch CST816S OK");
     }
 #endif
 
@@ -427,12 +445,10 @@ void KITT::shutdown() {
 
 void KITT::emergency_text(const char* line1, const char* line2, const char* line3) {
     Serial.printf("[KITT EMERGENCY] %s | %s | %s\n", line1, line2, line3);
-    if (strcmp(cfg.display, "ssd1306") == 0) {
-        display_ssd1306_clear();
-        display_ssd1306_text(0, line1);
-        display_ssd1306_text(1, line2);
-        display_ssd1306_text(2, line3);
-    }
+    text_clear();
+    text_print(0, line1);
+    text_print(1, line2);
+    text_print(2, line3);
 }
 
 bool        KITT::is_ready()          { return kitt_ready; }
@@ -447,20 +463,54 @@ uint16_t KITT::display_width()  { return cfg.display_w; }
 uint16_t KITT::display_height() { return cfg.display_h; }
 
 void KITT::text_print(uint8_t row, const char* text) {
-    if (strcmp(cfg.display, "ssd1306") == 0)
+#ifdef PURR_DISPLAY_SSD1306
+    if (strcmp(cfg.display, "ssd1306") == 0) {
         display_ssd1306_text(row, text);
+        return;
+    }
+#endif
+#ifdef PURR_DISPLAY_ILI9341
+    if (strcmp(cfg.display, "ili9341") == 0) {
+        display_ili9341_text(row, text);
+        return;
+    }
+#endif
+    (void)row; (void)text;
 }
 
 void KITT::text_clear() {
-    if (strcmp(cfg.display, "ssd1306") == 0)
+#ifdef PURR_DISPLAY_SSD1306
+    if (strcmp(cfg.display, "ssd1306") == 0) {
         display_ssd1306_clear();
+        return;
+    }
+#endif
+#ifdef PURR_DISPLAY_ILI9341
+    if (strcmp(cfg.display, "ili9341") == 0) {
+        display_ili9341_clear();
+        return;
+    }
+#endif
 }
 
-void KITT::text_set_color(uint32_t, uint32_t) {
-    // SSD1306 is monochrome — no-op; colour support reserved for ILI9488 LVGL path
+void KITT::text_set_color(uint32_t fg_hex, uint32_t bg_hex) {
+#ifdef PURR_DISPLAY_ILI9341
+    if (strcmp(cfg.display, "ili9341") == 0) {
+        auto to565 = [](uint32_t c) -> uint16_t {
+            uint8_t r = (c >> 16) & 0xFF;
+            uint8_t g = (c >>  8) & 0xFF;
+            uint8_t b =  c        & 0xFF;
+            return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+        };
+        display_ili9341_set_text_colors(to565(fg_hex), to565(bg_hex));
+        return;
+    }
+#endif
+    (void)fg_hex; (void)bg_hex;
 }
 
 void KITT::show_boot_splash() {
+    text_clear();
     if (strlen(cfg.boot_splash) == 0) {
         text_print(0, "PURR OS");
         text_print(1, cfg.device);
@@ -682,7 +732,7 @@ void KITT::apps_scan() {
             String mpath = String("/apps/") + entry.name() + "/manifest.json";
             File mf = SPIFFS.open(mpath.c_str(), "r");
             if (mf) {
-                StaticJsonDocument<512> doc;
+                JsonDocument doc;
                 if (deserializeJson(doc, mf) == DeserializationError::Ok) {
                     auto& a = app_list[app_count++];
                     strlcpy(a.name,    doc["name"]    | "", sizeof(a.name));

@@ -14,15 +14,15 @@ static int voltage_to_percent(int mv) {
 }
 
 void power_manager_init(uint16_t cpu_max_mhz) {
+#if BATT_ADC_PIN >= 0
     analogReadResolution(12);
-    analogSetAttenuation(ADC_11db);
-
-    if (BATT_CHG_PIN > 0)
-        pinMode(BATT_CHG_PIN, INPUT);
-
+    analogSetPinAttenuation(BATT_ADC_PIN, ADC_11db);
+#endif
+#if BATT_CHG_PIN >= 0
+    pinMode(BATT_CHG_PIN, INPUT);
+#endif
     power_manager_cpu_set_freq((int)cpu_max_mhz);
     power_manager_refresh_battery();
-
     Serial.printf("[pwr] init OK cpu=%dMHz batt=%d%%\n",
                   power_manager_cpu_get_freq(), cached_percent);
 }
@@ -32,22 +32,26 @@ void power_manager_update() {}
 void power_manager_deinit() {}
 
 void power_manager_refresh_battery() {
-    // Average 8 samples to reduce ADC noise
+#if BATT_ADC_PIN >= 0
     int sum = 0;
     for (int i = 0; i < 8; i++) sum += analogReadMilliVolts(BATT_ADC_PIN);
-    int adc_mv = sum / 8;
-
-    // Voltage divider correction — adjust R1/R2 ratio per schematic
-    // Placeholder: 1:1 divider (no resistor divide on Heltec V3 — direct ADC)
-    cached_voltage = adc_mv;
+    cached_voltage = sum / 8;
     cached_percent = voltage_to_percent(cached_voltage);
+#else
+    cached_voltage = 0;
+    cached_percent = -1;  // no battery on this device
+#endif
 }
 
 int  power_manager_battery_percent()    { return cached_percent; }
 int  power_manager_battery_voltage_mv() { return cached_voltage; }
 int  power_manager_battery_current_ma() { return 0; }  // no current sense on target hw
 bool power_manager_battery_charging() {
-    return (BATT_CHG_PIN > 0) && digitalRead(BATT_CHG_PIN);
+#if BATT_CHG_PIN >= 0
+    return digitalRead(BATT_CHG_PIN) == HIGH;
+#else
+    return false;
+#endif
 }
 
 void power_manager_cpu_set_freq(int mhz) {

@@ -110,6 +110,7 @@ bool touch_xpt2046_get_event(xpt_touch_event_t* out) {
     return true;
 }
 
+#ifdef PURR_HAS_LVGL
 void touch_xpt2046_lvgl_read(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     (void)drv;
     xpt_touch_event_t ev;
@@ -121,3 +122,4 @@ void touch_xpt2046_lvgl_read(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         data->state = LV_INDEV_STATE_RELEASED;
     }
 }
+#endif

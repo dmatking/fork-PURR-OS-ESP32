@@ -1,8 +1,15 @@
 // Sits between KITT and userland apps. Spawns the appropriate shell at boot.
 
 #include "../kernel/kitt.h"
-#include "../../apps/smol/smol.h"
-#include "../../apps/launcher/launcher.h"
+#ifdef PURR_DISPLAY_SSD1306
+#  include "../../apps/smol/smol.h"
+#endif
+#ifdef PURR_HAS_BOOTLOADER
+#  include "../kernel/modules/purr_bootloader.h"
+#endif
+#ifdef PURR_HAS_EXPLORER
+#  include "../kernel/modules/explorer.h"
+#endif
 #include <Arduino.h>
 #include <SPIFFS.h>
 #include <Preferences.h>
@@ -27,7 +34,7 @@ static void write_crash_log(const char* app, const char* reason) {
 }
 
 // OTA: stage a firmware image and reboot into flasher mode
-static void system_stage_ota(const char* src_path) {
+static void __attribute__((unused)) system_stage_ota(const char* src_path) {
     Serial.printf("[sys] OTA staged: %s\n", src_path);
     prefs.begin("kitt_boot", false);
     prefs.putBool("flash_flag", true);
@@ -70,26 +77,58 @@ static void system_task(void*) {
     kitt.apps_scan();
     kitt.firmware_scan();
 
-    // Launch the appropriate shell
-    if (kitt.display_width() <= 128) {
-        // Built-in C++ shell for 128×64 OLED (Heltec V3 / SSD1306)
-        Serial.println("[sys] launching smol (C++ OLED shell)");
-        smol_start();
-    } else if (strstr(kitt.device_name(), "cyd") != nullptr ||
-               kitt.display_width() == 320 && kitt.display_height() == 240) {
-        // CYD: resident launcher/OS (manages and boots other firmwares)
-        Serial.println("[sys] launching PURR OS launcher (CYD)");
-        launcher_start();
-    } else {
-        // MicroPython explorer shell for other large displays (pending runtime)
-        const char* shell = "/apps/explorer.meow";
-        Serial.printf("[sys] launching shell: %s\n", shell);
-        if (!kitt.app_launch(shell)) {
-            Serial.println("[sys] ERR: shell launch failed (MicroPython runtime pending)");
-            kitt.text_print(0, "PURR OS");
-            kitt.text_print(1, kitt.device_name());
-            kitt.text_print(2, "No shell");
+    // ── Boot mode check: GPIO 0 held OR NVS flag → bootloader shell ─────────────
+    bool bootloader_mode = false;
+    {
+        pinMode(0, INPUT_PULLUP);
+        delay(10);
+        if (digitalRead(0) == LOW) {
+            Serial.println("[sys] GPIO 0 held — bootloader mode");
+            bootloader_mode = true;
         }
+    }
+    if (!bootloader_mode) {
+        prefs.begin("purr_boot", true);
+        String bm    = prefs.getString("boot_mode", "");
+        bool   blonly = prefs.getBool("bootloader_only", false);
+        prefs.end();
+        if (bm == "bootloader") {
+            Serial.println("[sys] NVS boot_mode=bootloader");
+            bootloader_mode = true;
+            prefs.begin("purr_boot", false);
+            prefs.remove("boot_mode");
+            prefs.end();
+        } else if (blonly) {
+            Serial.println("[sys] NVS bootloader_only=true — PURR OS removed, staying in bootloader");
+            bootloader_mode = true;
+            // do NOT clear this flag — persists until PURR OS is reinstalled
+        }
+    }
+
+    // ── Launch shell ──────────────────────────────────────────────────────────
+    if (kitt.display_width() <= 128) {
+        Serial.println("[sys] launching smol (OLED shell)");
+#ifdef PURR_DISPLAY_SSD1306
+        smol_start();
+#endif
+    } else if (bootloader_mode) {
+        Serial.println("[sys] launching purr_bootloader (OTA flash mode)");
+#ifdef PURR_HAS_BOOTLOADER
+        purr_bootloader_start();
+#else
+        Serial.println("[sys] ERR: PURR_HAS_BOOTLOADER not compiled");
+        kitt.text_print(0, "BOOTLOADER"); kitt.text_print(1, "not compiled");
+#endif
+    } else {
+        Serial.println("[sys] launching explorer.paws");
+#ifdef PURR_HAS_EXPLORER
+        explorer_start();
+#else
+        Serial.println("[sys] ERR: PURR_HAS_EXPLORER not compiled");
+        kitt.text_print(0, "PURR OS");
+        kitt.text_print(1, kitt.device_name());
+        kitt.text_print(2, "No shell");
+#endif
     }
 
     // System watchdog loop

@@ -183,7 +183,7 @@ bool pm_install(uint8_t slot, const char* sd_path, const char* display_name,
 
     size_t filesize = f.size();
     if (filesize == 0 || filesize > part->size) {
-        Serial.printf("[pm] install: bad size %u (part %u)\n", filesize, part->size);
+        Serial.printf("[pm] install: bad size %lu (part %lu)\n", (unsigned long)filesize, (unsigned long)part->size);
         f.close();
         return false;
     }

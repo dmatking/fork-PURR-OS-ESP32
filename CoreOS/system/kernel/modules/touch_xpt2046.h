@@ -1,7 +1,6 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
-#include <lvgl.h>
 
 // CYD XPT2046 wiring — uses software SPI to avoid bus conflict with display HSPI
 //   T_MOSI = 32   (output)
@@ -20,5 +19,7 @@ void touch_xpt2046_init();
 void touch_xpt2046_deinit();
 bool touch_xpt2046_get_event(xpt_touch_event_t* out);
 
-// LVGL input device read callback — register with lv_indev_drv_t type POINTER
+#ifdef PURR_HAS_LVGL
+#include <lvgl.h>
 void touch_xpt2046_lvgl_read(lv_indev_drv_t* drv, lv_indev_data_t* data);
+#endif
