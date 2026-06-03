@@ -1,0 +1,83 @@
+-- Existing sdkconfig 'C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/sdkconfig' renamed to 'C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/sdkconfig.old'.
+-- Found Git: C:/Program Files/Git/cmd/git.exe (found version "2.54.0.windows.1")
+-- The C compiler identification is GNU 13.2.0
+-- The CXX compiler identification is GNU 13.2.0
+-- The ASM compiler identification is GNU
+-- Found assembler: C:/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20250707/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc.exe
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20250707/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Espressif/tools/xtensa-esp-elf/esp-13.2.0_20250707/xtensa-esp-elf/bin/xtensa-esp32-elf-g++.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Building ESP-IDF components for target esp32
+NOTICE: Skipping optional dependency: espressif/esp-sr
+NOTICE: Skipping optional dependency: espressif/esp_hosted
+NOTICE: Skipping optional dependency: espressif/esp_wifi_remote
+NOTICE: Processing 28 dependencies:
+NOTICE: [1/28] bblanchon/arduinojson (7.0.4)
+NOTICE: [2/28] chmorgan/esp-libhelix-mp3 (1.0.3)
+NOTICE: [3/28] espressif/arduino-esp32 (3.1.3)
+NOTICE: [4/28] espressif/cbor (0.6.0~1)
+NOTICE: [5/28] espressif/esp-dsp (1.8.2)
+NOTICE: [6/28] espressif/esp-modbus (1.0.18)
+NOTICE: [7/28] espressif/esp-serial-flasher (0.0.11)
+NOTICE: [8/28] espressif/esp-zboss-lib (1.6.0)
+NOTICE: [9/28] espressif/esp-zigbee-lib (1.6.0)
+NOTICE: [10/28] espressif/esp_diag_data_store (1.0.1)
+NOTICE: [11/28] espressif/esp_diagnostics (1.0.2)
+NOTICE: [12/28] espressif/esp_insights (1.0.1)
+NOTICE: [13/28] espressif/esp_modem (1.4.2)
+NOTICE: [14/28] espressif/esp_rainmaker (1.5.0)
+NOTICE: [15/28] espressif/esp_rcp_update (1.2.0)
+NOTICE: [16/28] espressif/esp_schedule (1.2.0)
+NOTICE: [17/28] espressif/esp_secure_cert_mgr (2.9.2)
+NOTICE: [18/28] espressif/jsmn (1.1.0)
+NOTICE: [19/28] espressif/json_generator (1.1.2)
+NOTICE: [20/28] espressif/json_parser (1.0.3)
+NOTICE: [21/28] espressif/libsodium (1.0.22)
+NOTICE: [22/28] espressif/mdns (1.11.1)
+NOTICE: [23/28] espressif/network_provisioning (1.0.2)
+NOTICE: [24/28] espressif/qrcode (0.1.0~2)
+NOTICE: [25/28] espressif/rmaker_common (1.4.6)
+NOTICE: [26/28] joltwallet/littlefs (1.22.1)
+NOTICE: [27/28] lvgl/lvgl (8.3.11)
+NOTICE: [28/28] idf (5.3.5)
+-- PURR OS  target=heltec  mini=0  bt=1  lora=1  mesh=0  mtp=0  flasher=0
+-- DEBUG: Use esp-modbus component folder: C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp-modbus.
+NOTICE: Skipping optional dependency: espressif/esp-sr
+NOTICE: Skipping optional dependency: espressif/esp_hosted
+NOTICE: Skipping optional dependency: espressif/esp_wifi_remote
+-- Project sdkconfig file C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/sdkconfig
+Loading defaults file C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/sdkconfig.defaults...
+C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/sdkconfig.defaults:22 CONFIG_ESP32_DEFAULT_CPU_FREQ_240 was replaced with CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240 
+-- Compiler supported targets: xtensa-esp-elf
+-- Found Python3: C:/Espressif/tools/python/v5.3.5/venv/Scripts/python.exe (found version "3.14.5") found components: Interpreter
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Performing Test C_COMPILER_SUPPORTS_WFORMAT_SIGNEDNESS
+-- Performing Test C_COMPILER_SUPPORTS_WFORMAT_SIGNEDNESS - Success
+-- USING O3
+-- App "purr_os_core" version: b00ab99-dirty
+-- Adding linker script C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/build/esp-idf/esp_system/ld/memory.ld
+-- Adding linker script C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/build/esp-idf/esp_system/ld/sections.ld.in
+-- Adding linker script C:/esp/v5.3.5/esp-idf/components/esp_rom/esp32/ld/esp32.rom.ld
+-- Adding linker script C:/esp/v5.3.5/esp-idf/components/esp_rom/esp32/ld/esp32.rom.api.ld
+-- Adding linker script C:/esp/v5.3.5/esp-idf/components/esp_rom/esp32/ld/esp32.rom.libgcc.ld
+-- Adding linker script C:/esp/v5.3.5/esp-idf/components/esp_rom/esp32/ld/esp32.rom.newlib-data.ld
+-- Adding linker script C:/esp/v5.3.5/esp-idf/components/esp_rom/esp32/ld/esp32.rom.syscalls.ld
+-- Adding linker script C:/esp/v5.3.5/esp-idf/components/esp_rom/esp32/ld/esp32.rom.newlib-funcs.ld
+-- Adding linker script C:/esp/v5.3.5/esp-idf/components/soc/esp32/ld/esp32.peripherals.ld
+-- DEBUG: Use esp-modbus component folder: C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp-modbus.
+-- PURR OS  target=cyd  mini=1  bt=1  lora=0  mesh=0  mtp=0  flasher=0
+-- Mini build: MicroPython excluded.
+-- Components: TFT_eSPI app_trace app_update bblanchon__arduinojson bootloader bootloader_support bt chmorgan__esp-libhelix-mp3 cmock console cxx driver efuse esp-tls esp_adc esp_app_format esp_bootloader_format esp_coex esp_common esp_driver_ana_cmpr esp_driver_cam esp_driver_dac esp_driver_gpio esp_driver_gptimer esp_driver_i2c esp_driver_i2s esp_driver_isp esp_driver_jpeg esp_driver_ledc esp_driver_mcpwm esp_driver_parlio esp_driver_pcnt esp_driver_ppa esp_driver_rmt esp_driver_sdio esp_driver_sdm esp_driver_sdmmc esp_driver_sdspi esp_driver_spi esp_driver_touch_sens esp_driver_tsens esp_driver_uart esp_driver_usb_serial_jtag esp_eth esp_event esp_gdbstub esp_hid esp_http_client esp_http_server esp_https_ota esp_https_server esp_hw_support esp_lcd esp_local_ctrl esp_mm esp_netif esp_netif_stack esp_partition esp_phy esp_pm esp_psram esp_ringbuf esp_rom esp_system esp_timer esp_vfs_console esp_wifi espcoredump espressif__arduino-esp32 espressif__cbor espressif__esp-dsp espressif__esp-modbus espressif__esp-serial-flasher espressif__esp-zboss-lib espressif__esp-zigbee-lib espressif__esp_diag_data_store espressif__esp_diagnostics espressif__esp_insights espressif__esp_modem espressif__esp_rainmaker espressif__esp_rcp_update espressif__esp_schedule espressif__esp_secure_cert_mgr espressif__jsmn espressif__json_generator espressif__json_parser espressif__libsodium espressif__mdns espressif__network_provisioning espressif__qrcode espressif__rmaker_common esptool_py fatfs freertos hal heap http_parser idf_test ieee802154 joltwallet__littlefs json log lvgl__lvgl lwip main mbedtls mqtt newlib nvs_flash nvs_sec_provider openthread partition_table perfmon protobuf-c protocomm pthread sdmmc soc spi_flash spiffs tcp_transport ulp unity usb vfs wear_levelling wifi_provisioning wpa_supplicant xtensa
+-- Component paths: C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/components/TFT_eSPI C:/esp/v5.3.5/esp-idf/components/app_trace C:/esp/v5.3.5/esp-idf/components/app_update C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/bblanchon__arduinojson C:/esp/v5.3.5/esp-idf/components/bootloader C:/esp/v5.3.5/esp-idf/components/bootloader_support C:/esp/v5.3.5/esp-idf/components/bt C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/chmorgan__esp-libhelix-mp3 C:/esp/v5.3.5/esp-idf/components/cmock C:/esp/v5.3.5/esp-idf/components/console C:/esp/v5.3.5/esp-idf/components/cxx C:/esp/v5.3.5/esp-idf/components/driver C:/esp/v5.3.5/esp-idf/components/efuse C:/esp/v5.3.5/esp-idf/components/esp-tls C:/esp/v5.3.5/esp-idf/components/esp_adc C:/esp/v5.3.5/esp-idf/components/esp_app_format C:/esp/v5.3.5/esp-idf/components/esp_bootloader_format C:/esp/v5.3.5/esp-idf/components/esp_coex C:/esp/v5.3.5/esp-idf/components/esp_common C:/esp/v5.3.5/esp-idf/components/esp_driver_ana_cmpr C:/esp/v5.3.5/esp-idf/components/esp_driver_cam C:/esp/v5.3.5/esp-idf/components/esp_driver_dac C:/esp/v5.3.5/esp-idf/components/esp_driver_gpio C:/esp/v5.3.5/esp-idf/components/esp_driver_gptimer C:/esp/v5.3.5/esp-idf/components/esp_driver_i2c C:/esp/v5.3.5/esp-idf/components/esp_driver_i2s C:/esp/v5.3.5/esp-idf/components/esp_driver_isp C:/esp/v5.3.5/esp-idf/components/esp_driver_jpeg C:/esp/v5.3.5/esp-idf/components/esp_driver_ledc C:/esp/v5.3.5/esp-idf/components/esp_driver_mcpwm C:/esp/v5.3.5/esp-idf/components/esp_driver_parlio C:/esp/v5.3.5/esp-idf/components/esp_driver_pcnt C:/esp/v5.3.5/esp-idf/components/esp_driver_ppa C:/esp/v5.3.5/esp-idf/components/esp_driver_rmt C:/esp/v5.3.5/esp-idf/components/esp_driver_sdio C:/esp/v5.3.5/esp-idf/components/esp_driver_sdm C:/esp/v5.3.5/esp-idf/components/esp_driver_sdmmc C:/esp/v5.3.5/esp-idf/components/esp_driver_sdspi C:/esp/v5.3.5/esp-idf/components/esp_driver_spi C:/esp/v5.3.5/esp-idf/components/esp_driver_touch_sens C:/esp/v5.3.5/esp-idf/components/esp_driver_tsens C:/esp/v5.3.5/esp-idf/components/esp_driver_uart C:/esp/v5.3.5/esp-idf/components/esp_driver_usb_serial_jtag C:/esp/v5.3.5/esp-idf/components/esp_eth C:/esp/v5.3.5/esp-idf/components/esp_event C:/esp/v5.3.5/esp-idf/components/esp_gdbstub C:/esp/v5.3.5/esp-idf/components/esp_hid C:/esp/v5.3.5/esp-idf/components/esp_http_client C:/esp/v5.3.5/esp-idf/components/esp_http_server C:/esp/v5.3.5/esp-idf/components/esp_https_ota C:/esp/v5.3.5/esp-idf/components/esp_https_server C:/esp/v5.3.5/esp-idf/components/esp_hw_support C:/esp/v5.3.5/esp-idf/components/esp_lcd C:/esp/v5.3.5/esp-idf/components/esp_local_ctrl C:/esp/v5.3.5/esp-idf/components/esp_mm C:/esp/v5.3.5/esp-idf/components/esp_netif C:/esp/v5.3.5/esp-idf/components/esp_netif_stack C:/esp/v5.3.5/esp-idf/components/esp_partition C:/esp/v5.3.5/esp-idf/components/esp_phy C:/esp/v5.3.5/esp-idf/components/esp_pm C:/esp/v5.3.5/esp-idf/components/esp_psram C:/esp/v5.3.5/esp-idf/components/esp_ringbuf C:/esp/v5.3.5/esp-idf/components/esp_rom C:/esp/v5.3.5/esp-idf/components/esp_system C:/esp/v5.3.5/esp-idf/components/esp_timer C:/esp/v5.3.5/esp-idf/components/esp_vfs_console C:/esp/v5.3.5/esp-idf/components/esp_wifi C:/esp/v5.3.5/esp-idf/components/espcoredump C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__arduino-esp32 C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__cbor C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp-dsp C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp-modbus C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp-serial-flasher C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp-zboss-lib C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp-zigbee-lib C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp_diag_data_store C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp_diagnostics C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp_insights C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp_modem C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp_rainmaker C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp_rcp_update C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp_schedule C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__esp_secure_cert_mgr C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__jsmn C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__json_generator C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__json_parser C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__libsodium C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__mdns C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__network_provisioning C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__qrcode C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/espressif__rmaker_common C:/esp/v5.3.5/esp-idf/components/esptool_py C:/esp/v5.3.5/esp-idf/components/fatfs C:/esp/v5.3.5/esp-idf/components/freertos C:/esp/v5.3.5/esp-idf/components/hal C:/esp/v5.3.5/esp-idf/components/heap C:/esp/v5.3.5/esp-idf/components/http_parser C:/esp/v5.3.5/esp-idf/components/idf_test C:/esp/v5.3.5/esp-idf/components/ieee802154 C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/joltwallet__littlefs C:/esp/v5.3.5/esp-idf/components/json C:/esp/v5.3.5/esp-idf/components/log C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/managed_components/lvgl__lvgl C:/esp/v5.3.5/esp-idf/components/lwip C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/main C:/esp/v5.3.5/esp-idf/components/mbedtls C:/esp/v5.3.5/esp-idf/components/mqtt C:/esp/v5.3.5/esp-idf/components/newlib C:/esp/v5.3.5/esp-idf/components/nvs_flash C:/esp/v5.3.5/esp-idf/components/nvs_sec_provider C:/esp/v5.3.5/esp-idf/components/openthread C:/esp/v5.3.5/esp-idf/components/partition_table C:/esp/v5.3.5/esp-idf/components/perfmon C:/esp/v5.3.5/esp-idf/components/protobuf-c C:/esp/v5.3.5/esp-idf/components/protocomm C:/esp/v5.3.5/esp-idf/components/pthread C:/esp/v5.3.5/esp-idf/components/sdmmc C:/esp/v5.3.5/esp-idf/components/soc C:/esp/v5.3.5/esp-idf/components/spi_flash C:/esp/v5.3.5/esp-idf/components/spiffs C:/esp/v5.3.5/esp-idf/components/tcp_transport C:/esp/v5.3.5/esp-idf/components/ulp C:/esp/v5.3.5/esp-idf/components/unity C:/esp/v5.3.5/esp-idf/components/usb C:/esp/v5.3.5/esp-idf/components/vfs C:/esp/v5.3.5/esp-idf/components/wear_levelling C:/esp/v5.3.5/esp-idf/components/wifi_provisioning C:/esp/v5.3.5/esp-idf/components/wpa_supplicant C:/esp/v5.3.5/esp-idf/components/xtensa
+-- Configuring done (173.8s)
+-- Generating done (6.4s)
+-- Build files have been written to: C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/build

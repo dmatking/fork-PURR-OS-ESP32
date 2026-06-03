@@ -6,12 +6,22 @@ Run all commands from this folder (`Builder/`). The script handles everything el
 
 ## Prerequisites
 
-### 1. ESP-IDF 5.1+
+### 1. ESP-IDF 5.1.x or 5.2.x (required)
 
-Install ESP-IDF and source it before every build session:
+> **IDF version constraint:** `arduino-esp32` 3.0.0 requires IDF **≥ 5.1.0 and < 5.3.0**.
+> - IDF 6.x removed `wifi_provisioning` — **fails at cmake**.
+> - IDF 5.3+ changed the ESP32-S3 touch driver API (`touch_value_t` removed) — **fails at compile**.
+> - Use the latest available **5.1.x or 5.2.x** installer. Both are confirmed-working.
+
+Download the **IDF 5.1.x or 5.2.x offline Windows installer** from the Espressif GitHub releases page
+(`esp-idf-tools-setup-offline-5.2.x.exe`). It installs alongside any existing IDF version.
+After install you will have an **"ESP-IDF 5.2 CMD"** shortcut in Start — use that for all
+PURR OS builds.
+
+Source it before every build session:
 
 ```bash
-# Install (one-time) — https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/
+# Install (one-time) — download IDF 5.3.x from https://github.com/espressif/esp-idf/releases
 # Then per session:
 . $IDF_PATH/export.sh
 ```
@@ -184,13 +194,137 @@ idf.py menuconfig
 
 ---
 
-## T-Deck (LilyGo)
+## T-Deck / T-Deck Plus (LilyGo)
 
-**Status: work in progress.** The T-Deck target compiles (smol shell as placeholder) but the BB OS 6 shell and ST7789 display driver are not yet wired.
+**Status: work in progress.** Both variants compile (smol shell as placeholder) but the BB OS 6 shell and ST7789 display driver are not yet wired.
+
+### T-Deck (original)
 
 ```bash
 ./build.sh --target tdeck --mini
 ```
+
+### T-Deck Plus
+
+T-Deck Plus adds a **u-blox MIA-M10Q GNSS module** and a **larger battery**. Pass `--tdeck-plus` to enable the `PURR_IS_TDECK_PLUS` preprocessor define, which gates GPS and battery-manager code:
+
+```bash
+./build.sh --target tdeck --tdeck-plus --mini
+```
+
+PowerShell:
+
+```powershell
+.\Build.ps1 -Target tdeck -TdeckPlus -Mini
+```
+
+The interactive wizard asks "Normal or Plus?" automatically when T-Deck is selected as the target.
+
+| Define | When set |
+|---|---|
+| `PURR_IS_TDECK_PLUS` | `--tdeck-plus` / `-TdeckPlus` flag, or wizard selection |
+
+#### MIA-M10Q hardware notes
+
+| Item | Detail |
+|---|---|
+| UART pins | GPIO44 = RX (from module), GPIO43 = TX (to module) — uses Serial1 |
+| Baud rate | 9600 (default); falls back to 4800 on init probe |
+| Former function | These are the Grove interface pins — Grove is unavailable on T-Deck Plus |
+| Detection quirk | Module needs ~2 s after power-on before NMEA output begins. Probing too quickly causes false "no GPS present" (observed in Meshtastic firmware). The PURR GPS init waits `GPS_INIT_WAIT_MS` (2000 ms) before probing to avoid this. |
+
+---
+
+## Meshtastic Co-Resident Stack
+
+**Status: scaffold only.** The `mesh_manager` module is wired into the build system. The Meshtastic submodule and its ESP-IDF component wrapper must be added before `--with-mesh` builds will compile.
+
+### Prerequisites
+
+Clone the Meshtastic firmware submodule:
+
+```bash
+cd ../CoreOS
+git submodule add https://github.com/meshtastic/firmware.git components/meshtastic
+cd components/meshtastic
+git checkout v2.5.x   # use latest stable tag
+```
+
+Create `CoreOS/components/meshtastic/CMakeLists.txt` (ESP-IDF component wrapper):
+
+```cmake
+idf_component_register(
+    SRCS
+        "src/MeshService.cpp"
+        "src/NodeDB.cpp"
+        "src/Router.cpp"
+        "src/FloodingRouter.cpp"
+        "src/RadioLibInterface.cpp"
+        "src/SX1262Interface.cpp"
+        "src/PowerFSM.cpp"
+        # add further src/ files as link errors reveal them
+    INCLUDE_DIRS "src" "src/mesh" "src/gps"
+    REQUIRES espressif__arduino-esp32 nvs_flash spiffs
+)
+```
+
+### Building with Mesh
+
+```bash
+# Heltec V3 — mini build (no MicroPython)
+./build.sh --target heltec --mini --with-mesh
+
+# T-Deck Plus
+./build.sh --target tdeck --tdeck-plus --with-mesh
+```
+
+PowerShell:
+
+```powershell
+.\Build.ps1 -Target heltec -Mini -WithMesh
+.\Build.ps1 -Target tdeck -TdeckPlus -WithMesh
+```
+
+The interactive wizard shows **Meshtastic** as a toggleable module on LoRa targets (hidden on CYD).
+
+### Radio ownership
+
+`mesh_manager_start()` calls `lora_manager_yield()` to release the SX1262 to Meshtastic. `mesh_manager_stop()` calls `lora_manager_reclaim()` to hand it back. Do not call KITT LoRa APIs while mesh is running.
+
+### App Manager integration
+
+```cpp
+// Start mesh from any app or C++ code:
+mesh_manager_start();
+
+// Stop:
+mesh_manager_stop();
+
+// Send a broadcast message:
+mesh_manager_send("Hello mesh", MESH_BROADCAST_ADDR);
+
+// Poll for incoming messages:
+mesh_packet_t pkt;
+while (mesh_manager_recv(&pkt)) {
+    Serial.printf("From 0x%08X: %s\n", pkt.from, pkt.text);
+}
+```
+
+### RAM budget
+
+| Target | Internal RAM | PSRAM | Verdict |
+|---|---|---|---|
+| Heltec V3 | ~512KB | None | Tight — PURR + Meshtastic ~400KB combined |
+| T-Deck Plus | ~512KB | 8MB | Comfortable — mesh state goes in PSRAM |
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `MeshService.h not found` | Clone the Meshtastic submodule (see above) |
+| `meshtastic: unknown component` | Ensure `components/meshtastic/CMakeLists.txt` exists and calls `idf_component_register` |
+| Linker errors from Meshtastic src | Add the missing `.cpp` files to the CMakeLists SRCS list |
+| Radio init fails at runtime | Ensure `--with-mesh` is not combined with `--no-lora`; lora_manager must be enabled |
 
 ---
 
@@ -245,6 +379,8 @@ idf.py -p COM5 app-flash
 | Problem | Fix |
 |---|---|
 | `IDF_PATH not set` | Source ESP-IDF: `. $IDF_PATH/export.sh` |
+| `wifi_provisioning: unknown name` | You are using IDF 6.x — install IDF 5.1.x (see Prerequisites §1) |
+| `Touch IDF driver Not supported` or `touch_value_t` error | You are using IDF 5.3+ — install IDF 5.1.x (see Prerequisites §1) |
 | `Unknown chip type` or wrong target | Run `./build.sh --target <name> --clean` — stale target in sdkconfig |
 | `micropython_embed.h not found` | Either clone the MicroPython submodule or use `--mini` |
 | LVGL `lv_conf.h` error | Run `idf.py menuconfig` in `CoreOS/` to configure LVGL via Kconfig |

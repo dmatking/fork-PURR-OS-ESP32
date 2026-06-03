@@ -2,6 +2,76 @@
 
 ---
 
+## [0.5.1] — 2026-05-31 — Build system fixes + IDF 5.1/5.2 compatibility
+
+### Builder — cmake flag propagation fix
+- `build.sh` / `Build.ps1` — cmake `-D` flags now passed to both `set-target` **and** `build`
+  - Previously `idf.py set-target` ran cmake with default values (`BUILD_MINI=0`), causing it to
+    attempt resolving the `micropython` component before the build step could override the flag
+  - Both scripts now collect flags into an array and splat them onto every `idf.py` call
+
+### CoreOS — CMakeLists.txt: MicroPython auto-fallback
+- `main/CMakeLists.txt` — if the MicroPython submodule header is absent, build automatically
+  falls back to mini mode with a CMake `WARNING` instead of a hard configure error
+  - Prevents `micropython: unknown component` failures when the submodule hasn't been cloned
+
+### Builder — sdkconfig defaults: FreeRTOS tick rate
+- `targets/heltec.defaults` — added `CONFIG_FREERTOS_HZ=1000` (arduino-esp32 hard-requires 1000Hz)
+- `targets/cyd.defaults` — same; applies to all arduino-esp32 targets
+
+### IDF version constraint (arduino-esp32 3.0.0 compatibility matrix)
+- `main/idf_component.yml` — IDF ceiling set to `<5.3.0`
+  - IDF 6.x: `wifi_provisioning` component removed → cmake failure
+  - IDF 5.3+: ESP32-S3 touch driver API replaced (`driver/touch_sensor.h` → `driver/touch_sens.h`,
+    `touch_value_t` removed); arduino-esp32 3.0.0 uses the old API → compile failure
+  - **IDF 5.1.x and 5.2.x are the only confirmed-working versions** with arduino-esp32 3.0.0
+- `Builder/HOWTO.md` — Prerequisites §1 updated; troubleshooting table extended with touch and
+  wifi_provisioning error → fix mappings
+
+---
+
+## [0.5.0] — 2026-05-30 — Builder SDK, per-module flags, sdk.py deprecated
+
+### Builder — full rewrite (interactive + direct mode)
+- `Builder/build.sh` (bash, Linux/macOS/Git Bash) — complete rewrite
+  - No args → interactive wizard: device picker, LoRa kernel picker, numbered module toggle menu
+  - Direct mode: `--target TARGET [--mini] [--clean] [--flash PORT] [--monitor PORT]`
+  - Module flags: `--no-bt`, `--with-mtp`, `--with-flasher`, `--no-lora`, `--lora-kernel K`
+  - `load_config` / `save_config` — persists choices to `purr_build.cfg` between runs
+  - `install_lora_kernel` — copies selected backend from `LoRa Kernels/` into `CoreOS/system/kernel/modules/`
+  - Sets `ARDUINO_SKIP_IDF_VERSION_CHECK=1` to bypass arduino-esp32's IDF version ceiling check
+- `Builder/Build.ps1` (PowerShell 5.1+, Windows native) — new script; full feature parity with build.sh
+  - All Unicode replaced with ASCII to avoid PS 5.1 Windows-1252 decode bug (`→` → `->`, etc.)
+  - Params: `-Target`, `-Mini`, `-Clean`, `-Flash`, `-Monitor`, `-Setup`, `-LoraKernel`,
+    `-NoBt`, `-WithMtp`, `-WithFlasher`, `-NoLora`
+- `Builder/HOWTO.md` — new comprehensive build guide: prerequisites, per-target instructions,
+  partition tables, flash/monitor workflows, troubleshooting table
+- `.gitignore` — added `Builder/purr_build.cfg`
+- `sdk.py` — **deprecated**; replaced by `build.sh` / `Build.ps1`
+
+### CoreOS — CMakeLists.txt restructured for IDF 5.x
+- `CoreOS/CMakeLists.txt` — stripped to 3-line project boilerplate
+  (`idf_component_register` must live in a component subdirectory in IDF 5.x+)
+- `CoreOS/main/CMakeLists.txt` — **new file**; all build logic moved here
+  - Per-module CMake cache variables: `PURR_ENABLE_BT`, `PURR_ENABLE_LORA`, `PURR_ENABLE_MTP`, `PURR_ENABLE_FLASHER`
+  - LoRa auto-enabled for `heltec` / `tdeck`; disabled for `cyd`
+  - Managed component REQUIRES use `namespace__name` format: `espressif__arduino-esp32`,
+    `bblanchon__arduinojson`, `lvgl__lvgl`
+  - Device-specific source/include/REQUIRES selected via `TARGET_DEVICE`
+  - `PURR_HAS_*` preprocessor defines emitted via `target_compile_definitions`
+- `CoreOS/main/idf_component.yml` — moved from project root; dependencies unchanged
+
+### CoreOS — KITT: optional Bluetooth
+- `kitt.cpp` — added `#ifdef PURR_HAS_BT` guards in six locations:
+  1. `bt_manager.h` include
+  2. BT init block in `KITT::init()`
+  3. `bt_manager_update()` call in `KITT::update()`
+  4. `ts.bt_enabled` tray update (with `#else ts.bt_enabled = false`)
+  5. `bt_manager_deinit()` in `KITT::shutdown()`
+  6. All 19 BT API forwarding methods — full implementations when `PURR_HAS_BT`, no-op stubs otherwise
+
+---
+
 ## [0.4.1] — 2026-05-29 — Multi-target build system
 
 ### Builder/ (new top-level folder)

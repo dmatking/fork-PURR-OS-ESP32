@@ -14,7 +14,6 @@ static Preferences prefs;
 
 void wifi_manager_init() {
     WiFi.mode(WIFI_STA);
-    WiFi.setAutoConnect(false);
     WiFi.setAutoReconnect(false);
     wifi_on = true;
 

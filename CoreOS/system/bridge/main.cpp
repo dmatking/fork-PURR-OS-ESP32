@@ -38,7 +38,7 @@ static void load_keymap(const char* path) {
         Serial.printf("[bridge] keymap not found: %s\n", path);
         return;
     }
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     if (deserializeJson(doc, f) != DeserializationError::Ok) {
         f.close();
         Serial.println("[bridge] keymap parse error");

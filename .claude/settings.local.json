@@ -19,7 +19,23 @@
       "WebFetch(domain:deepwiki.com)",
       "Read(//c//**)",
       "Read(//c/Users/PastorCatto/**)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "PowerShell($env:IDF_PATH; $cmd = Get-Command idf.py -ErrorAction SilentlyContinue; if \\($cmd\\) { $cmd.Source } else { \"idf.py not in PATH\" }; Get-ChildItem \"C:\\\\Espressif\" -ErrorAction SilentlyContinue | Select-Object -First 8 Name)",
+      "PowerShell(Get-ChildItem \"C:\\\\\" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match \"espressif|esp-idf|idf\" -or $_.Name -match \"Espressif\" } | Select-Object FullName; Get-ChildItem \"$env:USERPROFILE\\\\esp\" -ErrorAction SilentlyContinue | Select-Object Name)",
+      "PowerShell(. \"C:\\\\esp\\\\v5.3.5\\\\esp-idf\\\\export.ps1\" 2>&1)",
+      "PowerShell(. \"C:\\\\Espressif\\\\tools\\\\Microsoft.v5.3.5.PowerShell_profile.ps1\" 2>&1)",
+      "PowerShell([System.IO.Ports.SerialPort]::GetPortNames\\(\\) | Sort-Object)",
+      "PowerShell(Start-Sleep -Milliseconds 2000; [System.IO.Ports.SerialPort]::GetPortNames\\(\\) | Sort-Object)",
+      "PowerShell(. \"C:\\\\Espressif\\\\tools\\\\Microsoft.v5.3.5.PowerShell_profile.ps1\")",
+      "PowerShell(esptool.py --chip esp32 --port COM7 --baud 921600 write_flash -z 0x10000 \"C:\\\\Users\\\\PastorCatto\\\\Documents\\\\Projects\\\\PURR-OS-ESP32-MicroPython\\\\CoreOS\\\\build\\\\purr_os_core.bin\")",
+      "PowerShell(. \"C:\\\\Espressif\\\\tools\\\\Microsoft.v5.3.5.PowerShell_profile.ps1\"; $b = \"C:\\\\Users\\\\PastorCatto\\\\Documents\\\\Projects\\\\PURR-OS-ESP32-MicroPython\\\\CoreOS\\\\build\"; python -m esptool --chip esp32 --port COM7 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 4MB --flash_freq 40m 0x1000 \"$b\\\\bootloader\\\\bootloader.bin\" 0x8000 \"$b\\\\partition_table\\\\partition-table.bin\" 0xe000 \"$b\\\\ota_data_initial.bin\" 0x10000 \"$b\\\\purr_os_core.bin\")",
+      "PowerShell(. \"C:\\\\Espressif\\\\tools\\\\Microsoft.v5.3.5.PowerShell_profile.ps1\"; $b = \"C:\\\\Users\\\\PastorCatto\\\\Documents\\\\Projects\\\\PURR-OS-ESP32-MicroPython\\\\CoreOS\\\\build\"; python -m esptool --chip esp32 --port COM8 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 4MB --flash_freq 40m 0x1000 \"$b\\\\bootloader\\\\bootloader.bin\" 0x8000 \"$b\\\\partition_table\\\\partition-table.bin\" 0xe000 \"$b\\\\ota_data_initial.bin\" 0x10000 \"$b\\\\purr_os_core.bin\")",
+      "PowerShell(. \"C:\\\\Espressif\\\\tools\\\\Microsoft.v5.3.5.PowerShell_profile.ps1\"; Set-Location \"C:\\\\Users\\\\PastorCatto\\\\Documents\\\\Projects\\\\PURR-OS-ESP32-MicroPython\\\\CoreOS\"; $env:IDF_COMPONENT_OVERWRITE_MANAGED_COMPONENTS = '1'; idf.py -DTARGET_DEVICE=cyd -DBUILD_MINI=1 -DPURR_ENABLE_BT=1 -DPURR_ENABLE_LORA=0 -DPURR_ENABLE_MESH=0 -DPURR_ENABLE_MTP=0 -DPURR_ENABLE_FLASHER=0 build 2>&1 | Select-Object -Last 20)",
+      "PowerShell(. \"C:\\\\Espressif\\\\tools\\\\Microsoft.v5.3.5.PowerShell_profile.ps1\"; $b = \"C:\\\\Users\\\\PastorCatto\\\\Documents\\\\Projects\\\\PURR-OS-ESP32-MicroPython\\\\CoreOS\\\\build\"; python -m esptool --chip esp32 --port COM8 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size detect --flash_freq 40m 0x10000 \"$b\\\\purr_os_core.bin\")",
+      "PowerShell(. \"C:\\\\Espressif\\\\tools\\\\Microsoft.v5.3.5.PowerShell_profile.ps1\"; $b = \"C:\\\\Users\\\\PastorCatto\\\\Documents\\\\Projects\\\\PURR-OS-ESP32-MicroPython\\\\CoreOS\\\\build\"; python -m esptool --chip esp32 --port COM8 -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size detect --flash_freq 40m 0x1000 \"$b\\\\bootloader\\\\bootloader.bin\" 0x8000 \"$b\\\\partition_table\\\\partition-table.bin\" 0xe000 \"$b\\\\ota_data_initial.bin\" 0x10000 \"$b\\\\purr_os_core.bin\" 0x3b0000 \"$b\\\\spiffs.bin\")",
+      "PowerShell(Get-WMIObject Win32_SerialPort)",
+      "PowerShell($env:IDF_TOOLS_PATH = \"C:\\\\Espressif\\\\tools\"; . \"C:\\\\esp\\\\v5.3.5\\\\esp-idf\\\\export.ps1\"; cd \"C:\\\\Users\\\\PastorCatto\\\\Documents\\\\Projects\\\\PURR-OS-ESP32-MicroPython\"; .\\\\Builder\\\\Build.ps1 -Target cyd -Mini -Clean 2>&1 | Select-Object -Last 5)",
+      "PowerShell($profile_script = \"C:\\\\Espressif\\\\tools\\\\Microsoft.v5.3.5.PowerShell_profile.ps1\"; . $profile_script; Set-Location \"c:\\\\Users\\\\PastorCatto\\\\Documents\\\\Projects\\\\PURR-OS-ESP32-MicroPython\"; & \"Builder\\\\Build.ps1\" -Target cyd -Mini 2>&1)"
     ]
   }
 }

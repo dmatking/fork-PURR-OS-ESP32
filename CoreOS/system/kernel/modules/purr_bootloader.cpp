@@ -119,7 +119,7 @@ static int hit_test(int16_t tx, int16_t ty) {
 // ── Header ────────────────────────────────────────────────────────────────────
 static void render_header() {
     ps_fill(0, 0, SCR_W, HDR_H, COL_BG);
-    ps_str(8, 5, "Bootloader", COL_ACCENT, COL_BG, 2);
+    ps_str(8, 5, "PURR OS Bootloader", COL_ACCENT, COL_BG, 2);
     KITT::memory_stats_t mem; kitt.memory_get_stats(&mem);
     char right[40];
     snprintf(right, sizeof(right), "%s  %luK", kitt.device_name(),

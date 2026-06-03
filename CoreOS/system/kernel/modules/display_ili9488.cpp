@@ -1,4 +1,5 @@
 #include "display_ili9488.h"
+#include <Arduino.h>
 #include <TFT_eSPI.h>
 #include <lvgl.h>
 
@@ -24,9 +25,9 @@ void display_ili9488_init() {
     tft.begin();
     tft.setRotation(0);  // portrait, USB at bottom
 
-    ledcSetup(0, 5000, 8);
-    ledcAttachPin(TFT_BL, 0);
-    ledcWrite(0, 255);
+    // Backlight via LEDC PWM (arduino-esp32 3.x pin-based API)
+    ledcAttach(TFT_BL, 5000, 8);
+    ledcWrite(TFT_BL, 255);
 
     lv_disp_draw_buf_init(&draw_buf, buf1, buf2, TFT_WIDTH * 10);
 
@@ -46,10 +47,10 @@ void display_ili9488_update() {
 }
 
 void display_ili9488_deinit() {
-    ledcWrite(0, 0);
+    ledcWrite(TFT_BL, 0);
     tft.writecommand(0x28);  // display off
 }
 
 void display_ili9488_set_brightness(uint8_t level) {
-    ledcWrite(0, level);
+    ledcWrite(TFT_BL, level);
 }

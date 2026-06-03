@@ -1,258 +1,94 @@
 #include "lora_manager.h"
 #include <Arduino.h>
+#include <SPI.h>
+#include <LoRa.h>
 
-// RAK3172 in LoRa P2P mode, controlled via AT commands over UART2.
-// Unsolicited RX event format: +EVT:RXP2P:<rssi>:<snr>:<hex_payload>
+// SX1262 via SPI + arduino-LoRa library.
+// Tested target: Heltec WiFi LoRa 32 V3.
 
 static bool     lora_ready      = false;
 static bool     lora_yield_flag = false;
-static bool     tx_busy         = false;
-
-static uint32_t cfg_freq   = 915000000;
-static uint8_t  cfg_power  = 14;
-static uint8_t  cfg_sf     = 7;
-static uint8_t  cfg_bw     = 0;   // 0=125kHz 1=250kHz 2=500kHz
-static uint8_t  cfg_cr     = 0;   // 0=4/5 1=4/6 2=4/7 3=4/8
-
-static int      last_rssi  = 0;
-static float    last_snr   = 0.0f;
-
-static constexpr size_t RX_BUF_SIZE = 256;
-static uint8_t  rx_data[RX_BUF_SIZE];
-static size_t   rx_len       = 0;
-static bool     rx_available = false;
-
-// Line buffer for parsing unsolicited events
-static char     line_buf[320];
-static size_t   line_pos = 0;
-
-// ── AT command helper ─────────────────────────────────────────────────────────
-
-static bool at_send(const char* cmd, uint32_t timeout_ms = 500) {
-    while (Serial2.available()) Serial2.read();  // flush
-
-    Serial2.println(cmd);
-    Serial.printf("[lora] >> %s\n", cmd);
-
-    char resp[128] = {};
-    size_t pos = 0;
-    uint32_t start = millis();
-
-    while (millis() - start < timeout_ms) {
-        while (Serial2.available() && pos < sizeof(resp) - 1)
-            resp[pos++] = Serial2.read();
-        resp[pos] = '\0';
-        if (strstr(resp, "OK") || strstr(resp, "ERROR")) break;
-        delay(1);
-    }
-
-    bool ok = strstr(resp, "OK") != nullptr;
-    Serial.printf("[lora] << %s (%s)\n", resp, ok ? "OK" : "ERR");
-    return ok;
-}
-
-static void apply_p2p_config() {
-    char cmd[64];
-
-    snprintf(cmd, sizeof(cmd), "AT+PFREQ=%lu", (unsigned long)cfg_freq);
-    at_send(cmd);
-
-    snprintf(cmd, sizeof(cmd), "AT+PSF=%u", cfg_sf);
-    at_send(cmd);
-
-    snprintf(cmd, sizeof(cmd), "AT+PBW=%u", cfg_bw);
-    at_send(cmd);
-
-    snprintf(cmd, sizeof(cmd), "AT+PCR=%u", cfg_cr);
-    at_send(cmd);
-
-    snprintf(cmd, sizeof(cmd), "AT+PTP=%u", cfg_power);
-    at_send(cmd);
-
-    // Open continuous RX window
-    at_send("AT+PRECV=65535");
-}
-
-// ── Unsolicited event parser (called from lora_manager_update) ────────────────
-
-static void parse_line(const char* line) {
-    // TX done
-    if (strstr(line, "TXP2P DONE") || strstr(line, "SEND_CONFIRMED")) {
-        tx_busy = false;
-        return;
-    }
-
-    // RX: +EVT:RXP2P:<rssi>:<snr>:<hex>
-    if (strncmp(line, "+EVT:RXP2P:", 11) == 0) {
-        const char* p = line + 11;
-        last_rssi = atoi(p);
-        p = strchr(p, ':');
-        if (!p) return;
-        last_snr = atof(++p);
-        p = strchr(p, ':');
-        if (!p) return;
-        ++p;
-
-        // Decode hex payload into rx_data
-        rx_len = 0;
-        while (*p && *(p+1) && rx_len < RX_BUF_SIZE) {
-            char byte_str[3] = { p[0], p[1], '\0' };
-            rx_data[rx_len++] = (uint8_t)strtol(byte_str, nullptr, 16);
-            p += 2;
-        }
-        rx_available = (rx_len > 0);
-
-        // Reopen RX window
-        at_send("AT+PRECV=65535");
-    }
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
+static uint32_t lora_freq       = 915000000;
+static uint8_t  lora_power      = 14;
 
 void lora_manager_init(uint32_t freq_hz, uint8_t power_dbm) {
-    cfg_freq  = freq_hz;
-    cfg_power = power_dbm;
+    lora_freq  = freq_hz;
+    lora_power = power_dbm;
 
-    Serial2.begin(LORA_UART_BAUD, SERIAL_8N1, LORA_UART_RX, LORA_UART_TX);
-    delay(500);  // RAK3172 boot time after power-on
+    LoRa.setPins(LORA_CS, LORA_RST, LORA_DIO1);
+    SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
 
-    // Ping
-    if (!at_send("AT", 1000)) {
-        Serial.println("[lora] RAK3172 not responding");
+    if (!LoRa.begin(freq_hz)) {
+        Serial.println("[lora] SX1262 init failed");
         return;
     }
 
-    // Switch to LoRa P2P mode (NWM=0)
-    if (!at_send("AT+NWM=0", 2000)) {
-        Serial.println("[lora] RAK3172 P2P mode failed");
-        return;
-    }
+    LoRa.setTxPower(power_dbm);
+    LoRa.setSpreadingFactor(7);
+    LoRa.setSignalBandwidth(125E3);
+    LoRa.setCodingRate4(5);
+    LoRa.setSyncWord(0x12);
+    LoRa.enableCrc();
 
-    apply_p2p_config();
     lora_ready = true;
-    Serial.printf("[lora] RAK3172 OK %lu Hz %d dBm SF%u\n",
-                  (unsigned long)freq_hz, power_dbm, cfg_sf);
+    Serial.printf("[lora] SX1262 OK %lu Hz %ddBm\n", (unsigned long)freq_hz, power_dbm);
 }
 
-void lora_manager_update() {
-    // Accumulate serial bytes into line_buf, parse on newline
-    while (Serial2.available()) {
-        char c = Serial2.read();
-        if (c == '\n') {
-            line_buf[line_pos] = '\0';
-            if (line_pos > 0) parse_line(line_buf);
-            line_pos = 0;
-        } else if (c != '\r' && line_pos < sizeof(line_buf) - 1) {
-            line_buf[line_pos++] = c;
-        }
-    }
-}
+void lora_manager_update() {}  // SX1262 is polled on-demand via LoRa.parsePacket()
 
 void lora_manager_deinit() {
-    if (lora_ready) {
-        at_send("AT+SLEEP=0");
-        lora_ready = false;
-    }
+    if (lora_ready) { LoRa.end(); lora_ready = false; }
 }
 
-bool     lora_manager_enabled()           { return lora_ready && !lora_yield_flag; }
-uint32_t lora_manager_get_frequency()     { return cfg_freq; }
-uint8_t  lora_manager_get_power()         { return cfg_power; }
-int      lora_manager_rssi()              { return last_rssi; }
-float    lora_manager_snr()               { return last_snr; }
-bool     lora_manager_busy()              { return tx_busy; }
-bool     lora_manager_data_available()    { return rx_available; }
+bool     lora_manager_enabled()        { return lora_ready && !lora_yield_flag; }
+uint32_t lora_manager_get_frequency()  { return lora_freq; }
+uint8_t  lora_manager_get_power()      { return lora_power; }
+int      lora_manager_rssi()           { return lora_ready ? LoRa.packetRssi() : 0; }
+float    lora_manager_snr()            { return lora_ready ? LoRa.packetSnr()  : 0.0f; }
+bool     lora_manager_busy()           { return false; }
+bool     lora_manager_data_available() { return !lora_yield_flag && lora_ready && LoRa.parsePacket() > 0; }
 
-void lora_manager_set_frequency(uint32_t freq_hz) {
-    cfg_freq = freq_hz;
-    if (!lora_ready) return;
-    char cmd[32];
-    snprintf(cmd, sizeof(cmd), "AT+PFREQ=%lu", (unsigned long)freq_hz);
-    at_send(cmd);
+void lora_manager_set_frequency(uint32_t f) {
+    lora_freq = f;
+    if (lora_ready) LoRa.setFrequency(f);
 }
-
 void lora_manager_set_power(uint8_t dbm) {
-    cfg_power = dbm;
-    if (!lora_ready) return;
-    char cmd[16];
-    snprintf(cmd, sizeof(cmd), "AT+PTP=%u", dbm);
-    at_send(cmd);
+    lora_power = dbm;
+    if (lora_ready) LoRa.setTxPower(dbm);
 }
-
 void lora_manager_set_spreading_factor(uint8_t sf) {
-    cfg_sf = sf;
-    if (!lora_ready) return;
-    char cmd[16];
-    snprintf(cmd, sizeof(cmd), "AT+PSF=%u", sf);
-    at_send(cmd);
+    if (lora_ready) LoRa.setSpreadingFactor(sf);
 }
-
 void lora_manager_set_bandwidth(uint32_t bw_hz) {
-    // RAK3172 P2P BW: 0=125k 1=250k 2=500k
-    cfg_bw = (bw_hz >= 500000) ? 2 : (bw_hz >= 250000) ? 1 : 0;
-    if (!lora_ready) return;
-    char cmd[16];
-    snprintf(cmd, sizeof(cmd), "AT+PBW=%u", cfg_bw);
-    at_send(cmd);
+    if (lora_ready) LoRa.setSignalBandwidth(bw_hz);
 }
-
 void lora_manager_set_coding_rate(uint8_t cr) {
-    // cr: 5→0, 6→1, 7→2, 8→3 (4/5 … 4/8)
-    cfg_cr = (cr >= 5) ? (cr - 5) : cr;
-    if (!lora_ready) return;
-    char cmd[16];
-    snprintf(cmd, sizeof(cmd), "AT+PCR=%u", cfg_cr);
-    at_send(cmd);
+    if (lora_ready) LoRa.setCodingRate4(cr);
 }
-
 void lora_manager_set_sync_word(uint8_t sw) {
-    // RAK3172 P2P does not expose sync word via AT — noted, ignored
-    (void)sw;
+    if (lora_ready) LoRa.setSyncWord(sw);
 }
 
 bool lora_manager_send(const uint8_t* data, size_t len) {
-    if (!lora_ready || lora_yield_flag || tx_busy) return false;
-
-    // Close RX window before TX
-    at_send("AT+PRECV=0");
-
-    // Build hex string
-    char cmd[4 + RX_BUF_SIZE * 2 + 1] = "AT+PSEND=";
-    size_t pos = strlen(cmd);
-    for (size_t i = 0; i < len && pos < sizeof(cmd) - 2; i++) {
-        snprintf(cmd + pos, 3, "%02X", data[i]);
-        pos += 2;
-    }
-
-    tx_busy = true;
-    bool ok = at_send(cmd, 3000);
-    if (!ok) tx_busy = false;
-
-    // Reopen RX window
-    at_send("AT+PRECV=65535");
-    return ok;
+    if (!lora_ready || lora_yield_flag) return false;
+    LoRa.beginPacket();
+    LoRa.write(data, len);
+    return LoRa.endPacket();
 }
 
 size_t lora_manager_read(uint8_t* buf, size_t max_len) {
-    if (!rx_available) return 0;
-    size_t n = (rx_len < max_len) ? rx_len : max_len;
-    memcpy(buf, rx_data, n);
-    rx_available = false;
-    rx_len = 0;
+    size_t n = 0;
+    while (LoRa.available() && n < max_len)
+        buf[n++] = LoRa.read();
     return n;
 }
 
 void lora_manager_yield() {
     lora_yield_flag = true;
-    if (lora_ready) {
-        at_send("AT+PRECV=0");
-        at_send("AT+SLEEP=0");
-    }
+    if (lora_ready) LoRa.sleep();
 }
-
 void lora_manager_reclaim() {
     lora_yield_flag = false;
-    if (lora_ready) apply_p2p_config();
+    if (lora_ready) LoRa.idle();
 }
-
 bool lora_manager_yielded() { return lora_yield_flag; }

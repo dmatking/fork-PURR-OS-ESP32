@@ -15,7 +15,7 @@ bool device_config_load(const char* path, device_config_t* out) {
         return false;
     }
 
-    StaticJsonDocument<1024> doc;
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, f);
     f.close();
 

@@ -1,0 +1,58 @@
+## IDF Component Manager manifest for PURR OS CoreOS
+## Run: idf.py add-dependency  (or install manually per notes below)
+
+dependencies:
+
+  ## IDF version: arduino-esp32 3.1.x targets IDF 5.3.x.
+  ## IDF 6.x removed wifi_provisioning — fails at cmake. Stay below 6.0.0.
+  idf:
+    version: ">=5.3.0,<6.0.0"
+
+  ## LVGL — graphics for ILI9488 (CattoPad display)
+  lvgl/lvgl:
+    version: "~8.3.0"
+
+  ## ArduinoJson — device.json and keymap parsing
+  bblanchon/arduinojson:
+    version: "~7.0.0"
+
+  ## arduino-esp32 — Arduino layer over ESP-IDF
+  ## Provides: Serial, SPI, Preferences, SPIFFS, USBHIDKeyboard, etc.
+  ## 3.1.x targets IDF 5.3.x — fixes LL API breaks in 5.2.x.
+  espressif/arduino-esp32:
+    version: "~3.1.0"
+
+  ## Meshtastic co-resident mesh stack (PURR_ENABLE_MESH=1 builds only)
+  ## NOT available in the IDF component registry.
+  ## Must be added as a git submodule:
+  ##
+  ##   git submodule add https://github.com/meshtastic/firmware.git \
+  ##       CoreOS/components/meshtastic
+  ##   cd CoreOS/components/meshtastic
+  ##   git checkout v2.x.x   # use latest stable tag
+  ##
+  ## A custom CMakeLists.txt wrapper is required in components/meshtastic/
+  ## to expose MeshService, NodeDB, Router, etc. as an ESP-IDF component.
+  ## See Builder/HOWTO.md §Meshtastic for the wrapper template.
+
+  ## MicroPython embed port
+  ## NOT available in the IDF component registry.
+  ## Must be added as a git submodule:
+  ##
+  ##   git submodule add https://github.com/micropython/micropython.git \
+  ##       CoreOS/components/micropython
+  ##   cd CoreOS/components/micropython
+  ##   git checkout v1.23.0
+  ##   make -C mpy-cross                  # build the cross-compiler
+  ##   make -C ports/embed BOARD=ESP32S2  # build the embed port
+  ##
+  ## The embed port headers live at:
+  ##   components/micropython/ports/embed/port/micropython_embed.h
+  ##
+  ## Add to CMakeLists.txt INCLUDE_DIRS:
+  ##   "components/micropython/ports/embed"
+  ##   "components/micropython"
+  ##
+  ## The kitt_module.c MP_REGISTER_MODULE macro requires:
+  ##   MICROPY_PORT_BUILTIN_MODULES defined in mpconfigport.h
+  ## A minimal mpconfigport.h is provided in system/micropython/.

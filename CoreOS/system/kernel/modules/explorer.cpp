@@ -242,7 +242,7 @@ static void on_tap(int id) {
             purr_bootloader_request_reboot();
             break;
         case ACT_LAUNCH:
-            if (app.path) kitt.app_launch(app.path);
+            if (app.path[0]) kitt.app_launch(app.path);
             break;
         case ACT_ABOUT:
             // TODO: about overlay

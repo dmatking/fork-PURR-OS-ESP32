@@ -28,6 +28,8 @@ MOD_BT=1
 MOD_MTP=0
 MOD_FLASHER=0
 MOD_LORA=1       # adjusted by apply_target_defaults
+MOD_MESH=0
+TDECK_PLUS=0
 
 # ── Terminal colour ───────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -64,6 +66,7 @@ Module flags (override wizard / saved config):
   --with-mtp          Enable MTP USB module
   --with-flasher      Enable OTA flasher module
   --no-lora           Disable LoRa module
+  --with-mesh         Enable Meshtastic co-resident stack (requires LoRa)
 
 LoRa:
   --lora-kernel K     Backend: sx1262 (default) | rak3172 | sx1276
@@ -108,6 +111,8 @@ load_config() {
             MOD_MTP)     MOD_MTP="$val"     ;;
             MOD_FLASHER) MOD_FLASHER="$val" ;;
             MOD_LORA)    MOD_LORA="$val"    ;;
+            MOD_MESH)    MOD_MESH="$val"    ;;
+            TDECK_PLUS)  TDECK_PLUS="$val"  ;;
         esac
     done < "$CONFIG_FILE"
     pinfo "Loaded purr_build.cfg  (--setup to change)"
@@ -122,6 +127,8 @@ MOD_BT=$MOD_BT
 MOD_MTP=$MOD_MTP
 MOD_FLASHER=$MOD_FLASHER
 MOD_LORA=$MOD_LORA
+MOD_MESH=$MOD_MESH
+TDECK_PLUS=$TDECK_PLUS
 EOF
     pinfo "Config saved → purr_build.cfg"
 }
@@ -139,6 +146,19 @@ pick_target() {
         2) TARGET="cyd"    ;;
         3) TARGET="tdeck"  ;;
         *) pwarn "Invalid, using heltec"; TARGET="heltec" ;;
+    esac
+}
+
+# ── Interactive: T-Deck variant picker ───────────────────────────────────────
+pick_tdeck_variant() {
+    printf "\n%s  T-Deck variant:%s\n\n" "$BOLD" "$RESET"
+    printf "  [1]  Normal  %sOriginal T-Deck (no GPS, no battery management)%s\n" "$DIM" "$RESET"
+    printf "  [2]  Plus    %sT-Deck Plus (u-blox MIA-M10Q GPS + larger battery)%s\n" "$DIM" "$RESET"
+    printf "\n  Choice [1]: "
+    read -r choice
+    case "${choice:-1}" in
+        2) TDECK_PLUS=1 ;;
+        *) TDECK_PLUS=0 ;;
     esac
 }
 
@@ -160,21 +180,22 @@ pick_lora_kernel() {
 
 # ── Interactive: module wizard ────────────────────────────────────────────────
 module_wizard() {
-    # Parallel arrays indexed 0-4
-    local keys=(  "BT"         "MTP"         "FLASHER"           "LORA"           "MICROPYTHON"  )
-    local names=( "Bluetooth"  "MTP USB"     "OTA Flasher"       "LoRa Radio"     "MicroPython"  )
+    # Parallel arrays indexed 0-5
+    local keys=(  "BT"         "MTP"         "FLASHER"           "LORA"           "MESH"                       "MICROPYTHON"  )
+    local names=( "Bluetooth"  "MTP USB"     "OTA Flasher"       "LoRa Radio"     "Meshtastic"                 "MicroPython"  )
     local descs=(
         "bt_manager — BLE + Classic stack (~200KB flash)"
         "mtp_manager — USB file transfer"
         "flasher — OTA partition flasher"
         "lora_manager — LoRa radio driver"
+        "mesh_manager — Meshtastic co-resident stack (requires LoRa)"
         "mpython_runtime — .meow app interpreter"
     )
     # 1 = hide this module on cyd
-    local hide_on_cyd=( 0 0 0 1 0 )
+    local hide_on_cyd=( 0 0 0 1 1 0 )
 
     # Current state (must stay in sync with keys order)
-    local state=( "$MOD_BT" "$MOD_MTP" "$MOD_FLASHER" "$MOD_LORA" "$((1 - MINI))" )
+    local state=( "$MOD_BT" "$MOD_MTP" "$MOD_FLASHER" "$MOD_LORA" "$MOD_MESH" "$((1 - MINI))" )
 
     while true; do
         pdiv
@@ -229,7 +250,8 @@ module_wizard() {
     MOD_MTP="${state[1]}"
     MOD_FLASHER="${state[2]}"
     MOD_LORA="${state[3]}"
-    MINI=$(( 1 - state[4] ))
+    MOD_MESH="${state[4]}"
+    MINI=$(( 1 - state[5] ))
 }
 
 # ── LoRa kernel installer ─────────────────────────────────────────────────────
@@ -267,12 +289,15 @@ check_env() {
 # ── Build summary banner ──────────────────────────────────────────────────────
 print_banner() {
     local chip; chip="$(get_chip)"
+    local display_target="$TARGET"
+    [[ "$TARGET" == "tdeck" && $TDECK_PLUS -eq 1 ]] && display_target="tdeck-plus"
     pdiv
-    printf "\n  %sPURR OS%s  %s%s (%s)%s\n" "$BOLD" "$RESET" "$CYAN" "$TARGET" "$chip" "$RESET"
+    printf "\n  %sPURR OS%s  %s%s (%s)%s\n" "$BOLD" "$RESET" "$CYAN" "$display_target" "$chip" "$RESET"
     printf "  Variant  : %s\n" "$( [[ $MINI -eq 1 ]] && echo 'mini — no MicroPython' || echo 'full — with MicroPython' )"
     printf "  Modules  :"
     [[ $MOD_BT      -eq 1 ]] && printf " bt"
     [[ $MOD_LORA    -eq 1 ]] && printf " lora(%s)" "$LORA_KERNEL"
+    [[ $MOD_MESH    -eq 1 ]] && printf " mesh"
     [[ $MOD_MTP     -eq 1 ]] && printf " mtp"
     [[ $MOD_FLASHER -eq 1 ]] && printf " flasher"
     printf "\n"
@@ -301,6 +326,8 @@ while [[ $# -gt 0 ]]; do
         --with-mtp)     MOD_MTP=1;      shift ;;
         --with-flasher) MOD_FLASHER=1;  shift ;;
         --no-lora)      MOD_LORA=0; EXPLICIT_LORA=1; shift ;;
+        --with-mesh)    MOD_MESH=1; shift ;;
+        --tdeck-plus)   TDECK_PLUS=1; shift ;;
         -h|--help)      show_help; exit 0 ;;
         *) perr "Unknown argument: $1. Try --help" ;;
     esac
@@ -316,6 +343,7 @@ fi
 # Wizard: no target given, or --setup
 if [[ -z "$TARGET" || $SETUP -eq 1 ]]; then
     [[ -z "$TARGET" ]] && pick_target
+    [[ "$TARGET" == "tdeck" ]] && pick_tdeck_variant
     apply_target_defaults
     module_wizard
     printf "\n  Flash port (COM5 / /dev/ttyUSBx, blank to skip): "
@@ -342,6 +370,9 @@ fi
 
 cd "$COREOS_DIR"
 
+# arduino-esp32 3.x targets IDF 5.1.x; bypass its version gate on IDF 6.x
+export ARDUINO_SKIP_IDF_VERSION_CHECK=1
+
 if [[ $CLEAN -eq 1 ]]; then
     pinfo "fullclean..."
     idf.py fullclean
@@ -349,18 +380,22 @@ if [[ $CLEAN -eq 1 ]]; then
 fi
 
 CHIP="$(get_chip)"
+CMAKE_FLAGS=(
+    -DTARGET_DEVICE="$TARGET"
+    -DBUILD_MINI="$MINI"
+    -DBUILD_TDECK_PLUS="$TDECK_PLUS"
+    -DPURR_ENABLE_BT="$MOD_BT"
+    -DPURR_ENABLE_MTP="$MOD_MTP"
+    -DPURR_ENABLE_FLASHER="$MOD_FLASHER"
+    -DPURR_ENABLE_LORA="$MOD_LORA"
+    -DPURR_ENABLE_MESH="$MOD_MESH"
+)
+
 pinfo "set-target $CHIP"
-idf.py set-target "$CHIP"
+idf.py "${CMAKE_FLAGS[@]}" set-target "$CHIP"
 
 pinfo "build  TARGET=$TARGET  BT=$MOD_BT  MTP=$MOD_MTP  FLASHER=$MOD_FLASHER  LORA=$MOD_LORA  MINI=$MINI"
-idf.py \
-    -DTARGET_DEVICE="$TARGET" \
-    -DBUILD_MINI="$MINI" \
-    -DPURR_ENABLE_BT="$MOD_BT" \
-    -DPURR_ENABLE_MTP="$MOD_MTP" \
-    -DPURR_ENABLE_FLASHER="$MOD_FLASHER" \
-    -DPURR_ENABLE_LORA="$MOD_LORA" \
-    build
+idf.py "${CMAKE_FLAGS[@]}" build
 
 if [[ -n "$FLASH_PORT" ]]; then
     pinfo "flashing → $FLASH_PORT"
