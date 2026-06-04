@@ -3,7 +3,7 @@
 > **MEGA DISCLAIMER:** This project is very much vibe-coded. It has gone from 0 to "Jesus Christ" at an alarming rate. It is fully open-source and humans are actively encouraged to help. Please.
 
 **P.U.R.R.** = Portable Unified Runtime & Radio Operating System
-Powered by the **K.I.T.T** (Kernel Interface Translation Toolkit) kernel — a modular, MicroPython-backed embedded OS for ESP32 hardware.
+Powered by the **K.I.T.T** (Kernel Interface Translation Toolkit) kernel — a modular, C and C++ -backed embedded OS for ESP32 hardware.
 
 ---
 
