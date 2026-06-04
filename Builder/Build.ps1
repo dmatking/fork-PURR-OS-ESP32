@@ -71,10 +71,11 @@ function Write-Divider {
 # ---- Target helpers ---------------------------------------------------------
 function Get-Chip {
     switch ($Target) {
-        'heltec' { return 'esp32s3' }
-        'tdeck'  { return 'esp32s3' }
-        'cyd'    { return 'esp32'   }
-        default  { Write-PurrErr "Unknown target: $Target" }
+        'heltec'   { return 'esp32s3' }
+        'tdeck'    { return 'esp32s3' }
+        'cyd'      { return 'esp32'   }
+        'cyd_boot' { return 'esp32'   }
+        default    { Write-PurrErr "Unknown target: $Target" }
     }
 }
 
@@ -82,6 +83,7 @@ function Set-TargetDefaults {
     switch ($Target) {
         { $_ -in 'heltec','tdeck' } { $script:ModLora = 1 }
         'cyd'                       { $script:ModLora = 0 }
+        'cyd_boot'                  { $script:ModLora = 0; $script:ModBt = 0; $script:MiniBuild = 1 }
     }
 }
 
@@ -129,15 +131,18 @@ function Select-Target {
     Write-Host '  [1]  Heltec WiFi LoRa 32 V3   ' -NoNewline
     Write-Host 'ESP32-S3  8MB   SSD1306  SX1262 LoRa' -ForegroundColor DarkGray
     Write-Host '  [2]  CYD (ESP32-2432S028R)    ' -NoNewline
-    Write-Host 'ESP32     4MB   ILI9341  XPT2046 touch' -ForegroundColor DarkGray
-    Write-Host '  [3]  LilyGo T-Deck            ' -NoNewline
+    Write-Host 'ESP32     4MB   ILI9341  CST816S touch  — full OS (ota_0)' -ForegroundColor DarkGray
+    Write-Host '  [3]  CYD Bootloader            ' -NoNewline
+    Write-Host 'ESP32     4MB   ILI9341  CST816S touch  — factory recovery image' -ForegroundColor DarkGray
+    Write-Host '  [4]  LilyGo T-Deck            ' -NoNewline
     Write-Host 'ESP32-S3  16MB  ST7789   trackball (WIP)' -ForegroundColor DarkGray
     Write-Host ''
     $choice = Read-Host '  Choice [1]'
     switch ($choice) {
-        '2'     { $script:Target = 'cyd'    }
-        '3'     { $script:Target = 'tdeck'  }
-        default { $script:Target = 'heltec' }
+        '2'     { $script:Target = 'cyd'      }
+        '3'     { $script:Target = 'cyd_boot' }
+        '4'     { $script:Target = 'tdeck'    }
+        default { $script:Target = 'heltec'   }
     }
 }
 
@@ -207,7 +212,7 @@ function Invoke-ModuleWizard {
         $visibleMap   = @()
 
         for ($i = 0; $i -lt $keys.Count; $i++) {
-            if ($Target -eq 'cyd' -and $hideCyd[$i]) { continue }
+            if ($Target -in @('cyd','cyd_boot') -and $hideCyd[$i]) { continue }
             $visibleCount++
             $visibleMap += $i
             if ($state[$i] -eq 1) {
@@ -224,20 +229,20 @@ function Invoke-ModuleWizard {
             Write-Host $descs[$i] -ForegroundColor DarkGray
         }
 
-        if ($Target -ne 'cyd' -and $state[3] -eq 1) {
+        if ($Target -notin @('cyd','cyd_boot') -and $state[3] -eq 1) {
             Write-Host "       " -NoNewline
             Write-Host "  +-- kernel: $LoraKern  ([k] to change)" -ForegroundColor DarkGray
         }
 
         Write-Host ''
         $prompt = "  Toggle [1-$visibleCount]"
-        if ($Target -ne 'cyd') { $prompt += ', [k] LoRa kernel' }
+        if ($Target -notin @('cyd','cyd_boot')) { $prompt += ', [k] LoRa kernel' }
         $prompt += ', or Enter to build'
         $choice = Read-Host $prompt
 
         if ([string]::IsNullOrWhiteSpace($choice)) { break }
 
-        if ($choice -eq 'k' -and $Target -ne 'cyd') {
+        if ($choice -eq 'k' -and $Target -notin @('cyd','cyd_boot')) {
             Select-LoraKernel; continue
         }
 
@@ -291,7 +296,9 @@ function Test-BuildEnv {
 # ---- Build summary banner ---------------------------------------------------
 function Show-Banner {
     $chip = Get-Chip
-    $displayTarget = if ($Target -eq 'tdeck' -and $ModTdeckPlus -eq 1) { 'tdeck-plus' } else { $Target }
+    $displayTarget = if ($Target -eq 'tdeck' -and $ModTdeckPlus -eq 1) { 'tdeck-plus' } `
+                     elseif ($Target -eq 'cyd_boot') { 'cyd [factory bootloader]' } `
+                     else { $Target }
     Write-Divider
     Write-Host ''
     Write-Host '  PURR OS  ' -NoNewline
@@ -333,11 +340,13 @@ if ([string]::IsNullOrEmpty($Target) -or $Setup.IsPresent) {
 Test-BuildEnv
 Show-Banner
 
-if ($ModLora -eq 1 -and $Target -ne 'cyd') { Install-LoraKernel }
+if ($ModLora -eq 1 -and $Target -notin @('cyd','cyd_boot')) { Install-LoraKernel }
 
-$defaultsSrc = Join-Path $BuilderDir "targets\$Target.defaults"
+# cyd_boot uses the same sdkconfig.defaults as cyd (same hardware)
+$defaultsTarget = if ($Target -eq 'cyd_boot') { 'cyd' } else { $Target }
+$defaultsSrc = Join-Path $BuilderDir "targets\$defaultsTarget.defaults"
 if (Test-Path $defaultsSrc) {
-    Write-PurrInfo "$Target.defaults -> sdkconfig.defaults"
+    Write-PurrInfo "$defaultsTarget.defaults -> sdkconfig.defaults"
     Copy-Item $defaultsSrc (Join-Path $CoreOsDir 'sdkconfig.defaults') -Force
 } else {
     Write-PurrWarn "targets/$Target.defaults not found, keeping existing sdkconfig.defaults"
@@ -394,6 +403,29 @@ function Invoke-ArduinoPatches {
         $stub = "`n#include `"esp_idf_version.h`"`n#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)`n#define i2c_ll_slave_init(dev)           do {} while (0)`n#define i2c_ll_set_fifo_mode(dev, mode)  do {} while (0)`n#define i2c_ll_cal_bus_clk(a, b, c)      do {} while (0)`n#define i2c_ll_set_bus_timing(dev, cfg)  do {} while (0)`n#define i2c_ll_set_filter(dev, n)        do {} while (0)`n#endif"
         $i2cTxt -replace '(#include "esp_private/periph_ctrl\.h")', "`$1$stub" | Set-Content $i2cS -NoNewline -Encoding UTF8
     }
+    # ESP_SR includes ESP_I2S.h but the I2S library src/ isn't on its include path
+    $srSrc  = Join-Path $CoreOsDir 'managed_components\espressif__arduino-esp32\libraries\ESP_SR\src\ESP_I2S.h'
+    $i2sSrc = Join-Path $CoreOsDir 'managed_components\espressif__arduino-esp32\libraries\ESP_I2S\src\ESP_I2S.h'
+    if (-not (Test-Path $srSrc) -and (Test-Path $i2sSrc)) {
+        Write-PurrInfo 'arduino patch: ESP_SR missing ESP_I2S.h stub'
+        Copy-Item $i2sSrc $srSrc -Force
+    }
+    # esp32-hal-log.h needs esp_timer; esp32-hal-gpio.h needs esp_driver_gpio (IDF 5.x split)
+    $arduinoCmake = Join-Path $CoreOsDir 'managed_components\espressif__arduino-esp32\CMakeLists.txt'
+    if (Test-Path $arduinoCmake) {
+        $cmakeTxt = Get-Content $arduinoCmake -Raw
+        if ($cmakeTxt -match 'set\(requires spi_flash') {
+            if ($cmakeTxt -notmatch 'set\(requires[^)]*esp_timer') {
+                Write-PurrInfo 'arduino patch: add esp_timer to arduino-esp32 REQUIRES'
+                $cmakeTxt = $cmakeTxt -replace '(set\(requires spi_flash[^\)]*)(driver\))', '$1driver esp_timer)'
+            }
+            if ($cmakeTxt -notmatch 'set\(requires[^)]*esp_driver_gpio') {
+                Write-PurrInfo 'arduino patch: add esp_driver_gpio to arduino-esp32 REQUIRES'
+                $cmakeTxt = $cmakeTxt -replace '(set\(requires spi_flash[^\)]*)(esp_timer\))', '$1esp_timer esp_driver_gpio)'
+            }
+            $cmakeTxt | Set-Content $arduinoCmake -NoNewline -Encoding UTF8
+        }
+    }
 }
 
 # ---- SPIFFS image builder ---------------------------------------------------
@@ -411,26 +443,29 @@ function Invoke-SpiffsBuild {  # builds SPIFFS filesystem image from target devi
     New-Item -ItemType Directory -Path "$stagingDir\system\logs"   -Force | Out-Null
     New-Item -ItemType Directory -Path "$stagingDir\apps"          -Force | Out-Null
 
-    # Target device config -> /system/kernel/device.json on SPIFFS
-    $deviceSrc = Join-Path $CoreOsDir "system\kernel\devices\$Target.json"
+    # cyd_boot uses the same device.json as cyd (same hardware)
+    $deviceTarget = if ($Target -eq 'cyd_boot') { 'cyd' } else { $Target }
+    $deviceSrc = Join-Path $CoreOsDir "system\kernel\devices\$deviceTarget.json"
     if (-not (Test-Path $deviceSrc)) {
-        Write-PurrWarn "No device config for '$Target' at $deviceSrc"
+        Write-PurrWarn "No device config for '$deviceTarget' at $deviceSrc"
         $deviceSrc = Join-Path $CoreOsDir 'system\kernel\device.json'
     }
     Copy-Item $deviceSrc "$stagingDir\system\kernel\device.json" -Force
-    Write-PurrInfo "SPIFFS: $Target.json -> /system/kernel/device.json"
+    Write-PurrInfo "SPIFFS: $deviceTarget.json -> /system/kernel/device.json"
 
-    # Build SPIFFS image -- partition is 320KB = 327680 bytes
+    # SPIFFS partition sizes vary by target:
+    #   cyd / cyd_boot : 0x70000 = 458752 bytes (448 KB)
+    #   others         : 0x50000 = 327680 bytes (320 KB)
+    $spiffsSize = if ($Target -in @('cyd','cyd_boot')) { 458752 } else { 327680 }
+    $spiffsSizeKb = $spiffsSize / 1024
     $spiffsImg = Join-Path $buildDir 'spiffs.bin'
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    python $spiffsGen 327680 $stagingDir $spiffsImg
+    python $spiffsGen $spiffsSize $stagingDir $spiffsImg
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prev
     if ($code -ne 0) { Write-PurrErr "spiffsgen.py failed (exit $code)" }
-    Write-PurrInfo "SPIFFS image: build\spiffs.bin (320 KB)"
+    Write-PurrInfo "SPIFFS image: build\spiffs.bin ($spiffsSizeKb KB)"
 }
-
-$env:IDF_COMPONENT_OVERWRITE_MANAGED_COMPONENTS = '1'
 
 Write-PurrInfo "set-target $chip"
 Invoke-Idf @cmakeFlags set-target $chip
@@ -445,18 +480,29 @@ if ($FlashPort) {
     $spiffsImg = Join-Path $buildDir  'spiffs.bin'
     Write-PurrInfo "flashing -> $FlashPort"
 
+    # App flash offset depends on target:
+    #   cyd      → ota_0 at 0x110000 (OS image, installed into the OTA slot)
+    #   cyd_boot → factory at 0x10000
+    #   others   → factory at 0x10000
+    $appOffset = if ($Target -eq 'cyd') { '0x110000' } else { '0x10000' }
+
+    # SPIFFS offset:
+    #   cyd / cyd_boot → 0x390000 (new layout)
+    #   others         → 0x3b0000 (old layout)
+    $spiffsOffset = if ($Target -in @('cyd','cyd_boot')) { '0x390000' } else { '0x3b0000' }
+
     $flashArgs = @(
         '--chip', $chip, '--port', $FlashPort, '-b', '460800',
         '--before', 'default_reset', '--after', 'hard_reset',
         'write_flash', '--flash_mode', 'dio', '--flash_size', 'detect', '--flash_freq', '40m',
-        '0x1000',  "$buildDir\bootloader\bootloader.bin",
-        '0x8000',  "$buildDir\partition_table\partition-table.bin",
-        '0xe000',  "$buildDir\ota_data_initial.bin",
-        '0x10000', "$buildDir\purr_os_core.bin"
+        '0x1000',     "$buildDir\bootloader\bootloader.bin",
+        '0x8000',     "$buildDir\partition_table\partition-table.bin",
+        '0xe000',     "$buildDir\ota_data_initial.bin",
+        $appOffset,   "$buildDir\purr_os_core.bin"
     )
     if (Test-Path $spiffsImg) {
-        $flashArgs += @('0x3b0000', $spiffsImg)
-        Write-PurrInfo "including SPIFFS image at 0x3b0000"
+        $flashArgs += @($spiffsOffset, $spiffsImg)
+        Write-PurrInfo "including SPIFFS image at $spiffsOffset"
     }
 
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'

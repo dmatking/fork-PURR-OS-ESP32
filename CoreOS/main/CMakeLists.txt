@@ -1,14 +1,29 @@
 # ── Build knobs ───────────────────────────────────────────────────────────────
-# Passed via build.sh / Build.ps1 or manually: idf.py -DTARGET_DEVICE=heltec ...
-set(TARGET_DEVICE  "heltec" CACHE STRING "Target device: heltec | cyd | tdeck")
-set(BUILD_MINI     0        CACHE STRING "Mini build: 1 = strip MicroPython")
+# Passed via SDK.ps1 / Build.ps1, or manually:
+#   idf.py -DTARGET_DEVICE=cyd -DPURR_SHELL=blackberry ...
+#
+# Note: IDF runs cmake twice per set-target — a bare first pass for IDF setup
+# (no user -D flags), then a full second pass with all user flags applied.
+# The STATUS message below will appear twice; the second print is authoritative.
+# set(... CACHE STRING) without FORCE is correct: command-line -D always wins.
+
+set(TARGET_DEVICE  "heltec" CACHE STRING "Target: heltec | cyd | cyd_boot | tdeck")
+set(BUILD_MINI     0        CACHE STRING "1 = strip MicroPython runtime")
+
+# UI shell selection (cyd and tdeck only).
+#   both       — BlackberryUI preferred, Explorer as fallback  [default]
+#   blackberry — BlackberryUI only
+#   explorer   — Explorer Windows CE/PDA shell only
+#   smol       — Smol OLED shell only
+#   none       — headless, no UI shell compiled
+set(PURR_SHELL "both" CACHE STRING "UI shell: both | blackberry | explorer | smol | none")
 
 # ── Optional module toggles ───────────────────────────────────────────────────
 set(PURR_ENABLE_BT      1 CACHE STRING "Include Bluetooth manager")
 set(PURR_ENABLE_MTP     0 CACHE STRING "Include MTP USB manager")
 set(PURR_ENABLE_FLASHER 0 CACHE STRING "Include OTA partition flasher")
 
-# LoRa: auto-enabled for heltec/tdeck, off for cyd. Override with -DPURR_ENABLE_LORA=0.
+# LoRa: auto-enabled for heltec/tdeck, off for cyd/cyd_boot. Override with -DPURR_ENABLE_LORA=0.
 if(TARGET_DEVICE STREQUAL "heltec" OR TARGET_DEVICE STREQUAL "tdeck")
     set(_lora_default 1)
 else()
@@ -16,16 +31,10 @@ else()
 endif()
 set(PURR_ENABLE_LORA ${_lora_default} CACHE STRING "Include LoRa radio manager")
 
-# Mesh: Meshtastic co-resident stack. Requires PURR_ENABLE_LORA=1.
-# Auto-disabled when LoRa is off. Override with -DPURR_ENABLE_MESH=1.
-if(PURR_ENABLE_LORA)
-    set(_mesh_default 0)
-else()
-    set(_mesh_default 0)
-endif()
-set(PURR_ENABLE_MESH ${_mesh_default} CACHE STRING "Include Meshtastic co-resident mesh stack (requires LoRa)")
+# Mesh: requires LoRa. Defaults off; enable with -DPURR_ENABLE_MESH=1.
+set(PURR_ENABLE_MESH 0 CACHE STRING "Include Meshtastic mesh stack (requires LoRa)")
 
-message(STATUS "PURR OS  target=${TARGET_DEVICE}  mini=${BUILD_MINI}  bt=${PURR_ENABLE_BT}  lora=${PURR_ENABLE_LORA}  mesh=${PURR_ENABLE_MESH}  mtp=${PURR_ENABLE_MTP}  flasher=${PURR_ENABLE_FLASHER}")
+message(STATUS "PURR OS  target=${TARGET_DEVICE}  shell=${PURR_SHELL}  mini=${BUILD_MINI}  bt=${PURR_ENABLE_BT}  lora=${PURR_ENABLE_LORA}  mesh=${PURR_ENABLE_MESH}  mtp=${PURR_ENABLE_MTP}  flasher=${PURR_ENABLE_FLASHER}")
 
 # ── Core sources (all targets) ────────────────────────────────────────────────
 # Paths are relative to this file (CoreOS/main/), so prefix ../ to reach project root.
@@ -67,6 +76,7 @@ endif()
 # ── LoRa (optional, auto from target) ────────────────────────────────────────
 if(PURR_ENABLE_LORA)
     list(APPEND SRCS "../system/kernel/modules/lora_manager.cpp")
+    list(APPEND REQUIRES radiolib)
 endif()
 
 # ── Mesh / Meshtastic (optional, requires LoRa) ───────────────────────────────
@@ -74,16 +84,9 @@ if(PURR_ENABLE_MESH)
     if(NOT PURR_ENABLE_LORA)
         message(FATAL_ERROR "PURR_ENABLE_MESH=1 requires PURR_ENABLE_LORA=1")
     endif()
-    set(_mesh_header "${CMAKE_CURRENT_SOURCE_DIR}/../components/meshtastic/src/MeshService.h")
-    if(NOT EXISTS "${_mesh_header}")
-        message(WARNING "Meshtastic submodule not present -- mesh disabled. Clone it (see HOWTO.md §Meshtastic).")
-        set(PURR_ENABLE_MESH 0 CACHE STRING "" FORCE)
-    else()
-        list(APPEND SRCS "../system/kernel/modules/mesh_manager.cpp")
-        list(APPEND INCLUDE_DIRS "../components/meshtastic/src")
-        list(APPEND REQUIRES meshtastic)
-        message(STATUS "Meshtastic co-resident mesh enabled.")
-    endif()
+    list(APPEND SRCS "../system/kernel/modules/purr_mesh.cpp")
+    list(APPEND REQUIRES nanopb meshtastic_pb mbedtls)
+    message(STATUS "purr_mesh: Meshtastic-compatible native mesh stack enabled.")
 endif()
 
 # ── MTP USB (optional) ────────────────────────────────────────────────────────
@@ -104,24 +107,60 @@ if(TARGET_DEVICE STREQUAL "heltec")
     )
     list(APPEND INCLUDE_DIRS "../apps/smol")
 
-# ── Device-specific: CYD ─────────────────────────────────────────────────────
+# ── Device-specific: CYD (full OS — goes in ota_0) ───────────────────────────
 elseif(TARGET_DEVICE STREQUAL "cyd")
     list(APPEND SRCS
         "../system/kernel/modules/display_ili9341.cpp"
         "../system/kernel/modules/touch_cst816s.cpp"
         "../system/kernel/modules/partition_manager.cpp"
-        "../system/kernel/modules/purr_bootloader.cpp"
         "../system/kernel/modules/explorer.cpp"
+        "../system/kernel/modules/blackberry_ui.cpp"
     )
     list(APPEND INCLUDE_DIRS "../components/TFT_eSPI")
-    list(APPEND REQUIRES fatfs esp_partition TFT_eSPI)
+    list(APPEND REQUIRES fatfs esp_partition TFT_eSPI miniwinwm)
+
+# ── Device-specific: CYD bootloader (factory partition — minimal recovery image) ──
+elseif(TARGET_DEVICE STREQUAL "cyd_boot")
+    # Override base SRCS and REQUIRES — no WiFi, no BT, no OS modules.
+    # This image lives in the factory partition and is never overwritten by OTA.
+    set(SRCS
+        "../system/kernel/main.cpp"
+        "../system/kernel/kitt.cpp"
+        "../system/kernel/device_config.cpp"
+        "../system/kernel/idf_compat.c"
+        "../system/bridge/main.cpp"
+        "../system/system/main.cpp"
+        "../system/kernel/modules/display_ili9341.cpp"
+        "../system/kernel/modules/touch_cst816s.cpp"
+        "../system/kernel/modules/partition_manager.cpp"
+        "../system/kernel/modules/purr_bootloader.cpp"
+    )
+    set(REQUIRES
+        espressif__arduino-esp32
+        bblanchon__arduinojson
+        nvs_flash
+        spiffs
+        fatfs
+        esp_partition
+        app_update
+        esp_timer
+        TFT_eSPI
+    )
+    # miniwinwm excluded: cyd_boot draws directly to the display.
+    # Adding MiniWin would require mw_user_init/paint/message stubs and adds
+    # significant code size to a minimal recovery image.
+    list(APPEND INCLUDE_DIRS "../components/TFT_eSPI")
+    # Always mini — no MicroPython in the bootloader image
+    set(BUILD_MINI 1 CACHE STRING "" FORCE)
+    message(STATUS "cyd_boot: minimal factory bootloader image (no WiFi/BT/OS modules)")
 
 # ── Device-specific: T-Deck ──────────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "tdeck")
-    set(BUILD_TDECK_PLUS 0 CACHE STRING "T-Deck variant: 0 = original, 1 = Plus (GPS + larger battery)")
+    set(BUILD_TDECK_PLUS 0 CACHE STRING "T-Deck variant: 0=original, 1=Plus (GPS)")
     list(APPEND SRCS
         "../system/kernel/modules/display_ssd1306.cpp"
         "../apps/smol/smol.cpp"
+        "../system/kernel/modules/blackberry_ui.cpp"
     )
     list(APPEND INCLUDE_DIRS "../apps/smol")
     if(BUILD_TDECK_PLUS)
@@ -131,7 +170,7 @@ elseif(TARGET_DEVICE STREQUAL "tdeck")
     message(WARNING "T-Deck: placeholder build -- ST7789 driver and BB6 shell not yet wired.")
 
 else()
-    message(FATAL_ERROR "Unknown TARGET_DEVICE='${TARGET_DEVICE}'. Valid: heltec, cyd, tdeck")
+    message(FATAL_ERROR "Unknown TARGET_DEVICE='${TARGET_DEVICE}'. Valid: heltec, cyd, cyd_boot, tdeck")
 endif()
 
 # ── Full build: MicroPython runtime ───────────────────────────────────────────
@@ -165,16 +204,35 @@ set(PURR_DEFS "")
 if(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND PURR_DEFS PURR_DISPLAY_SSD1306=1)
 elseif(TARGET_DEVICE STREQUAL "cyd")
+    # Full OS image (ota_0) — no bootloader module; recovery is in the factory partition
+    list(APPEND PURR_DEFS
+        PURR_DISPLAY_ILI9341=1
+        PURR_HAS_TOUCH_CST816S=1
+        PURR_HAS_PARTITION_MGR=1
+        CYD_VARIANT_S024C=1
+    )
+    # UI shell — controlled by PURR_SHELL (default: both)
+    if(PURR_SHELL STREQUAL "blackberry" OR PURR_SHELL STREQUAL "both")
+        list(APPEND PURR_DEFS PURR_HAS_BLACKBERRY_UI=1 PURR_BBUI_TARGET_TOUCH=1)
+    endif()
+    if(PURR_SHELL STREQUAL "explorer" OR PURR_SHELL STREQUAL "both")
+        list(APPEND PURR_DEFS PURR_HAS_EXPLORER=1)
+    endif()
+elseif(TARGET_DEVICE STREQUAL "cyd_boot")
+    # Factory bootloader image — minimal, always shows recovery UI
     list(APPEND PURR_DEFS
         PURR_DISPLAY_ILI9341=1
         PURR_HAS_BOOTLOADER=1
-        PURR_HAS_EXPLORER=1
+        PURR_IS_BOOTLOADER_IMG=1
         PURR_HAS_TOUCH_CST816S=1
         PURR_HAS_PARTITION_MGR=1
         CYD_VARIANT_S024C=1
     )
 elseif(TARGET_DEVICE STREQUAL "tdeck")
     list(APPEND PURR_DEFS PURR_DISPLAY_SSD1306=1)
+    if(PURR_SHELL STREQUAL "blackberry" OR PURR_SHELL STREQUAL "both")
+        list(APPEND PURR_DEFS PURR_HAS_BLACKBERRY_UI=1 PURR_BBUI_TARGET_KEYS=1)
+    endif()
     if(BUILD_TDECK_PLUS)
         list(APPEND PURR_DEFS PURR_IS_TDECK_PLUS=1)
     endif()

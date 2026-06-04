@@ -2,6 +2,130 @@
 
 ---
 
+## [0.6.1] — 2026-06-04 — MajorasMask — Build system hotfixes, MiniWin CYD port
+
+### IDF 5.3.x managed-component include propagation fix (TFT_eSPI + miniwinwm)
+- Root cause: IDF 5.3.x does not propagate include dirs from managed-component REQUIRES chains to local components. Every `Arduino.h`-dependent local component hit this.
+- `CoreOS/components/TFT_eSPI/CMakeLists.txt` — replaced per-component `target_include_directories` with `file(GLOB IDF_ALL_COMPONENT_INCLUDES ...)` over all `components/*/include`; filters out host-only `linux/include` (shadows toolchain `sys/cdefs.h`) and `riscv/include`; adds arduino-esp32 `libraries/SPI/src` (not in `cores/esp32`)
+- `CoreOS/components/miniwinwm/CMakeLists.txt` — same glob approach; also adds `system/kernel/modules` for `display_ili9341.h` / `touch_cst816s.h`
+- Both components now activate for exactly the right targets: TFT_eSPI → `cyd` + `cyd_boot`; miniwinwm → `cyd` only
+
+### arduino-esp32 REQUIRES patches extended
+- `Builder/sdk_core.py` + `Builder/Build.ps1` — patch 4 now also adds `esp_driver_gpio` to arduino-esp32 REQUIRES (IDF 5.3.x split `driver/gpio.h` into `esp_driver_gpio` component); both `esp_timer` and `esp_driver_gpio` patched in one pass with guards to avoid double-patching
+
+### miniwinwm compilation fixes
+- `CoreOS/components/miniwinwm/CMakeLists.txt`:
+  - Excluded `dialog_file_chooser.c` (requires user-supplied `app.h`)
+  - Excluded truetype font DATA files (saves flash; PURR OS uses bitmap fonts only)
+  - Added `MiniWin/gl/fonts/truetype/mcufont` to INCLUDE_DIRS for the mcufont renderer
+  - Guard changed to `cyd` only — `cyd_boot` draws directly to display; MiniWin would require unimplemented `mw_user_*` stubs and adds unnecessary code size
+- `MiniWin/hal/PURR_CYD/miniwin_config.h` — completely rewritten: was 4 lines, now has all ~30 required constants (`MW_ROOT_WIDTH/HEIGHT`, `MW_MAX_WINDOW_COUNT`, `MW_CONTROL_UP_COLOUR`, `MW_CURSOR_PERIOD_TICKS`, all colour/timing/font defs)
+- `MiniWin/hal/PURR_CYD/hal_delay.cpp` — removed `#include <Arduino.h>`; replaced `delay()`/`delayMicroseconds()` with `vTaskDelay(pdMS_TO_TICKS(ms))` / `ets_delay_us(us)` (eliminates Arduino.h dependency chain from miniwinwm)
+- `MiniWin/hal/PURR_CYD/hal_timer.cpp` — added `#include <stdint.h>` (hal_timer.h uses `uint32_t` without including it); fixed `mw_tick_counter++` → explicit `= mw_tick_counter + 1` (C++20 deprecates `++` on `volatile`, treated as error by `-Werror=all`)
+
+### blackberry_ui — full MiniWin root window port
+- `CoreOS/system/kernel/modules/blackberry_ui.cpp` — complete rewrite (~560 lines):
+  - RGB565 colour palette kept; `c565()` inline converts to `mw_hal_lcd_colour_t` (0x00RRGGBB) at draw time
+  - All `display_ili9341_*` draw calls replaced with `mw_gl_*` equivalents; `mw_gl_draw_info_t*` threaded through every helper (`fill`, `hline`, `str`, `str_cx`)
+  - `str_cx()` now uses `mw_gl_get_string_width_pixels()` instead of `strlen * 6 * sz`
+  - Touch polling removed; touch arrives as `MW_TOUCH_DOWN/DRAG/UP_MESSAGE` in `mw_user_root_message_function()`
+  - Implements all three required MiniWin user callbacks: `mw_user_init`, `mw_user_root_paint_function`, `mw_user_root_message_function`
+  - `blackberry_ui_start()` spawns MiniWin FreeRTOS task (12 KB stack, core 1, priority 3); task drains message queue each 20ms tick
+
+### Other fixes
+- `CoreOS/system/kernel/modules/explorer.cpp` — `purr_bootloader_request_reboot()` → `pm_boot_to_factory()`; include updated to `partition_manager.h`
+- `CoreOS/system/kernel/modules/flasher.cpp` — removed dead `#include "display_ili9488.h"`; SSD1306 calls guarded with `#ifdef PURR_DISPLAY_SSD1306`; ILI9341 path added with `#ifdef PURR_DISPLAY_ILI9341` — fixes linker errors on CYD target where `display_ssd1306_*` symbols are absent
+- `CoreOS/main/CMakeLists.txt` (cyd_boot) — removed `miniwinwm` from REQUIRES
+- `README.md` — added **Requirements** section: IDF v5.3.x is the only supported version (arduino-esp32 3.1.x pins `>=5.3,<5.4`); notes on Windows install path and automatic patch application
+
+### Windows MiniWin simulator (sim/)
+- `sim/` — new standalone CMake project for testing the MiniWin UI layer on Windows without hardware:
+  - `main.c` — Win32 WinMain; creates 320×240 client-area window; routes mouse → MiniWin touch messages
+  - `hal_lcd_sim.c` — MiniWin Windows HAL patched for 320×240 landscape (upstream is 240×320 portrait)
+  - `mw_user.c` — self-contained BB homescreen using only `mw_gl_*`; stub app list; swipe/tap navigation
+  - `miniwin_config.h` — 320×240 landscape, matches PURR_CYD
+  - `app.h` — declares `hwnd`, `mx`, `my`, `mouse_down`, `app_main_loop_process()` for Windows HAL
+  - `build.ps1` — build + run script; auto-detects MinGW or MSVC via cmake
+  - **Requires**: cmake + MinGW or Visual Studio (not bundled with IDF)
+
+---
+
+## [0.6.0] — 2026-06-03 — Partition split, factory bootloader, MiniWin WM, SDK rewrite
+
+### Partition layout redesign (CYD)
+- `CoreOS/partitions_cyd.csv` — complete rework:
+  - `factory` shrunk to 1 MB — now a dedicated bootloader-only slot, never touched by OTA
+  - `ota_0` grown to 1.5 MB — full PURR OS image lives here
+  - `ota_1` at 1 MB — generic third-party slot
+  - `spiffs` at `0x390000`, 448 KB
+- All flash offsets updated in `Builder/Build.ps1` and `Builder/sdk_core.py`:
+  - `cyd` → app at `0x110000` (ota_0), SPIFFS at `0x390000`
+  - `cyd_boot` → app at `0x10000` (factory), SPIFFS at `0x390000`
+
+### New build target: `cyd_boot` (factory recovery image)
+- `CoreOS/main/CMakeLists.txt` — `cyd_boot` target block: overrides SRCS/REQUIRES to a minimal set (no WiFi, no BT, no OS modules, no MicroPython); forces `BUILD_MINI=1`
+- Compile flags: `PURR_HAS_BOOTLOADER=1 PURR_IS_BOOTLOADER_IMG=1`
+- `Builder/Build.ps1` — `cyd_boot` added as target [3]; chip = `esp32`; defaults fall back to `cyd.defaults`; app offset = `0x10000`
+- `Builder/SDK.ps1` / `sdk_core.py` — `cyd_boot` added as selectable target with `fixed=True` (no module toggles)
+
+### purr_bootloader — generic OTA slot scanner
+- `CoreOS/system/kernel/modules/purr_bootloader.cpp` — complete rewrite (~300 lines):
+  - Scans all OTA slots dynamically using `esp_ota_get_partition_description()` to read firmware version directly from flash
+  - Per-slot button tags: `TAG_BOOT(s)`, `TAG_WIPE(s)`, `TAG_INSTALL(s)`
+  - Screen states: `PB_HOME`, `PB_CONFIRM_WIPE`, `PB_CONFIRM_BOOT`, `PB_INSTALL_SELECT`, `PB_INSTALLING`
+  - Valid slots: shows BOOT + WIPE buttons with firmware version; empty slots: shows INSTALL
+  - Blue LED heartbeat in factory image mode
+- `CoreOS/system/kernel/modules/purr_bootloader.h` — stripped to single declaration `purr_bootloader_start()`
+- `CoreOS/system/system/main.cpp` — `PURR_IS_BOOTLOADER_IMG` path calls `purr_bootloader_start()`; OTA path checks GPIO0 and calls `pm_boot_to_factory()` instead of inline bootloader
+
+### partition_manager — new APIs
+- `CoreOS/system/kernel/modules/partition_manager.h` — two new declarations:
+  - `pm_boot_slot()` — returns active OTA slot index (0/1/…) or -1 if booted from factory
+  - `pm_boot_to_factory()` — sets factory as boot target via `esp_ota_set_boot_partition()` + `esp_restart()`
+- `CoreOS/system/kernel/modules/partition_manager.cpp` — both implemented; `pm_delete()` updated to reset otadata to factory when the deleted slot was the active boot slot
+
+### PURR_SHELL cmake variable
+- `CoreOS/main/CMakeLists.txt` — `PURR_SHELL` cache variable added (`both | blackberry | explorer | smol | none`); default `both` preserves existing Build.ps1 behaviour
+- `cyd` target: shell selection drives `PURR_HAS_BLACKBERRY_UI`, `PURR_HAS_EXPLORER` compile flags
+- `tdeck` target: same, with `PURR_BBUI_TARGET_KEYS` instead of `PURR_BBUI_TARGET_TOUCH`
+
+### Builder SDK — full rewrite
+- `Builder/SDK.ps1` — new thin PS1 wrapper:
+  - Auto-detects IDF `export.ps1` from candidate paths or `$env:IDF_EXPORT_PATH`
+  - Maps all switches (`-Target`, `-Shell`, `-Build`, `-Flash`, `-Monitor`, `-Clean`, `-Mini`, `-NoBt`, `-Lora`, `-NoLora`, `-Mesh`, `-Mtp`, `-Flasher`, `-LoraKernel`, `-TdeckPlus`, `-Configure`, `-Baud`) to Python CLI args
+  - Calls `python sdk_core.py @pyArgs`
+- `Builder/sdk_core.py` — full Python SDK (380 lines):
+  - Config: JSON in `Builder/purr_sdk.cfg`; persisted between runs
+  - Interactive wizard: target picker → shell picker → module toggles (LoRa/mesh lock) → port entry
+  - `_cmake_flags()` — builds full `-D` flag list including `PURR_SHELL`
+  - Arduino patches ported from Build.ps1 (4 patches: ADC rename, I2C slave stubs, ESP_SR header, esp_timer REQUIRES)
+  - `run_live()` — subprocess with live streaming output, KeyboardInterrupt → terminate
+  - `do_build()`, `do_flash()` (per-target offsets), `do_monitor()`, `_build_spiffs()`
+  - Main menu: `b/B/f/m/r/a/c/s/q` (`B` = clean build)
+  - Non-interactive CLI via argparse
+  - `_idf_py()` — resolves `idf.py` via `IDF_PATH/tools/idf.py` + `sys.executable` to fix Windows `FileNotFoundError` when calling bare `idf.py` via subprocess
+
+### MiniWin window manager integration
+- `CoreOS/components/miniwinwm/` — MiniWin (MIT) added as local IDF component (same pattern as TFT_eSPI):
+  - `CMakeLists.txt` — GLOBs core `.c` sources from `MiniWin/`, excludes all upstream platform HAL dirs, adds PURR_CYD HAL `.cpp` files explicitly; defines `PURR_CYD=1`; only active for `cyd`/`cyd_boot` targets
+  - `MiniWin/hal/PURR_CYD/miniwin_config.h` — 320×240 landscape, 20ms tick
+  - `MiniWin/hal/PURR_CYD/hal_lcd.cpp` — `mw_hal_lcd_*` wired to `display_ili9341`; colour conversion `0x00RRGGBB → RGB565`; monochrome + colour bitmap clip via pixel-by-pixel fill (optimize later)
+  - `MiniWin/hal/PURR_CYD/hal_touch.cpp` — `mw_hal_touch_*` wired to `touch_cst816s`; coordinates scaled `0..319/239 → 0..4095` for MiniWin calibration matrix; `is_recalibration_required` always `false` (CST816S is pre-calibrated capacitive)
+  - `MiniWin/hal/PURR_CYD/hal_timer.cpp` — `esp_timer` 20ms periodic, increments `mw_tick_counter`
+  - `MiniWin/hal/PURR_CYD/hal_delay.cpp` — Arduino `delay()` / `delayMicroseconds()`
+  - `MiniWin/hal/PURR_CYD/hal_non_vol.cpp` — NVS blob store for MiniWin calibration data (namespace `miniwin`, key `mw_cal`)
+- `CoreOS/main/CMakeLists.txt` — `miniwinwm` added to REQUIRES for `cyd` and `cyd_boot`
+
+### UI shell direction
+- `purr_explorer` — designated as Windows CE / PDA style shell: taskbar at bottom, overlapping movable windows, Start-menu app launcher, modal dialogs via MiniWin; implementation pending PDA design references
+- `purr_blackberry_ui` — stays BB-style (fixed layout, status bar, app drawer) but will be rebuilt on MiniWin primitives instead of raw TFT calls
+
+### Fixes
+- `Builder/sdk_core.py` — `_idf_py()` helper: on Windows, bare `"idf.py"` in `subprocess.Popen` raises `FileNotFoundError` because Python scripts aren't executable by name; fix resolves full path via `$IDF_PATH/tools/idf.py` and invokes with `sys.executable`
+- `CoreOS/system/kernel/modules/display_ili9341.h` — corrected CYD variant comment: active target is S024C (2.4" capacitive, CST816S, BL=GPIO27), not S028R
+
+---
+
 ## [0.5.1] — 2026-05-31 — Build system fixes + IDF 5.1/5.2 compatibility
 
 ### Builder — cmake flag propagation fix

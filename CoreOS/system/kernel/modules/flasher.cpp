@@ -1,23 +1,35 @@
 #include "flasher.h"
-#include "display_ssd1306.h"
-#include "display_ili9488.h"
 #include <Arduino.h>
 #include <SPIFFS.h>
 #include <Update.h>
 #include <Preferences.h>
 
+#ifdef PURR_DISPLAY_SSD1306
+#  include "display_ssd1306.h"
+#endif
+#ifdef PURR_DISPLAY_ILI9341
+#  include "display_ili9341.h"
+#endif
+
 static Preferences prefs;
 
 static void flasher_text(device_config_t* cfg, uint8_t row, const char* text) {
-    if (strcmp(cfg->display, "ssd1306") == 0)
-        display_ssd1306_text(row, text);
-    else
-        Serial.printf("[flasher] row%d: %s\n", row, text);
+#ifdef PURR_DISPLAY_SSD1306
+    if (strcmp(cfg->display, "ssd1306") == 0) { display_ssd1306_text(row, text); return; }
+#endif
+#ifdef PURR_DISPLAY_ILI9341
+    if (strcmp(cfg->display, "ili9341") == 0) { display_ili9341_text(row, text); return; }
+#endif
+    Serial.printf("[flasher] row%d: %s\n", row, text);
 }
 
 static void flasher_clear(device_config_t* cfg) {
-    if (strcmp(cfg->display, "ssd1306") == 0)
-        display_ssd1306_clear();
+#ifdef PURR_DISPLAY_SSD1306
+    if (strcmp(cfg->display, "ssd1306") == 0) { display_ssd1306_clear(); return; }
+#endif
+#ifdef PURR_DISPLAY_ILI9341
+    if (strcmp(cfg->display, "ili9341") == 0) { display_ili9341_clear(); return; }
+#endif
 }
 
 static bool nvs_clear_boot_flag() {
@@ -55,9 +67,12 @@ void flasher_update() {}
 void flasher_deinit() {}
 
 void flasher_run(device_config_t* cfg) {
-    // Minimal init — display only, no LVGL, no radios
-    if (strcmp(cfg->display, "ssd1306") == 0)
-        display_ssd1306_init();
+#ifdef PURR_DISPLAY_SSD1306
+    if (strcmp(cfg->display, "ssd1306") == 0) display_ssd1306_init();
+#endif
+#ifdef PURR_DISPLAY_ILI9341
+    if (strcmp(cfg->display, "ili9341") == 0) display_ili9341_init();
+#endif
 
     flasher_clear(cfg);
     flasher_text(cfg, 0, "PURR OS Flasher");
