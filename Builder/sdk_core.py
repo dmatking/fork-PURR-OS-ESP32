@@ -701,7 +701,7 @@ def do_flash(cfg, port=None):
     spiffs_offset = "0x390000" if target in ("cyd", "cyd_boot") else "0x3b0000"
 
     cmd = [
-        "python", "-m", "esptool",
+        sys.executable, "-m", "esptool",
         "--chip",   chip,
         "--port",   port,
         "-b",       str(baud),
@@ -798,7 +798,7 @@ def do_full_flash(cfg, port=None):
         err("Missing build artifacts — run Full Build first:\n  " + "\n  ".join(missing))
 
     cmd = [
-        "python", "-m", "esptool",
+        sys.executable, "-m", "esptool",
         "--chip",   "esp32",
         "--port",   port,
         "-b",       str(baud),

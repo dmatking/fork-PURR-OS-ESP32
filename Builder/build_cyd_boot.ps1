@@ -24,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $PSCommandPath
 . (Join-Path $ScriptDir '_idf.ps1')
 
-$py  = (Get-Command python -ErrorAction SilentlyContinue).Source
+$py = if ($env:IDF_PYTHON -and (Test-Path $env:IDF_PYTHON)) { $env:IDF_PYTHON } else { (Get-Command python -ErrorAction SilentlyContinue).Source }
 if (-not $py) { Write-Error '[sdk] python not found on PATH'; exit 1 }
 $sdk = Join-Path $ScriptDir 'sdk_core.py'
 

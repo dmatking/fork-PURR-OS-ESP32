@@ -514,8 +514,9 @@ if ($FlashPort) {
         Write-PurrInfo "including SPIFFS image at $spiffsOffset"
     }
 
+    $idfPython = if ($env:IDF_PYTHON -and (Test-Path $env:IDF_PYTHON)) { $env:IDF_PYTHON } else { 'python' }
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    python -m esptool @flashArgs
+    & $idfPython -m esptool @flashArgs
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prev
     if ($code -ne 0) { Write-PurrErr "Flash failed (exit $code)" }

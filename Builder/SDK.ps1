@@ -16,7 +16,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
     # ── Target & shell ───────────────────────────────────────────────────────────
-    [ValidateSet('heltec','cyd','cyd_boot','tdeck')]
+    [ValidateSet('heltec','cyd','cyd_boot','tdeck','jc3248w535','waveshare169')]
     [string]$Target      = '',
 
     [ValidateSet('both','blackberry','explorer','smol','none')]
@@ -63,7 +63,9 @@ if (-not (Test-Path $CoreSdkPy)) {
 . (Join-Path $ScriptDir '_idf.ps1')
 
 # ── Map PowerShell switches → python CLI args ─────────────────────────────────
-$py     = (Get-Command python -ErrorAction SilentlyContinue).Source
+# Use the IDF Python (set by _idf.ps1) — system Python won't have esptool/idf_component_manager
+$py = if ($env:IDF_PYTHON -and (Test-Path $env:IDF_PYTHON)) { $env:IDF_PYTHON }
+      else { (Get-Command python -ErrorAction SilentlyContinue).Source }
 $pyArgs = [System.Collections.Generic.List[string]]::new()
 
 if ($Target)          { $pyArgs.AddRange([string[]]@('--target',      $Target)) }
