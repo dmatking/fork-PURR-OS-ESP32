@@ -129,18 +129,18 @@ TEST_CASE("dspm_add_f32_ae32 benchmark", "[dspm]")
     portENTER_CRITICAL(&testnlock);
     dspm_add_f32(mat_sub.data, mat_sub.data, mat_sub.data, dim, dim, mat_sub.padding, mat_sub.padding, mat_sub.padding, 1, 1, 1);
 
-    unsigned int start_b = dsp_get_cpu_cycle_count();
+    unsigned int start_b = xthal_get_ccount();
     int repeat_count = 1024;
     for (int i = 0 ; i < repeat_count ; i++) {
         dspm_add_f32(mat_sub.data, mat_sub.data, mat_sub.data, dim, dim, mat_sub.padding, mat_sub.padding, mat_sub.padding, 1, 1, 1);
     }
-    unsigned int end_b = dsp_get_cpu_cycle_count();
+    unsigned int end_b = xthal_get_ccount();
     portEXIT_CRITICAL(&testnlock);
 
     float total_b = end_b - start_b;
     float cycles = total_b / (repeat_count);
     printf("Benchmark dspm_add_f32_ae32 - %f per sample %dx%d.\n", cycles, dim, dim);
-    float min_exec = 20;
+    float min_exec = 100;
     float max_exec = 1400;
     TEST_ASSERT_EXEC_IN_RANGE(min_exec, max_exec, cycles);
 }

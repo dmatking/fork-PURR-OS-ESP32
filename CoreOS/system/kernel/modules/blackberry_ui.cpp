@@ -8,6 +8,7 @@
 
 #include "blackberry_ui.h"
 #include "../kitt.h"
+#include "../purr_version.h"
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -320,8 +321,8 @@ static void draw_wallpaper(const mw_gl_draw_info_t *d) {
     str_cx(d, px, py + 8, pw, 24, "PURR OS", C_WATERMARK, C_WALL_PLATE, 3);
 
     mw_gl_set_font(MW_GL_FONT_9);
-    int16_t vw = mw_gl_get_string_width_pixels("v0.6.0");
-    str(d, px + (pw - vw) / 2, py + 42, "v0.6.0", C_TIME_SUB, C_WALL_PLATE);
+    int16_t vw = mw_gl_get_string_width_pixels("v" PURR_OS_VERSION);
+    str(d, px + (pw - vw) / 2, py + 42, "v" PURR_OS_VERSION, C_TIME_SUB, C_WALL_PLATE);
 
     mw_gl_set_font(MW_GL_FONT_9);
     int16_t hw = mw_gl_get_string_width_pixels("swipe up for apps");

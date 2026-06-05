@@ -17,7 +17,6 @@
 #include "esp_dsp.h"
 #include "dsp_platform.h"
 #include "esp_log.h"
-#include <malloc.h>
 
 #include "dsps_view.h"
 #include "dsps_fft2r.h"
@@ -46,14 +45,14 @@ TEST_CASE("dsps_fft2r_fc32_ansi functionality", "[dsps]")
 
 
     dsps_fft2r_fc32_ansi(data, N);
-    unsigned int start_b = dsp_get_cpu_cycle_count();
+    unsigned int start_b = xthal_get_ccount();
     dsps_bit_rev_fc32_ansi(data, N);
-    unsigned int end_b = dsp_get_cpu_cycle_count();
+    unsigned int end_b = xthal_get_ccount();
 
     float min = 10000;
     float max = -10000;
     int max_pos = 0;
-    for (int i = 0 ; i < N / 2 ; i++) {
+    for (int i = 0 ; i < N ; i++) {
         data[i] = 10 * log10f(data[i * 2 + 0] * data[i * 2 + 0] + data[i * 2 + 1] * data[i * 2 + 1]);
         if (data[i] < min) {
             min = data[i];
@@ -95,10 +94,10 @@ TEST_CASE("dsps_fft2r_fc32_ansi benchmark", "[dsps]")
 
     for (int i = 5 ; i < 10 ; i++) {
         int N_check = 2 << i;
-        unsigned int start_b = dsp_get_cpu_cycle_count();
+        unsigned int start_b = xthal_get_ccount();
         dsps_fft2r_fc32_ansi(data, N_check);
 
-        unsigned int end_b = dsp_get_cpu_cycle_count();
+        unsigned int end_b = xthal_get_ccount();
         float total_b = end_b - start_b;
         float cycles = total_b;
         ESP_LOGI(TAG, "Benchmark dsps_fft2r_fc32_ansi - %6i cycles for %6i points FFT.", (int)cycles, N_check);

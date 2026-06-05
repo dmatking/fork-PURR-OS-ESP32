@@ -21,8 +21,11 @@ endif()
 
 # Core platform-independent WM sources
 file(GLOB_RECURSE MINIWIN_CORE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/*.c")
-# Strip other platform HALs — only PURR_CYD is used
-list(FILTER MINIWIN_CORE_SRCS EXCLUDE REGEX ".*/hal/.*\\.c$")
+# Strip platform-specific HAL subdirectories — only PURR_CYD is used.
+# hal/hal.c (the common HAL dispatcher that defines mw_hal_init) lives directly
+# in hal/ and must be kept; only files in named subdirs (hal/Windows/, hal/Linux/,
+# hal/STM32F4/, etc.) are excluded.
+list(FILTER MINIWIN_CORE_SRCS EXCLUDE REGEX ".*/hal/[^/]+/.+\\.c$")
 # File chooser dialog requires a user-supplied app.h and is not used in PURR OS
 list(FILTER MINIWIN_CORE_SRCS EXCLUDE REGEX ".*/dialog_file_chooser\\.c$")
 # Truetype font DATA files (not the mcufont renderer) — excluded to save flash;

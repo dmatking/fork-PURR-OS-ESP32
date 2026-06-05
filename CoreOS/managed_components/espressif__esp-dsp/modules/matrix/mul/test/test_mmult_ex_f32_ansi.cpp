@@ -159,18 +159,18 @@ TEST_CASE("dspm_mult_ex_f32_ansi benchmark", "[dspm]")
     portENTER_CRITICAL(&testnlock);
     dspm_mult_ex_f32_ansi(A_subset.data, B_subset.data, C_subset.data, m, n, k, A_subset.padding, B_subset.padding, C_subset.padding);
 
-    unsigned int start_b = dsp_get_cpu_cycle_count();
+    unsigned int start_b = xthal_get_ccount();
     int repeat_count = 1024;
     for (int i = 0 ; i < repeat_count ; i++) {
         dspm_mult_ex_f32_ansi(A_subset.data, B_subset.data, C_subset.data, m, n, k, A_subset.padding, B_subset.padding, C_subset.padding);
     }
-    unsigned int end_b = dsp_get_cpu_cycle_count();
+    unsigned int end_b = xthal_get_ccount();
     portEXIT_CRITICAL(&testnlock);
 
     float total_b = end_b - start_b;
     float cycles = total_b / (repeat_count);
     printf("Benchmark dspm_mult_f32 - %f per multiplication 4x4 + overhead.\n", cycles);
-    float min_exec = 60;
+    float min_exec = 100;
     float max_exec = 1400;
     TEST_ASSERT_EXEC_IN_RANGE(min_exec, max_exec, cycles);
 }

@@ -127,6 +127,15 @@ bool pm_delete(uint8_t slot) {
     }
     nvs_clear_name(slot);
     Serial.printf("[pm] slot %u erased\n", slot);
+
+    // If this was the active boot slot, reset boot target to factory so the
+    // device doesn't try to boot the now-erased partition on next restart.
+    const esp_partition_t* boot = esp_ota_get_boot_partition();
+    if (boot && boot->address == part->address) {
+        const esp_partition_t* factory = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+        if (factory) esp_ota_set_boot_partition(factory);
+    }
     return true;
 }
 
@@ -160,6 +169,119 @@ int pm_sd_list(pm_sd_file_t* files, int max) {
     }
     root.close();
     return count;
+}
+
+int pm_boot_slot() {
+    const esp_partition_t* boot = esp_ota_get_boot_partition();
+    if (!boot) return -1;
+    for (uint8_t i = 0; i < PM_MAX_SLOTS; i++) {
+        const esp_partition_t* p = find_ota_slot(i);
+        if (p && p->address == boot->address) return (int)i;
+    }
+    return -1;
+}
+
+bool pm_dump_to_sd(uint8_t slot, const char* sd_path, pm_progress_cb_t cb) {
+    const esp_partition_t* part = find_ota_slot(slot);
+    if (!part || !slot_has_firmware(part)) {
+        Serial.printf("[pm] dump slot %u: invalid or empty\n", slot);
+        return false;
+    }
+    if (!sd_mounted) {
+        Serial.println("[pm] dump: SD not mounted");
+        return false;
+    }
+
+    // Determine actual app size from image header to avoid dumping the full
+    // erased partition. ESP32 image length is in the segment headers; fall back
+    // to reading until the first 0xFF-filled 4KB page as a heuristic bound.
+    // For simplicity, read up to partition size but stop writing once we hit the
+    // end of real data (all 0xFF bytes beyond the app image are padding).
+    // We use the simpler approach: read full partition, trim trailing 0xFF pages.
+    size_t total = part->size;
+
+    File f = SD.open(sd_path, FILE_WRITE);
+    if (!f) {
+        Serial.printf("[pm] dump: can't open %s for write\n", sd_path);
+        return false;
+    }
+
+    if (cb) cb(0, "Reading...");
+
+    uint8_t buf[512];
+    size_t written = 0;
+    size_t last_nonpad = 0;  // track furthest non-0xFF byte for trimming
+
+    // First pass: stream to SD, track where real data ends
+    for (size_t offset = 0; offset < total; offset += sizeof(buf)) {
+        size_t n = ((total - offset) < sizeof(buf)) ? (total - offset) : sizeof(buf);
+        if (esp_partition_read(part, offset, buf, n) != ESP_OK) {
+            Serial.printf("[pm] dump: read error at 0x%x\n", offset);
+            f.close();
+            SD.remove(sd_path);
+            return false;
+        }
+        f.write(buf, n);
+        written += n;
+
+        // Track last non-padding byte
+        for (size_t i = n; i-- > 0; ) {
+            if (buf[i] != 0xFF) { last_nonpad = offset + i + 1; break; }
+        }
+
+        if (cb) {
+            int pct = (int)((uint64_t)written * 90 / total);
+            cb(pct, "Reading...");
+        }
+    }
+    f.close();
+
+    // Truncate to actual app data (round up to 4-byte alignment)
+    last_nonpad = (last_nonpad + 3) & ~3u;
+    if (last_nonpad < total && last_nonpad > 0) {
+        // Re-open and truncate — SD library doesn't support truncate directly,
+        // so copy to a temp file then rename.
+        File src = SD.open(sd_path, FILE_READ);
+        String tmp = String(sd_path) + ".tmp";
+        File dst = SD.open(tmp.c_str(), FILE_WRITE);
+        if (src && dst) {
+            size_t remaining = last_nonpad;
+            while (remaining > 0) {
+                size_t n = remaining < sizeof(buf) ? remaining : sizeof(buf);
+                src.read(buf, n);
+                dst.write(buf, n);
+                remaining -= n;
+            }
+            src.close(); dst.close();
+            SD.remove(sd_path);
+            SD.rename(tmp.c_str(), sd_path);
+        } else {
+            if (src) src.close();
+            if (dst) dst.close();
+        }
+    }
+
+    if (cb) cb(100, "Done");
+    Serial.printf("[pm] dump OK: slot %u → %s (%u bytes)\n", slot, sd_path, last_nonpad);
+    return true;
+}
+
+bool pm_boot_to_factory() {
+    const esp_partition_t* factory = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+    if (!factory) {
+        Serial.println("[pm] pm_boot_to_factory: no factory partition found");
+        return false;
+    }
+    esp_err_t err = esp_ota_set_boot_partition(factory);
+    if (err != ESP_OK) {
+        Serial.printf("[pm] pm_boot_to_factory: set_boot err %d\n", err);
+        return false;
+    }
+    Serial.println("[pm] rebooting to factory");
+    delay(100);
+    esp_restart();
+    return true;
 }
 
 bool pm_install(uint8_t slot, const char* sd_path, const char* display_name,

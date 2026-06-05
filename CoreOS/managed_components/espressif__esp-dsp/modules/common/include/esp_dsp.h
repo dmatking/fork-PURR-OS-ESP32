@@ -28,7 +28,6 @@ extern "C"
 #include "dsps_dotprod.h"
 #include "dsps_math.h"
 #include "dsps_fir.h"
-#include "dsps_resampler.h"
 #include "dsps_biquad.h"
 #include "dsps_biquad_gen.h"
 #include "dsps_wind.h"
@@ -53,7 +52,7 @@ extern "C"
 
 // Image processing functions:
 #include "dspi_dotprod.h"
-#include "dspi_conv.h"
+
 
 #ifdef __cplusplus
 }

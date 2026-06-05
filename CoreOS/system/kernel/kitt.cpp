@@ -1,5 +1,6 @@
 #include "kitt.h"
 #include "device_config.h"
+#include "purr_version.h"
 #include <ArduinoJson.h>
 #ifdef PURR_DISPLAY_SSD1306
 #  include "modules/display_ssd1306.h"
@@ -13,11 +14,20 @@
 #ifdef PURR_HAS_LORA
 #  include "modules/lora_manager.h"
 #endif
+#ifdef PURR_HAS_MESH
+#  include "modules/purr_mesh.h"
+#endif
 #ifdef PURR_DISPLAY_ILI9488
 #  include "modules/display_ili9488.h"
 #endif
 #ifdef PURR_DISPLAY_ILI9341
 #  include "modules/display_ili9341.h"
+#endif
+#ifdef PURR_DISPLAY_ST7796
+#  include "modules/display_st7796.h"
+#endif
+#ifdef PURR_DISPLAY_ST7789
+#  include "modules/display_st7789.h"
 #endif
 #ifdef PURR_HAS_TOUCH_MXT
 #  include "modules/touch_mxt336t.h"
@@ -27,6 +37,9 @@
 #endif
 #ifdef PURR_HAS_TOUCH_CST816S
 #  include "modules/touch_cst816s.h"
+#endif
+#ifdef PURR_HAS_TOUCH_GT911
+#  include "modules/touch_gt911.h"
 #endif
 #ifdef PURR_HAS_PI_SLOT
 #  include "modules/pi_manager.h"
@@ -178,7 +191,7 @@ static void check_reserved_combo(KITT::generic_key_t key, bool pressed) {
 // ── Boot sequence ──────────────────────────────────────────────────────────────
 
 bool KITT::init(const char* device_json_path) {
-    Serial.println("[kitt] boot start");
+    Serial.printf("[kitt] PURR OS v%s  KITT v%s  boot start\n", PURR_OS_VERSION, KITT_VERSION);
 
     // Step 2: mount filesystem
     if (!SPIFFS.begin(true)) {
@@ -209,6 +222,14 @@ bool KITT::init(const char* device_json_path) {
         lv_init();
 #endif
         display_ili9341_init();
+#endif
+#ifdef PURR_DISPLAY_ST7796
+    } else if (strcmp(cfg.display, "st7796") == 0) {
+        display_st7796_init();
+#endif
+#ifdef PURR_DISPLAY_ST7789
+    } else if (strcmp(cfg.display, "st7789") == 0) {
+        display_st7789_init();
 #endif
     } else {
         Serial.println("[kitt] ERR 0x02 unknown display type");
@@ -270,6 +291,14 @@ bool KITT::init(const char* device_json_path) {
     }
 #endif
 
+    // Step 12: Mesh stack (Meshtastic-compatible, requires LoRa)
+#ifdef PURR_HAS_MESH
+    if (cfg.lora && lora_manager_enabled()) {
+        purr_mesh_init(cfg.lora_region);
+        log("KITT", "purr_mesh OK");
+    }
+#endif
+
     // Step 13: Pi manager
 #ifdef PURR_HAS_PI_SLOT
     if (cfg.pi_slot) {
@@ -319,6 +348,12 @@ bool KITT::init(const char* device_json_path) {
         log("KITT", "touch CST816S OK");
     }
 #endif
+#ifdef PURR_HAS_TOUCH_GT911
+    if (strcmp(cfg.touch, "gt911") == 0) {
+        touch_gt911_init();
+        log("KITT", "touch GT911 OK");
+    }
+#endif
 
     // Step 15: MicroPython runtime
 #ifdef PURR_HAS_MICROPYTHON
@@ -326,9 +361,12 @@ bool KITT::init(const char* device_json_path) {
     log("KITT", "micropython ready");
 #endif
 
-    // Step 18: write KITT_READY to NVS
+    // Step 18: write KITT_READY to NVS and clear factory crash-loop counter
     nvs_prefs.begin("kitt_boot", false);
     nvs_prefs.putBool("kitt_ready", true);
+    nvs_prefs.end();
+    nvs_prefs.begin("purr_bl", false);
+    nvs_prefs.putUChar("boot_tries", 0);
     nvs_prefs.end();
 
     // Step 19: first heartbeat
@@ -464,46 +502,53 @@ uint16_t KITT::display_height() { return cfg.display_h; }
 
 void KITT::text_print(uint8_t row, const char* text) {
 #ifdef PURR_DISPLAY_SSD1306
-    if (strcmp(cfg.display, "ssd1306") == 0) {
-        display_ssd1306_text(row, text);
-        return;
-    }
+    if (strcmp(cfg.display, "ssd1306") == 0) { display_ssd1306_text(row, text); return; }
 #endif
 #ifdef PURR_DISPLAY_ILI9341
-    if (strcmp(cfg.display, "ili9341") == 0) {
-        display_ili9341_text(row, text);
-        return;
-    }
+    if (strcmp(cfg.display, "ili9341") == 0) { display_ili9341_text(row, text); return; }
+#endif
+#ifdef PURR_DISPLAY_ST7796
+    if (strcmp(cfg.display, "st7796") == 0)  { display_st7796_text(row, text);  return; }
+#endif
+#ifdef PURR_DISPLAY_ST7789
+    if (strcmp(cfg.display, "st7789") == 0)  { display_st7789_text(row, text);  return; }
 #endif
     (void)row; (void)text;
 }
 
 void KITT::text_clear() {
 #ifdef PURR_DISPLAY_SSD1306
-    if (strcmp(cfg.display, "ssd1306") == 0) {
-        display_ssd1306_clear();
-        return;
-    }
+    if (strcmp(cfg.display, "ssd1306") == 0) { display_ssd1306_clear(); return; }
 #endif
 #ifdef PURR_DISPLAY_ILI9341
-    if (strcmp(cfg.display, "ili9341") == 0) {
-        display_ili9341_clear();
-        return;
-    }
+    if (strcmp(cfg.display, "ili9341") == 0) { display_ili9341_clear(); return; }
+#endif
+#ifdef PURR_DISPLAY_ST7796
+    if (strcmp(cfg.display, "st7796") == 0)  { display_st7796_clear();  return; }
+#endif
+#ifdef PURR_DISPLAY_ST7789
+    if (strcmp(cfg.display, "st7789") == 0)  { display_st7789_clear();  return; }
 #endif
 }
 
 void KITT::text_set_color(uint32_t fg_hex, uint32_t bg_hex) {
+    auto to565 = [](uint32_t c) -> uint16_t {
+        uint8_t r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+        return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    };
 #ifdef PURR_DISPLAY_ILI9341
     if (strcmp(cfg.display, "ili9341") == 0) {
-        auto to565 = [](uint32_t c) -> uint16_t {
-            uint8_t r = (c >> 16) & 0xFF;
-            uint8_t g = (c >>  8) & 0xFF;
-            uint8_t b =  c        & 0xFF;
-            return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
-        };
-        display_ili9341_set_text_colors(to565(fg_hex), to565(bg_hex));
-        return;
+        display_ili9341_set_text_colors(to565(fg_hex), to565(bg_hex)); return;
+    }
+#endif
+#ifdef PURR_DISPLAY_ST7796
+    if (strcmp(cfg.display, "st7796") == 0) {
+        display_st7796_set_text_colors(to565(fg_hex), to565(bg_hex)); return;
+    }
+#endif
+#ifdef PURR_DISPLAY_ST7789
+    if (strcmp(cfg.display, "st7789") == 0) {
+        display_st7789_set_text_colors(to565(fg_hex), to565(bg_hex)); return;
     }
 #endif
     (void)fg_hex; (void)bg_hex;

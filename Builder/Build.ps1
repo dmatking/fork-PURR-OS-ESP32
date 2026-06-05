@@ -357,16 +357,27 @@ Set-Location $CoreOsDir
 # arduino-esp32 3.x targets IDF 5.1.x; bypass its version gate on IDF 6.x
 $env:ARDUINO_SKIP_IDF_VERSION_CHECK = '1'
 
+# Per-target build directory (matches sdk_core.py _BUILD_DIRS)
+$buildDirName = switch ($Target) {
+    'cyd'      { 'build_cyd' }
+    'cyd_boot' { 'build_cyd_boot' }
+    'heltec'   { 'build_heltec' }
+    'tdeck'    { 'build_tdeck' }
+    default    { "build_$Target" }
+}
+$buildDir  = Join-Path $CoreOsDir $buildDirName
+$sdkcfgPath = Join-Path $CoreOsDir "sdkconfig_$Target"
+
 if ($Clean.IsPresent) {
-    Write-PurrInfo 'clean...'
-    $buildDir = Join-Path $CoreOsDir 'build'
-    if (Test-Path $buildDir) { Remove-Item $buildDir -Recurse -Force -Confirm:$false }
-    $sdkcfg = Join-Path $CoreOsDir 'sdkconfig'
-    if (Test-Path $sdkcfg) { Remove-Item $sdkcfg -Force }
+    Write-PurrInfo "clean $buildDirName..."
+    if (Test-Path $buildDir)   { Remove-Item $buildDir   -Recurse -Force -Confirm:$false }
+    if (Test-Path $sdkcfgPath) { Remove-Item $sdkcfgPath -Force }
 }
 
 $chip = Get-Chip
 $cmakeFlags = @(
+    "-B", $buildDirName,
+    "-DSDKCONFIG=$sdkcfgPath",
     "-DTARGET_DEVICE=$Target"
     "-DBUILD_MINI=$MiniBuild"
     "-DBUILD_TDECK_PLUS=$ModTdeckPlus"
@@ -435,8 +446,7 @@ function Invoke-SpiffsBuild {  # builds SPIFFS filesystem image from target devi
         Write-PurrWarn "spiffsgen.py not found -- skipping SPIFFS image"; return
     }
 
-    $buildDir   = Join-Path $CoreOsDir 'build'
-    $stagingDir = Join-Path $buildDir  'spiffs_staging'
+    $stagingDir = Join-Path $buildDir 'spiffs_staging'
 
     if (Test-Path $stagingDir) { Remove-Item $stagingDir -Recurse -Force }
     New-Item -ItemType Directory -Path "$stagingDir\system\kernel" -Force | Out-Null
@@ -476,9 +486,8 @@ Invoke-Idf @cmakeFlags build
 Invoke-SpiffsBuild
 
 if ($FlashPort) {
-    $buildDir  = Join-Path $CoreOsDir 'build'
-    $spiffsImg = Join-Path $buildDir  'spiffs.bin'
-    Write-PurrInfo "flashing -> $FlashPort"
+    $spiffsImg = Join-Path $buildDir 'spiffs.bin'
+    Write-PurrInfo "flashing $buildDirName -> $FlashPort"
 
     # App flash offset depends on target:
     #   cyd      → ota_0 at 0x110000 (OS image, installed into the OTA slot)
@@ -514,7 +523,7 @@ if ($FlashPort) {
 
 if ($MonPort) {
     Write-PurrInfo "monitor on $MonPort  (Ctrl+] to exit)"
-    Invoke-Idf -p $MonPort monitor
+    Invoke-Idf -B $buildDirName -p $MonPort monitor
 }
 
 Write-PurrInfo 'done.'

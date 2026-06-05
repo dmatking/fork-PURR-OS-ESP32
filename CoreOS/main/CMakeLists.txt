@@ -116,7 +116,12 @@ elseif(TARGET_DEVICE STREQUAL "cyd")
         "../system/kernel/modules/explorer.cpp"
         "../system/kernel/modules/blackberry_ui.cpp"
     )
-    list(APPEND INCLUDE_DIRS "../components/TFT_eSPI")
+    list(APPEND INCLUDE_DIRS
+        "../components/TFT_eSPI"
+        "../components/miniwinwm/MiniWin"
+        "../components/miniwinwm/MiniWin/hal"
+        "../components/miniwinwm/MiniWin/hal/PURR_CYD"
+    )
     list(APPEND REQUIRES fatfs esp_partition TFT_eSPI miniwinwm)
 
 # ── Device-specific: CYD bootloader (factory partition — minimal recovery image) ──
@@ -134,6 +139,7 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
         "../system/kernel/modules/touch_cst816s.cpp"
         "../system/kernel/modules/partition_manager.cpp"
         "../system/kernel/modules/purr_bootloader.cpp"
+        "../system/kernel/modules/stub_managers.cpp"
     )
     set(REQUIRES
         espressif__arduino-esp32
@@ -169,8 +175,32 @@ elseif(TARGET_DEVICE STREQUAL "tdeck")
     endif()
     message(WARNING "T-Deck: placeholder build -- ST7789 driver and BB6 shell not yet wired.")
 
+# ── Device-specific: JC3248W535 (WIP) ────────────────────────────────────────
+elseif(TARGET_DEVICE STREQUAL "jc3248w535")
+    list(APPEND SRCS
+        "../system/kernel/modules/display_st7796.cpp"
+        "../system/kernel/modules/touch_gt911.cpp"
+        "../system/kernel/modules/partition_manager.cpp"
+    )
+    list(APPEND INCLUDE_DIRS "../components/TFT_eSPI")
+    list(APPEND REQUIRES fatfs esp_partition TFT_eSPI)
+    set(BUILD_MINI 1 CACHE STRING "" FORCE)  # WIP: no MicroPython until target is stable
+    message(WARNING "jc3248w535: WIP target — ST7796 + GT911, no shell yet. Verify pins before flashing.")
+
+# ── Device-specific: Waveshare 1.69" (WIP) ───────────────────────────────────
+elseif(TARGET_DEVICE STREQUAL "waveshare169")
+    list(APPEND SRCS
+        "../system/kernel/modules/display_st7789.cpp"
+        "../system/kernel/modules/touch_cst816s.cpp"
+        "../system/kernel/modules/partition_manager.cpp"
+    )
+    list(APPEND INCLUDE_DIRS "../components/TFT_eSPI")
+    list(APPEND REQUIRES fatfs esp_partition TFT_eSPI)
+    set(BUILD_MINI 1 CACHE STRING "" FORCE)  # WIP: no MicroPython until target is stable
+    message(WARNING "waveshare169: WIP target — ST7789 + CST816S, no shell yet. Verify pins before flashing.")
+
 else()
-    message(FATAL_ERROR "Unknown TARGET_DEVICE='${TARGET_DEVICE}'. Valid: heltec, cyd, cyd_boot, tdeck")
+    message(FATAL_ERROR "Unknown TARGET_DEVICE='${TARGET_DEVICE}'. Valid: heltec, cyd, cyd_boot, tdeck, jc3248w535, waveshare169")
 endif()
 
 # ── Full build: MicroPython runtime ───────────────────────────────────────────
@@ -212,7 +242,16 @@ elseif(TARGET_DEVICE STREQUAL "cyd")
         CYD_VARIANT_S024C=1
     )
     # UI shell — controlled by PURR_SHELL (default: both)
+    # BlackberryUI requires MiniWin source to be cloned into components/miniwinwm/
+    set(_miniwin_src "${CMAKE_CURRENT_SOURCE_DIR}/../components/miniwinwm/MiniWin/miniwin.c")
     if(PURR_SHELL STREQUAL "blackberry" OR PURR_SHELL STREQUAL "both")
+        if(NOT EXISTS "${_miniwin_src}")
+            message(FATAL_ERROR
+                "BlackberryUI requires MiniWin source — not found at:\n"
+                "  components/miniwinwm/MiniWin/miniwin.c\n"
+                "Clone your MiniWin fork into CoreOS/components/miniwinwm/ and retry.\n"
+                "  git clone <your-miniwin-fork> CoreOS/components/miniwinwm/MiniWin")
+        endif()
         list(APPEND PURR_DEFS PURR_HAS_BLACKBERRY_UI=1 PURR_BBUI_TARGET_TOUCH=1)
     endif()
     if(PURR_SHELL STREQUAL "explorer" OR PURR_SHELL STREQUAL "both")
@@ -236,6 +275,20 @@ elseif(TARGET_DEVICE STREQUAL "tdeck")
     if(BUILD_TDECK_PLUS)
         list(APPEND PURR_DEFS PURR_IS_TDECK_PLUS=1)
     endif()
+elseif(TARGET_DEVICE STREQUAL "jc3248w535")
+    list(APPEND PURR_DEFS
+        PURR_DISPLAY_ST7796=1
+        PURR_HAS_TOUCH_GT911=1
+        PURR_HAS_PARTITION_MGR=1
+        PURR_TARGET_WIP=1
+    )
+elseif(TARGET_DEVICE STREQUAL "waveshare169")
+    list(APPEND PURR_DEFS
+        PURR_DISPLAY_ST7789=1
+        PURR_HAS_TOUCH_CST816S=1
+        PURR_HAS_PARTITION_MGR=1
+        PURR_TARGET_WIP=1
+    )
 endif()
 
 if(PURR_ENABLE_BT)

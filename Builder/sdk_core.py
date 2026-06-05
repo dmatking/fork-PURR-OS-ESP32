@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PURR OS SDK v0.6.0 — interactive build / flash / monitor tool.
+"""PURR OS SDK v0.7.0 — interactive build / flash / monitor tool.
 Invoked by SDK.ps1 (or directly: python sdk_core.py [flags]).
 """
 
@@ -52,10 +52,12 @@ def _idf_py():
 # each other. Switching targets no longer requires a clean.
 
 _BUILD_DIRS = {
-    "heltec":   "build_heltec",
-    "cyd":      "build_cyd",
-    "cyd_boot": "build_cyd_boot",
-    "tdeck":    "build_tdeck",
+    "heltec":       "build_heltec",
+    "cyd":          "build_cyd",
+    "cyd_boot":     "build_cyd_boot",
+    "tdeck":        "build_tdeck",
+    "jc3248w535":   "build_jc3248w535",
+    "waveshare169": "build_waveshare169",
 }
 
 def _build_dir(cfg):
@@ -85,11 +87,11 @@ TARGETS = {
     },
     "cyd_boot": {
         "chip":         "esp32",
-        "desc":         "CYD Bootloader (ESP32-2432S024C)",
-        "spec":         "ESP32  4MB  ILI9341 2.4\"  CST816S cap touch  MiniWin WM — factory recovery image",
+        "desc":         "CYD PURR Kernel (ESP32-2432S024C)",
+        "spec":         "ESP32  4MB  ILI9341 2.4\"  CST816S cap touch — factory kernel (OTA-immune, chainloads ota_0)",
         "shells":       [],
         "default_lora": False,
-        "fixed":        True,   # no module toggles; always mini bootloader
+        "fixed":        True,   # no module toggles; always mini
     },
     "tdeck": {
         "chip":         "esp32s3",
@@ -98,6 +100,22 @@ TARGETS = {
         "shells":       ["blackberry", "smol"],
         "default_lora": True,
         "fixed":        False,
+    },
+    "jc3248w535": {
+        "chip":         "esp32s3",
+        "desc":         "JC3248W535 3.5\" (WIP)",
+        "spec":         "ESP32-S3  16MB  8MB PSRAM  ST7796 480x320  GT911 cap touch — WIP, verify pins",
+        "shells":       [],
+        "default_lora": False,
+        "fixed":        True,   # WIP: no module toggles until stable
+    },
+    "waveshare169": {
+        "chip":         "esp32s3",
+        "desc":         "Waveshare 1.69\" ESP32-S3 (WIP)",
+        "spec":         "ESP32-S3  4MB  ST7789 240x280  CST816S cap touch — WIP, verify pins",
+        "shells":       [],
+        "default_lora": False,
+        "fixed":        True,   # WIP: no module toggles until stable
     },
 }
 
@@ -669,7 +687,11 @@ def do_flash(cfg, port=None):
     baud   = cfg.get("flash_baud", 460800)
 
     if not port:
-        err("No flash port specified. Pass --flash <port> or set flash_port in config.")
+        port = input("  Flash port (e.g. COM8): ").strip()
+        if not port:
+            err("No flash port specified.")
+        cfg["flash_port"] = port
+        save_cfg(cfg)
 
     build_dir  = _build_dir(cfg)
     spiffs_img = os.path.join(build_dir, "spiffs.bin")
@@ -705,9 +727,13 @@ def do_flash(cfg, port=None):
 
 
 def do_monitor(cfg, port=None):
-    port = port or cfg.get("monitor_port", "")
+    port = port or cfg.get("monitor_port", "") or cfg.get("flash_port", "")
     if not port:
-        err("No monitor port specified. Pass --monitor <port> or set monitor_port in config.")
+        port = input("  Monitor port (e.g. COM8): ").strip()
+        if not port:
+            err("No monitor port specified.")
+        cfg["monitor_port"] = port
+        save_cfg(cfg)
     info(f"monitor on {port}  (Ctrl+] to exit)")
     bdn = os.path.basename(_build_dir(cfg))
     run_live(_idf_py() + ["-B", bdn, "-p", port, "monitor"], cwd=COREOS_DIR)
@@ -730,16 +756,16 @@ def do_full_build(cfg, clean=False):
     os_cfg["target"] = "cyd"
 
     print(f"\n{C_YLW}{'━'*44}{C_RST}")
-    info("Full Build step 1/2 — cyd_boot (factory bootloader)")
+    info("Full Build step 1/2 — PURR Kernel (factory, OTA-immune)")
     print(f"{C_YLW}{'━'*44}{C_RST}\n")
     do_build(boot_cfg, clean=clean)
 
     print(f"\n{C_YLW}{'━'*44}{C_RST}")
-    info("Full Build step 2/2 — cyd (full OS)")
+    info("Full Build step 2/2 — PURR userland (ota_0)")
     print(f"{C_YLW}{'━'*44}{C_RST}\n")
     do_build(os_cfg, clean=clean)
 
-    info("Full Build complete — factory + OS images ready")
+    info("Full Build complete — PURR Kernel + userland ready to flash")
 
 
 def do_full_flash(cfg, port=None):
@@ -748,7 +774,11 @@ def do_full_flash(cfg, port=None):
     baud = cfg.get("flash_baud", 460800)
 
     if not port:
-        err("No flash port specified. Pass --full-flash <port> or set flash_port in config.")
+        port = input("  Flash port (e.g. COM8): ").strip()
+        if not port:
+            err("No flash port specified.")
+        cfg["flash_port"] = port
+        save_cfg(cfg)
 
     boot_dir   = os.path.join(COREOS_DIR, _BUILD_DIRS["cyd_boot"])
     os_dir     = os.path.join(COREOS_DIR, _BUILD_DIRS["cyd"])
@@ -802,14 +832,15 @@ def show_banner(cfg):
     mods   = cfg["modules"]
 
     if target == "cyd_boot":
-        display = "cyd [factory bootloader]"
+        display = "cyd [PURR Kernel]"
     elif target == "tdeck" and cfg.get("tdeck_plus"):
         display = "tdeck-plus"
     else:
         display = target
 
     div()
-    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.6.0{C_RST}  {C_GRY}KITT v0.3.0{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}")
+    wip_tag = f"  {C_YLW}[WIP]{C_RST}" if "WIP" in t.get("spec", "") else ""
+    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.7.0{C_RST}  {C_GRY}KITT v0.4.0{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
 
     mini = (not mods.get("micropython", True)) or t["fixed"]
     print(f"  Variant  : {'mini — no MicroPython' if mini else 'full — with MicroPython'}")
@@ -838,16 +869,17 @@ def main_menu(cfg):
         show_banner(cfg)
         is_cyd = cfg["target"] in ("cyd", "cyd_boot")
 
-        print(f"  {C_WHT}[b]{C_RST} Build              ", end="")
         if is_cyd:
-            print(f"{C_WHT}[B]{C_RST} Full Clean Build  {C_GRY}(cyd_boot + cyd){C_RST}")
+            print(f"  {C_WHT}[b]{C_RST} Build              {C_GRY}(kernel + userland){C_RST}")
+            print(f"  {C_WHT}[B]{C_RST} Full Clean Build   {C_GRY}(kernel + userland, clean){C_RST}")
+            print(f"  {C_WHT}[k]{C_RST} Build Kernel only  {C_GRY}(factory partition only){C_RST}")
         else:
-            print(f"{C_WHT}[B]{C_RST} Clean Build")
+            print(f"  {C_WHT}[b]{C_RST} Build              {C_WHT}[B]{C_RST} Clean Build")
 
         print(f"  {C_WHT}[f]{C_RST} Flash               {C_WHT}[m]{C_RST} Monitor")
 
         if is_cyd:
-            print(f"  {C_WHT}[F]{C_RST} Full Flash          {C_GRY}(factory + ota_0 + SPIFFS in one pass){C_RST}")
+            print(f"  {C_WHT}[F]{C_RST} Full Flash          {C_GRY}(kernel + userland + SPIFFS in one pass){C_RST}")
 
         print(f"  {C_WHT}[r]{C_RST} Build + Flash       {C_WHT}[a]{C_RST} Build + Flash + Monitor")
         print(f"  {C_WHT}[c]{C_RST} Configure           {C_WHT}[s]{C_RST} Configure + Build")
@@ -858,12 +890,17 @@ def main_menu(cfg):
         if choice == "q":
             break
         elif choice == "b":
-            do_build(cfg)
+            if is_cyd:
+                do_full_build(cfg)
+            else:
+                do_build(cfg)
         elif choice == "B":
             if is_cyd:
                 do_full_build(cfg, clean=True)
             else:
                 do_build(cfg, clean=True)
+        elif choice == "k" and is_cyd:
+            do_build(cfg)
         elif choice == "f":
             do_flash(cfg)
         elif choice == "F" and is_cyd:
@@ -871,17 +908,26 @@ def main_menu(cfg):
         elif choice == "m":
             do_monitor(cfg)
         elif choice == "r":
-            do_build(cfg)
+            if is_cyd:
+                do_full_build(cfg)
+            else:
+                do_build(cfg)
             do_flash(cfg)
         elif choice == "a":
-            do_build(cfg)
+            if is_cyd:
+                do_full_build(cfg)
+            else:
+                do_build(cfg)
             do_flash(cfg)
             do_monitor(cfg)
         elif choice == "c":
             configure(cfg)
         elif choice == "s":
             configure(cfg)
-            do_build(cfg)
+            if is_cyd:
+                do_full_build(cfg)
+            else:
+                do_build(cfg)
         else:
             warn(f"Unknown option '{choice}'")
 
@@ -924,7 +970,8 @@ def main():
         prog="sdk_core.py",
         description="PURR OS SDK — build / flash / monitor tool",
     )
-    p.add_argument("--target",      choices=list(TARGETS.keys()))
+    p.add_argument("--target",      choices=list(TARGETS.keys()),
+                   metavar="|".join(TARGETS.keys()))
     p.add_argument("--shell",       choices=["both", "blackberry", "explorer", "smol", "none"])
     p.add_argument("--build",       action="store_true")
     p.add_argument("--flash",       metavar="PORT", default="")

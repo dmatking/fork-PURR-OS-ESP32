@@ -1,10 +1,10 @@
 #pragma once
 #include <stdint.h>
 
-// CYD (ESP32-2432S028R) ILI9341 wiring
+// CYD ILI9341 wiring
 // Backlight pin differs by CYD variant:
-//   S028R (2.8" resistive) = 21
-//   S024C (2.4" capacitive) = 27
+//   S024C (2.4" capacitive, CST816S) = 27   ← active target
+//   S028R (2.8" resistive,  XPT2046) = 21
 #ifdef CYD_VARIANT_S024C
 #  define CYD_TFT_BL  27
 #else

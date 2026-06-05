@@ -59,7 +59,7 @@ static void draw_desktop() {
     if (cursor < scroll_off) scroll_off = cursor;
     if (cursor >= scroll_off + LIST_ROWS) scroll_off = cursor - LIST_ROWS + 1;
 
-    char hint[17];
+    char hint[20];
     bool can_open = confirm && app_count > 0;
     snprintf(hint, sizeof(hint), "%s BCK:menu", can_open ? "SEL:open" : "SEL:next");
 

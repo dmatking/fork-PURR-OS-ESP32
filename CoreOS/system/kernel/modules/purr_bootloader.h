@@ -1,7 +1,11 @@
 #pragma once
+#include <stdint.h>
 
-// Kernel bootloader shell — OTA slot manager, launched on boot via GPIO or NVS flag.
-// Call purr_bootloader_request_reboot() from explorer (or any app) to trigger it next boot.
+// Factory-partition bootloader shell — generic OTA slot manager.
+// Launched automatically when the factory image boots (PURR_IS_BOOTLOADER_IMG).
+// To trigger a reboot to factory from the full OS, call pm_boot_to_factory()
+// in partition_manager.h instead.
 
-void purr_bootloader_start();
-void purr_bootloader_request_reboot();  // sets NVS flag then esp_restart()
+// sos      — true if a crash loop was detected; opens SOS screen instead of home
+// boot_tries — number of consecutive failed boots (shown in SOS UI)
+void purr_bootloader_start(bool sos = false, uint8_t boot_tries = 0);

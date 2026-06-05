@@ -2,6 +2,66 @@
 
 ---
 
+## [0.7.0] — 2026-06-04 — KITT 0.4.0 — PURR Kernel, factory chainload, SOS recovery, new targets
+
+### PURR Kernel — factory partition redesign
+- `CoreOS/system/system/main.cpp` — factory image now acts as a smart kernel, not just a passive recovery shell:
+  - Reads `esp_app_desc_t` from ota_0 at boot; if `project_name == "purr_os_core"`, chainloads immediately (~20ms delay)
+  - **Crash-loop detection**: increments `purr_bl/boot_tries` NVS key before each chainload; ota_0 clears it on successful KITT init; ≥3 consecutive failed boots → SOS mode
+  - **GPIO 0 held at power-on** → forces bootloader UI regardless of ota_0 contents
+  - Non-PURR firmware in ota_0 → falls through to bootloader UI (pure passthrough mode)
+- `CoreOS/system/kernel/kitt.cpp` — clears `purr_bl/boot_tries` counter at end of successful `KITT::init()`
+
+### SOS recovery mode
+- `CoreOS/system/kernel/modules/purr_bootloader.cpp` — new `PB_SOS` screen state:
+  - Red alert header with consecutive crash count
+  - **WIPE OTA 0** → confirm wipe flow; **BOOT ANYWAY** → clears counter + chainloads; **DISMISS** → clears counter + opens normal bootloader home
+- `purr_bootloader_start(bool sos, uint8_t boot_tries)` — factory kernel passes crash state in; `PB_SOS` is the initial screen when crash loop detected
+- `purr_bootloader.h` — added `#include <stdint.h>` (fixes `uint8_t` declaration error)
+
+### Firmware backup + restore flow
+- `CoreOS/system/kernel/modules/partition_manager.cpp` — new `pm_dump_to_sd(slot, path, cb)`:
+  - Reads OTA partition in 512-byte chunks via `esp_partition_read()`; writes to SD; trims trailing `0xFF` padding so the dump is a clean app image
+  - Mirror of `pm_install()` — the backup can be directly reflashed
+- `CoreOS/system/kernel/modules/partition_manager.h` — `pm_dump_to_sd` declared
+- `CoreOS/system/kernel/modules/purr_bootloader.cpp` — new screens and flow:
+  - `PB_CONFIRM_BACKUP` — offered before overwriting a slot that contains PURR firmware
+  - `PB_BACKING_UP` — progress screen for SD dump
+  - `PB_POST_INSTALL` — after any install: **RESTORE PURR** (reflash from backup + launch) or **BOOT NEW FW** (warn + launch)
+  - `PB_RESTORING` — progress screen for restore
+  - INSTALL action checks `esp_app_desc_t` of the target slot; if PURR firmware + SD present → backup offered automatically
+
+### Factory kernel linker stubs
+- `CoreOS/system/kernel/modules/stub_managers.cpp` — empty stub implementations of all `wifi_manager_*` and `power_manager_*` symbols; compiled only for `PURR_IS_BOOTLOADER_IMG`; satisfies linker without pulling wifi stack into the factory image
+
+### Build system — full CYD build by default
+- `Builder/sdk_core.py` — menu redesign for CYD targets:
+  - `[b]` / `[r]` / `[a]` / `[s]` now run `do_full_build` (kernel + userland) instead of single-target build
+  - `[B]` — same but clean
+  - `[k]` — new option: build kernel (factory) only
+  - WIP target banner tag `[WIP]` shown in yellow for jc3248w535 / waveshare169
+- `Builder/Build.ps1` — per-target build directories (`build_cyd`, `build_cyd_boot`, etc.) and per-target `sdkconfig_<target>`; `-B` and `-DSDKCONFIG` now passed correctly to all `idf.py` calls; monitor call gets `-B $buildDirName`
+- Port prompting: `do_flash`, `do_monitor`, `do_full_flash` now prompt for port interactively if none configured, and save the answer; `do_monitor` falls back to `flash_port` if `monitor_port` is empty
+- `sdk_core.py` — `cyd_boot` display label → `cyd [PURR Kernel]`; Full Build/Flash descriptions updated to kernel/userland terminology
+
+### WIP targets: JC3248W535 + Waveshare 1.69"
+- New display drivers: `display_st7796.cpp/.h` (480×320, ESP32-S3), `display_st7789.cpp/.h` (240×280, ESP32-S3)
+- New touch driver: `touch_gt911.cpp/.h` — GT911 5-point I2C; I2C address 0x5D (flippable to 0x14); hard-reset sequence; buffer-clear on read
+- Device JSONs: `jc3248w535.json`, `waveshare169.json`
+- sdkconfig.defaults: ESP32-S3, QIO flash, OPI PSRAM (jc3248w535), USB-OTG
+- Partition tables: `partitions_jc3248w535.csv` (16MB — 2MB factory, 6MB×2 OTA, ~2MB SPIFFS), `partitions_waveshare169.csv` (4MB — mirrors CYD layout)
+- `CoreOS/main/CMakeLists.txt` — target blocks for both; `PURR_TARGET_WIP=1`; forced mini build; FATAL_ERROR if BlackberryUI requested but MiniWin not cloned
+- `CoreOS/system/kernel/kitt.cpp` — display init, `text_print`, `text_clear`, `text_set_color`, touch init wired for `st7796`, `st7789`, `gt911`
+- `Builder/build_jc3248w535.ps1`, `Builder/build_waveshare169.ps1`
+
+### MiniWin build fixes (cyd)
+- `CoreOS/components/miniwinwm/CMakeLists.txt`:
+  - HAL filter changed from `.*/hal/.*\.c$` to `.*/hal/[^/]+/.+\.c$` — was accidentally excluding `hal/hal.c` (which defines `mw_hal_init`), causing linker failure
+  - MiniWin include dirs now explicitly listed in `INCLUDE_DIRS` for the cyd main component to work around IDF 5.3.x propagation bug
+- `CoreOS/main/CMakeLists.txt` — added `components/miniwinwm/MiniWin`, `hal`, `hal/PURR_CYD` to cyd `INCLUDE_DIRS`; FATAL_ERROR if BlackberryUI requested without MiniWin source cloned
+
+---
+
 ## [0.6.1] — 2026-06-04 — MajorasMask — Build system hotfixes, MiniWin CYD port
 
 ### IDF 5.3.x managed-component include propagation fix (TFT_eSPI + miniwinwm)

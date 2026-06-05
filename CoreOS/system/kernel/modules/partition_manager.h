@@ -52,3 +52,13 @@ int     pm_sd_list(pm_sd_file_t* files, int max);
 // Flash a .bin from SD to an OTA slot. Progress 0-100 reported via cb (nullable).
 bool    pm_install(uint8_t slot, const char* sd_path, const char* display_name,
                    pm_progress_cb_t cb);
+
+// Dump a live OTA slot to a .bin file on SD. Mirror image of pm_install().
+// path must be a full SD path, e.g. "/PURR_BACKUP.bin".
+bool    pm_dump_to_sd(uint8_t slot, const char* sd_path, pm_progress_cb_t cb);
+
+// Returns the OTA slot index that otadata will boot next (0, 1, …), or -1 if factory/none.
+int     pm_boot_slot();
+
+// Switch boot target to the factory partition and restart. Never returns on success.
+bool    pm_boot_to_factory();

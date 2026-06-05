@@ -1,2 +1,25 @@
-PURR_OS_docs/Schematic PDF.pdf
+# Build artifacts
+CoreOS/build/
+CoreOS/build_*/
+CoreOS/sdkconfig
+CoreOS/sdkconfig_*
+CoreOS/dependencies.lock
+
+# SDK config (contains local paths/ports, not for VCS)
 Builder/purr_build.cfg
+Builder/purr_sdk.cfg
+
+# Docs
+PURR_OS_docs/Schematic PDF.pdf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
