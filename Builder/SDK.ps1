@@ -6,8 +6,9 @@
 #   .\SDK.ps1
 #
 # Usage (direct / CI):
-#   .\SDK.ps1 -Target cyd -Shell explorer -Build -Flash COM8
-#   .\SDK.ps1 -Target cyd -FullBuild -Clean -FullFlash COM8   # first-time CYD setup
+#   .\SDK.ps1 -Target cyd_s028r -Build -Flash COM8             # original 2432S028R with XPT2046 SPI touch
+#   .\SDK.ps1 -Target cyd_s024c -Build -Flash COM8             # newer 2432S024C with CST816S I2C touch
+#   .\SDK.ps1 -Target cyd_s028r -FullBuild -Clean -FullFlash COM8   # first-time CYD setup (S028R variant)
 #   .\SDK.ps1 -Target cyd_boot -Build -Flash COM8 -Clean
 #   .\SDK.ps1 -Target heltec -Build -Mini -NoLora
 #
@@ -16,7 +17,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
     # ── Target & shell ───────────────────────────────────────────────────────────
-    [ValidateSet('heltec','cyd','cyd_boot','tdeck','jc3248w535','waveshare169')]
+    [ValidateSet('heltec','cyd_s028r','cyd_s024c','cyd','cyd_boot','tdeck','jc3248w535','waveshare169')]
     [string]$Target      = '',
 
     [ValidateSet('both','blackberry','explorer','smol','none')]
@@ -46,6 +47,10 @@ param(
     [ValidateSet('sx1262','rak3172','sx1276')]
     [string]$LoraKernel  = '',
     [switch]$TdeckPlus,          # T-Deck Plus variant (GPS)
+
+    # ── CYD variants ──────────────────────────────────────────────────────────────
+    [ValidateSet('s028r','s024c')]
+    [string]$CydVariant  = '',   # CYD display variant (s028r=original/XPT2046, s024c=newer/CST816S)
 
     # ── Flash options ─────────────────────────────────────────────────────────────
     [int]$Baud           = 0     # flash baud rate (default 460800)

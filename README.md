@@ -1,20 +1,68 @@
-# PURR OS — v0.7.0
+# PURR OS — v0.8.0
 
 > **MEGA DISCLAIMER:** This project is very much vibe-coded. It has gone from 0 to "Jesus Christ" at an alarming rate. It is fully open-source and humans are actively encouraged to help. Please.
 
 **P.U.R.R.** = Portable Unified Runtime & Radio Operating System
 Powered by the **K.I.T.T** (Kernel Interface Translation Toolkit) kernel — a modular, C and C++ -backed embedded OS for ESP32 hardware.
 
+## 🤖 Using Docs with AI Models
+
+All PURR OS documentation is **version-controlled and designed for AI-assisted development**. When adapting or extending the codebase with Claude, GPT, or similar models:
+
+1. **Reference the docs** — Read `PURR_OS_docs/` files relevant to your task
+2. **Ask specific questions** — "How do I add a new sensor module?" (see `02_KITT_Kernel_Spec.md`)
+3. **Get accurate context** — AI models produce better code when given full specification
+
+**[→ See AI Development Guide →](PURR_OS_docs/00_AI_Development_Guide.md)**
+
+---
+
+## Quick Start
+
+### Windows
+```powershell
+.\Builder\SDK.ps1 -Target cyd_s028r -Build
+.\Builder\SDK.ps1 -Target cyd_s028r -Flash COM8
+```
+
+### Linux / macOS
+```bash
+chmod +x setup_linux.sh
+./setup_linux.sh              # One-time setup (installs ESP-IDF 5.3.5)
+./Builder/sdk.sh --target cyd_s028r --build
+./Builder/sdk.sh --target cyd_s028r --flash /dev/ttyUSB0
+```
+
+For more details, see **[QUICKSTART.md](QUICKSTART.md)**.
+
 ---
 
 ## Versions
 
-| Component | Version |
-|-----------|---------|
-| PURR OS   | v0.7.0  |
-| KITT      | v0.4.0  |
+| Component | Version | Release Date |
+|-----------|---------|--------------|
+| PURR OS   | v0.8.0  | 2026-06-06   |
+| KITT      | v0.4.1  | 2026-06-06   |
 
 Version strings are defined in [`CoreOS/system/kernel/purr_version.h`](CoreOS/system/kernel/purr_version.h) and automatically embedded into the firmware image via `esp_app_desc_t` — visible in the bootloader's slot card and on the homescreen.
+
+### Release Notes: v0.8.0 / KITT v0.4.1
+
+**✅ Major Updates:**
+- Removed Arduino IDE dependency → pure **ESP-IDF 5.3.5**
+- Added **Linux/macOS support** (zero codebase changes)
+- MiniWin window manager as core UI layer
+- Swappable UI skins (BlackBerry, Explorer, ClassicMac)
+- Display type targets: **`cyd_s028r`** (original), **`cyd_s024c`** (newer)
+- XPT2046 & CST816S touch drivers unified
+- Memory optimizations (target 260KB+ heap for apps)
+- **All documentation now version-controlled & AI-friendly** (see [00_AI_Development_Guide.md](PURR_OS_docs/00_AI_Development_Guide.md))
+
+**🐛 KITT v0.4.1 Fixes:**
+- Display driver abstraction layer
+- Touch controller registration API
+- Partition manager for OTA & firmware backup
+- Recovery SOS mode implementation
 
 ---
 
@@ -30,8 +78,10 @@ The architecture splits across two flash partitions: a small **PURR Kernel** tha
 
 | Target | Chip | Display | Touch | Status | Notes |
 |--------|------|---------|-------|--------|-------|
-| `cyd` | ESP32-2432S024C | ILI9341 2.4" 320×240 | CST816S cap | ✅ Active | Full OS → `ota_0` |
-| `cyd_boot` | ESP32-2432S024C | ILI9341 2.4" 320×240 | CST816S cap | ✅ Active | PURR Kernel → `factory` |
+| `cyd_s028r` | ESP32-2432S028R | ILI9341 2.4" 320×240 | XPT2046 SPI | ✅ Active | Original variant (v0.4.0/v0.5.0) |
+| `cyd_s024c` | ESP32-2432S024C | ILI9341 2.4" 320×240 | CST816S I2C | ✅ Active | Newer variant |
+| `cyd` | ESP32-2432S024C | ILI9341 2.4" 320×240 | CST816S I2C | ✅ Active | Alias for S024C (use specific target) |
+| `cyd_boot` | ESP32-2432S024C | ILI9341 2.4" 320×240 | CST816S I2C | ✅ Active | PURR Kernel → `factory` |
 | `heltec` | ESP32-S3 | SSD1306 OLED 128×64 | — | ✅ Working | WiFi + LoRa, Smol shell |
 | `tdeck` | ESP32-S3 | ST7789 | trackball | 🚧 WIP | Shell pending |
 | `jc3248w535` | ESP32-S3 | ST7796 3.5" 480×320 | GT911 cap | 🚧 WIP | Verify pins before flashing |
@@ -267,6 +317,24 @@ For CYD first flash (two images required):
 .\Builder\build_cyd.ps1 -FullBuild -Clean -FullFlash COM8
 ```
 This builds the PURR Kernel and userland back-to-back and flashes everything in one esptool pass.
+
+---
+
+## Documentation
+
+All PURR OS specifications and architecture docs are in **[`PURR_OS_docs/`](PURR_OS_docs/)**:
+
+| Doc | Content |
+|-----|---------|
+| [`00_AI_Development_Guide.md`](PURR_OS_docs/00_AI_Development_Guide.md) | **→ How to use these docs with AI models** (Claude, GPT, etc.) |
+| [`01_Architecture.md`](PURR_OS_docs/01_Architecture.md) | System design, component relationships, layer separation |
+| [`02_KITT_Kernel_Spec.md`](PURR_OS_docs/02_KITT_Kernel_Spec.md) | Kernel API, task lifecycle, memory model |
+| [`05_Boot_Sequence.md`](PURR_OS_docs/05_Boot_Sequence.md) | Hardware init, OTA chainload, SOS recovery |
+| [`06_WindowsCE_UI_Spec.md`](PURR_OS_docs/06_WindowsCE_UI_Spec.md) | UI shell architecture, MiniWin integration |
+| [`12_TDeck_BlackBerry6_UI_Spec.md`](PURR_OS_docs/12_TDeck_BlackBerry6_UI_Spec.md) | BlackBerry OS 6-inspired shell implementation |
+| [and more...](PURR_OS_docs/) | App bundles, protocols, hardware specs |
+
+**→ Start here if you're modifying the codebase:** [00_AI_Development_Guide.md](PURR_OS_docs/00_AI_Development_Guide.md)
 
 ---
 

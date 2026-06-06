@@ -9,9 +9,6 @@ CoreOS/dependencies.lock
 Builder/purr_build.cfg
 Builder/purr_sdk.cfg
 
-# Docs
-PURR_OS_docs/Schematic PDF.pdf
-
 # Python
 __pycache__/
 *.pyc

@@ -77,18 +77,34 @@ TARGETS = {
         "default_lora": True,
         "fixed":        False,
     },
+    "cyd_s028r": {
+        "chip":         "esp32",
+        "desc":         "CYD S028R (ESP32-2432S028R, original)",
+        "spec":         "ESP32  4MB  ILI9341 2.4\"  XPT2046 SPI touch  LVGL + PURR WM — full OS (ota_0)",
+        "shells":       ["blackberry", "explorer", "classicmac", "both", "none"],
+        "default_lora": False,
+        "fixed":        False,
+    },
+    "cyd_s024c": {
+        "chip":         "esp32",
+        "desc":         "CYD S024C (ESP32-2432S024C, newer)",
+        "spec":         "ESP32  4MB  ILI9341 2.4\"  CST816S I2C touch  LVGL + PURR WM — full OS (ota_0)",
+        "shells":       ["blackberry", "explorer", "classicmac", "both", "none"],
+        "default_lora": False,
+        "fixed":        False,
+    },
     "cyd": {
         "chip":         "esp32",
-        "desc":         "CYD (ESP32-2432S024C)",
-        "spec":         "ESP32  4MB  ILI9341 2.4\"  CST816S cap touch  MiniWin WM — full OS (ota_0)",
-        "shells":       ["blackberry", "explorer", "both", "none"],
+        "desc":         "CYD (alias for S024C)",
+        "spec":         "Use cyd_s028r or cyd_s024c instead",
+        "shells":       ["blackberry", "explorer", "classicmac", "both", "none"],
         "default_lora": False,
         "fixed":        False,
     },
     "cyd_boot": {
         "chip":         "esp32",
-        "desc":         "CYD PURR Kernel (ESP32-2432S024C)",
-        "spec":         "ESP32  4MB  ILI9341 2.4\"  CST816S cap touch — factory kernel (OTA-immune, chainloads ota_0)",
+        "desc":         "CYD PURR Kernel (factory, all variants)",
+        "spec":         "ESP32  4MB  ILI9341 2.4\" — factory kernel (OTA-immune, chainloads ota_0)",
         "shells":       [],
         "default_lora": False,
         "fixed":        True,   # no module toggles; always mini
@@ -191,9 +207,10 @@ LORA_KERNEL_DESCS = {
 }
 
 SHELL_DESCS = {
-    "both":       "BlackberryUI preferred, Explorer as fallback (both on MiniWin)",
-    "blackberry": "BlackberryUI — BB-style status bar + app drawer (MiniWin)",
-    "explorer":   "Explorer — Windows CE / PDA taskbar + overlapping windows (MiniWin)",
+    "both":       "BlackberryUI + Explorer — both registered, BB launches first (LVGL)",
+    "blackberry": "BlackberryUI — BB-style status bar + app drawer (LVGL)",
+    "explorer":   "Explorer — Windows CE / PDA taskbar + icon grid (LVGL)",
+    "classicmac": "ClassicMac — Mac System 7/8 Platinum desktop + menu bar (LVGL)",
     "smol":       "Smol — minimal OLED shell",
     "none":       "Headless — no UI shell compiled",
 }
@@ -207,6 +224,7 @@ DEFAULT_CFG = {
     "flash_baud":   460800,
     "monitor_port": "",
     "tdeck_plus":   False,
+    "cyd_variant":  "s028r",
     "modules": {
         "bt":          True,
         "mtp":         False,
@@ -284,6 +302,15 @@ def pick_tdeck_variant(cfg):
     print(f"  [2]  Plus     {C_GRY}T-Deck Plus (u-blox MIA-M10Q GPS + larger battery){C_RST}")
     print()
     cfg["tdeck_plus"] = (input("  Choice [1]: ").strip() == "2")
+
+
+def pick_cyd_variant(cfg):
+    header("CYD display variant:")
+    print(f"  [1]  S028R    {C_GRY}Original (ESP32-2432S028R, v0.4.0/v0.5.0) — XPT2046 SPI touch{C_RST}")
+    print(f"  [2]  S024C    {C_GRY}Newer variant (ESP32-2432S024C) — CST816S I2C touch{C_RST}")
+    print()
+    choice = input("  Choice [1]: ").strip() or "1"
+    cfg["cyd_variant"] = "s024c" if choice == "2" else "s028r"
 
 
 def pick_lora_kernel(cfg):
@@ -396,6 +423,8 @@ def configure(cfg, full=True):
         pick_target(cfg)
         if cfg["target"] == "tdeck":
             pick_tdeck_variant(cfg)
+        elif cfg["target"] == "cyd":
+            pick_cyd_variant(cfg)
     pick_shell(cfg)
     pick_modules(cfg)
     pick_ports(cfg)
@@ -406,11 +435,20 @@ def configure(cfg, full=True):
 
 def _cmake_flags(cfg):
     target = cfg["target"]
+
+    # Map display type targets to cyd
+    if target in ("cyd_s028r", "cyd_s024c"):
+        cmake_target = "cyd"
+        display_variant = target.split("_")[1]  # s028r or s024c
+    else:
+        cmake_target = target
+        display_variant = cfg.get("cyd_variant", "s028r") if target == "cyd" else None
+
     t      = TARGETS[target]
     mods   = cfg["modules"]
     fixed  = t["fixed"]
 
-    flags = [f"-DTARGET_DEVICE={target}"]
+    flags = [f"-DTARGET_DEVICE={cmake_target}"]
 
     if t["shells"]:
         flags.append(f"-DPURR_SHELL={cfg.get('shell', 'both')}")
@@ -441,6 +479,10 @@ def _cmake_flags(cfg):
     _flag("PURR_ENABLE_FLASHER", "flasher", False)
 
     flags.append(f"-DBUILD_TDECK_PLUS={1 if cfg.get('tdeck_plus') else 0}")
+
+    # CYD display variant (s028r=original XPT2046, s024c=newer CST816S)
+    if cmake_target == "cyd" and display_variant:
+        flags.append(f"-DCYD_DISPLAY_VARIANT={display_variant}")
 
     return flags
 
@@ -883,6 +925,7 @@ def main_menu(cfg):
 
         print(f"  {C_WHT}[r]{C_RST} Build + Flash       {C_WHT}[a]{C_RST} Build + Flash + Monitor")
         print(f"  {C_WHT}[c]{C_RST} Configure           {C_WHT}[s]{C_RST} Configure + Build")
+        print(f"  {C_WHT}[~]{C_RST} Simulator           {C_GRY}(preview UI shells on PC){C_RST}")
         print(f"  {C_WHT}[q]{C_RST} Quit")
         print()
         choice = input("  Action: ").strip()
@@ -928,8 +971,111 @@ def main_menu(cfg):
                 do_full_build(cfg)
             else:
                 do_build(cfg)
+        elif choice == "~":
+            sim_menu()
         else:
             warn(f"Unknown option '{choice}'")
+
+
+# ── Simulator ────────────────────────────────────────────────────────────────
+
+SIM_SHELLS = {
+    "1": ("blackberry",  "BlackberryUI",     "320x240 — LVGL, real blackberry_ui.cpp"),
+    "2": ("explorer",    "Explorer",         "320x240 — LVGL, real explorer.cpp"),
+    "3": ("classicmac",  "ClassicMac",       "320x240 — LVGL, Mac System 7/8 Platinum"),
+    "4": ("classic",     "Classic [WIP]",    "320x240 — MiniWin standalone (TBD)"),
+}
+
+def do_sim(shell_key):
+    """Generate, build, and launch the PC simulator for the given shell."""
+    sim_dir = os.path.join(SCRIPT_DIR, "..", "sim")
+    sim_dir = os.path.normpath(sim_dir)
+
+    if not os.path.isdir(sim_dir):
+        err(f"sim/ directory not found at {sim_dir}")
+
+    gen_py  = os.path.join(sim_dir, "gen_sim_shell.py")
+    gen_dir = os.path.join(sim_dir, f"build_{shell_key}", "generated")
+    gen_out = os.path.join(gen_dir, "shell_sim.cpp")
+
+    cmake = shutil.which("cmake")
+    if not cmake:
+        err("cmake not found on PATH — install CMake to use the simulator")
+
+    mingw = shutil.which("mingw32-make") or shutil.which("make")
+    generator = ["MinGW Makefiles"] if shutil.which("mingw32-make") else []
+
+    # Step 1: generate shell source
+    info(f"simulator — generating {shell_key} shell source")
+    os.makedirs(gen_dir, exist_ok=True)
+    rc = run_live([sys.executable, gen_py, "--shell", shell_key, "--out", gen_out],
+                  cwd=sim_dir)
+    if rc != 0:
+        err(f"gen_sim_shell.py failed (exit {rc})")
+
+    # Step 2: cmake configure
+    build_dir = os.path.join(sim_dir, f"build_{shell_key}")
+    os.makedirs(build_dir, exist_ok=True)
+    info(f"simulator — cmake configure  [{shell_key}]")
+    cfg_args = [cmake, "-S", sim_dir, "-B", build_dir,
+                f"-DPURR_SHELL={shell_key}", "-DCMAKE_BUILD_TYPE=Release"]
+    if generator:
+        cfg_args += ["-G"] + generator
+    rc = run_live(cfg_args, cwd=sim_dir)
+    if rc != 0:
+        err(f"cmake configure failed (exit {rc})")
+
+    # Step 3: cmake build
+    info(f"simulator — cmake build  [{shell_key}]")
+    rc = run_live([cmake, "--build", build_dir, "--config", "Release"], cwd=sim_dir)
+    if rc != 0:
+        err(f"cmake build failed (exit {rc})")
+
+    # Step 4: find and launch exe
+    exe = None
+    for root, _, files in os.walk(build_dir):
+        for f in files:
+            if f.lower() in ("purr_sim.exe", "purr_sim"):
+                exe = os.path.join(root, f)
+                break
+        if exe:
+            break
+
+    if not exe:
+        err("purr_sim executable not found after build")
+
+    info(f"simulator — launching {exe}")
+    subprocess.Popen([exe], cwd=build_dir)
+
+
+def sim_menu():
+    """Interactive simulator shell picker."""
+    div()
+    print(f"\n  {C_WHT}{C_BOLD}PURR OS Simulator{C_RST}  {C_GRY}pick a UI shell to preview{C_RST}\n")
+
+    active = {k: v for k, v in SIM_SHELLS.items() if "WIP" not in v[1]}
+    wip    = {k: v for k, v in SIM_SHELLS.items() if "WIP"     in v[1]}
+
+    for k, (_, label, desc) in active.items():
+        print(f"  {C_WHT}[{k}]{C_RST} {label:<18}{C_GRY}{desc}{C_RST}")
+
+    if wip:
+        print(f"\n  {C_YLW}── WIP / TBD ─────────────────────────────────────────{C_RST}")
+        for k, (_, label, desc) in wip.items():
+            print(f"  {C_YLW}[{k}]{C_RST} {label:<18}{C_GRY}{desc}{C_RST}")
+
+    print(f"\n  {C_WHT}[q]{C_RST} Back")
+    print()
+    choice = input("  Shell: ").strip()
+    if choice in SIM_SHELLS:
+        shell_key, label, _ = SIM_SHELLS[choice]
+        if "WIP" in label:
+            warn(f"{label} is not yet available — TBD")
+            return
+        info(f"launching {label} simulator")
+        do_sim(shell_key)
+    elif choice != "q":
+        warn(f"Unknown option '{choice}'")
 
 
 # ── CLI overrides ─────────────────────────────────────────────────────────────
@@ -957,6 +1103,8 @@ def _apply_cli(cfg, args):
         cfg["lora_kernel"] = args.lora_kernel
     if args.tdeck_plus:
         cfg["tdeck_plus"] = True
+    if args.cyd_variant:
+        cfg["cyd_variant"] = args.cyd_variant
     if args.baud:
         cfg["flash_baud"] = args.baud
     # Enforce hardware constraints for the (possibly new) target
@@ -971,7 +1119,7 @@ def main():
         description="PURR OS SDK — build / flash / monitor tool",
     )
     p.add_argument("--target",      choices=list(TARGETS.keys()),
-                   metavar="|".join(TARGETS.keys()))
+                   metavar="heltec|cyd_s028r|cyd_s024c|cyd|cyd_boot|tdeck|jc3248w535|waveshare169")
     p.add_argument("--shell",       choices=["both", "blackberry", "explorer", "smol", "none"])
     p.add_argument("--build",       action="store_true")
     p.add_argument("--flash",       metavar="PORT", default="")
@@ -986,6 +1134,8 @@ def main():
     p.add_argument("--flasher",     action="store_true")
     p.add_argument("--lora-kernel", dest="lora_kernel", choices=list(LORA_KERNELS.keys()))
     p.add_argument("--tdeck-plus",  action="store_true", dest="tdeck_plus")
+    p.add_argument("--cyd-variant", dest="cyd_variant", choices=["s028r", "s024c"],
+                   help="CYD display variant: s028r=original/XPT2046, s024c=newer/CST816S")
     p.add_argument("--configure",   action="store_true")
     p.add_argument("--baud",        type=int, default=0)
     p.add_argument("--full-build",  action="store_true", dest="full_build",
