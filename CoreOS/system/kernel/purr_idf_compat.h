@@ -128,8 +128,8 @@ struct _PurrSerial {
 };
 static _PurrSerial Serial __attribute__((unused));
 
-// ── String (Arduino) → std::string ───────────────────────────────────────────
-typedef std::string String;
+// ── String ───────────────────────────────────────────────────────────────────
+// Now provided by Arduino.h (class String) instead of std::string
 
 // ── min/max/constrain ─────────────────────────────────────────────────────────
 #ifndef min

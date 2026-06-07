@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <string.h>
+#include <stdio.h>
 #include <cstring>
 #include <cstdio>
 
