@@ -21,13 +21,15 @@ int16_t mw_hal_lcd_get_display_width(void)  { return CYD_TFT_WIDTH;  }
 int16_t mw_hal_lcd_get_display_height(void) { return CYD_TFT_HEIGHT; }
 
 void mw_hal_lcd_pixel(int16_t x, int16_t y, mw_hal_lcd_colour_t colour) {
-    display_ili9341_fill_rect(x, y, 1, 1, to_rgb565(colour));
+    // Single pixel — still use push_block for consistent SPI path
+    display_ili9341_push_block(x, y, 1, 1, to_rgb565(colour));
 }
 
 void mw_hal_lcd_filled_rectangle(int16_t start_x, int16_t start_y,
                                   int16_t width, int16_t height,
                                   mw_hal_lcd_colour_t colour) {
-    display_ili9341_fill_rect(start_x, start_y, width, height, to_rgb565(colour));
+    // push_block = startWrite+setAddrWindow+pushBlock+endWrite (proven LVGL path)
+    display_ili9341_push_block(start_x, start_y, width, height, to_rgb565(colour));
 }
 
 void mw_hal_lcd_monochrome_bitmap_clip(int16_t image_start_x, int16_t image_start_y,
@@ -41,15 +43,24 @@ void mw_hal_lcd_monochrome_bitmap_clip(int16_t image_start_x, int16_t image_star
     uint16_t bg565 = to_rgb565(bg_colour);
     uint16_t stride = (bitmap_width + 7) / 8;
 
+    // Build a row buffer and send each visible row as one SPI burst
+    static uint16_t row_buf[320];
     for (int16_t row = 0; row < (int16_t)bitmap_height; row++) {
         int16_t sy = image_start_y + row;
         if (sy < clip_start_y || sy >= clip_start_y + clip_height) continue;
-        for (int16_t col = 0; col < (int16_t)bitmap_width; col++) {
-            int16_t sx = image_start_x + col;
-            if (sx < clip_start_x || sx >= clip_start_x + clip_width) continue;
+
+        // Compute clipped x range
+        int16_t x0 = (image_start_x >= clip_start_x) ? 0 : (clip_start_x - image_start_x);
+        int16_t x1 = (int16_t)bitmap_width;
+        if (image_start_x + x1 > clip_start_x + clip_width)
+            x1 = clip_start_x + clip_width - image_start_x;
+        if (x0 >= x1) continue;
+
+        for (int16_t col = x0; col < x1; col++) {
             bool set = (image_data[row * stride + col / 8] >> (7 - (col & 7))) & 1;
-            display_ili9341_fill_rect(sx, sy, 1, 1, set ? fg565 : bg565);
+            row_buf[col - x0] = set ? fg565 : bg565;
         }
+        display_ili9341_push_colors(image_start_x + x0, sy, x1 - x0, 1, row_buf);
     }
 }
 
@@ -58,19 +69,24 @@ void mw_hal_lcd_colour_bitmap_clip(int16_t image_start_x, int16_t image_start_y,
                                     int16_t clip_start_x, int16_t clip_start_y,
                                     int16_t clip_width, int16_t clip_height,
                                     const uint8_t *image_data) {
-    // Bitmap data is packed RGB888 (3 bytes per pixel, row-major)
+    static uint16_t row_buf[320];
     for (int16_t row = 0; row < (int16_t)bitmap_height; row++) {
         int16_t sy = image_start_y + row;
         if (sy < clip_start_y || sy >= clip_start_y + clip_height) continue;
-        for (int16_t col = 0; col < (int16_t)bitmap_width; col++) {
-            int16_t sx = image_start_x + col;
-            if (sx < clip_start_x || sx >= clip_start_x + clip_width) continue;
+
+        int16_t x0 = (image_start_x >= clip_start_x) ? 0 : (clip_start_x - image_start_x);
+        int16_t x1 = (int16_t)bitmap_width;
+        if (image_start_x + x1 > clip_start_x + clip_width)
+            x1 = clip_start_x + clip_width - image_start_x;
+        if (x0 >= x1) continue;
+
+        for (int16_t col = x0; col < x1; col++) {
             const uint8_t *p = image_data + (row * bitmap_width + col) * 3;
-            uint16_t rgb565 = ((uint16_t)(p[0] & 0xF8) << 8)
-                            | ((uint16_t)(p[1] & 0xFC) << 3)
-                            | (p[2] >> 3);
-            display_ili9341_fill_rect(sx, sy, 1, 1, rgb565);
+            row_buf[col - x0] = ((uint16_t)(p[0] & 0xF8) << 8)
+                               | ((uint16_t)(p[1] & 0xFC) << 3)
+                               | (p[2] >> 3);
         }
+        display_ili9341_push_colors(image_start_x + x0, sy, x1 - x0, 1, row_buf);
     }
 }
 

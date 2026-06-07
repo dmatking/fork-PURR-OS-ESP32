@@ -1,5 +1,5 @@
 #include "mtp_manager.h"
-#include <Arduino.h>
+#include "../purr_idf_compat.h"
 
 // USB MTP mode — allows PC to browse and write to SPIFFS/LittleFS over USB.
 // Requires USB_MSC or a MTP library (e.g., ESP_MTP or tinyusb MTP class).

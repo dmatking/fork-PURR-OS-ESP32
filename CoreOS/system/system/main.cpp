@@ -1,6 +1,7 @@
 // Sits between KITT and userland apps. Spawns the appropriate shell at boot.
 
 #include "../kernel/kitt.h"
+#include "../kernel/modules/purr_wm.h"
 #ifdef PURR_DISPLAY_SSD1306
 #  include "../../apps/smol/smol.h"
 #endif
@@ -10,18 +11,23 @@
 #ifdef PURR_HAS_EXPLORER
 #  include "../kernel/modules/explorer.h"
 #endif
+#ifdef PURR_HAS_CLASSICMAC
+#  include "../kernel/modules/classicmac.h"
+#endif
 #ifdef PURR_HAS_BLACKBERRY_UI
 #  include "../kernel/modules/blackberry_ui.h"
 #endif
 #ifdef PURR_HAS_PARTITION_MGR
 #  include "../kernel/modules/partition_manager.h"
 #endif
-#include <Arduino.h>
-#include <SPIFFS.h>
-#include <Preferences.h>
-#include <esp_ota_ops.h>
-#include <esp_partition.h>
-#include <esp_app_desc.h>
+#include "../kernel/purr_idf_compat.h"
+#include "esp_spiffs.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "esp_app_desc.h"
+#include <stdio.h>
 
 extern KITT kitt;
 extern void  bridge_start();
@@ -34,10 +40,10 @@ static int last_mem_warn = 0;
 
 // Crash log
 static void write_crash_log(const char* app, const char* reason) {
-    File f = SPIFFS.open("/logs/crash.txt", "a");
+    FILE* f = fopen("/spiffs/logs/crash.txt", "a");
     if (!f) return;
-    f.printf("[%lu] %s: %s\n", millis(), app, reason);
-    f.close();
+    fprintf(f, "[%lu] %s: %s\n", (unsigned long)millis(), app, reason);
+    fclose(f);
 }
 
 // Memory monitor callback (registered with KITT)
@@ -105,22 +111,25 @@ static void system_task(void*) {
 
         bool is_purr = !force_bl && ota0_is_purr();
 
-        // Read crash-loop counter
-        Preferences bl_prefs;
-        bl_prefs.begin(PURR_BL_NVS_NS, false);
-        uint8_t boot_tries = bl_prefs.getUChar(PURR_BL_NVS_KEY, 0);
+        // Read crash-loop counter from NVS
+        nvs_flash_init();
+        nvs_handle_t nvs;
+        uint8_t boot_tries = 0;
+        if (nvs_open(PURR_BL_NVS_NS, NVS_READWRITE, &nvs) == ESP_OK) {
+            nvs_get_u8(nvs, PURR_BL_NVS_KEY, &boot_tries);
+        }
 
         bool sos_mode = is_purr && (boot_tries >= PURR_SOS_THRESHOLD);
 
         if (is_purr && !sos_mode) {
-            // Increment before chainloading — cleared by ota_0 on successful init
-            bl_prefs.putUChar(PURR_BL_NVS_KEY, (uint8_t)(boot_tries + 1));
-            bl_prefs.end();
+            nvs_set_u8(nvs, PURR_BL_NVS_KEY, (uint8_t)(boot_tries + 1));
+            nvs_commit(nvs);
+            nvs_close(nvs);
             Serial.printf("[sys] PURR firmware OK (attempt %u/%u) — chainloading\n",
                           boot_tries + 1, PURR_SOS_THRESHOLD);
             pm_launch(0);  // never returns
         }
-        bl_prefs.end();
+        nvs_close(nvs);
 
         if (force_bl)
             Serial.println("[sys] GPIO 0 held — forcing bootloader UI");
@@ -155,18 +164,30 @@ static void system_task(void*) {
         smol_start();
 #endif
     } else {
+        // TEMP: shell registration disabled pending linker fix
+        // TODO: restore shell initialization once linker symbol issue is resolved
+        Serial.println("[sys] shells: TEMP disabled (linker symbol debug pending)");
+        /* DISABLED PENDING LINKER DEBUG
 #ifdef PURR_HAS_BLACKBERRY_UI
-        Serial.println("[sys] launching BlackberryUI");
+        Serial.println("[sys] registering BlackberryUI shell");
         blackberry_ui_start();
-#elif defined(PURR_HAS_EXPLORER)
-        Serial.println("[sys] launching explorer.paws");
+#endif
+#ifdef PURR_HAS_EXPLORER
+        Serial.println("[sys] registering Explorer shell");
         explorer_start();
-#else
+#endif
+#ifdef PURR_HAS_CLASSICMAC
+        Serial.println("[sys] registering ClassicMac shell");
+        classicmac_start();
+#endif
+#if !defined(PURR_HAS_BLACKBERRY_UI) && !defined(PURR_HAS_EXPLORER)
         Serial.println("[sys] ERR: no shell compiled");
         kitt.text_print(0, "PURR OS");
         kitt.text_print(1, kitt.device_name());
         kitt.text_print(2, "No shell");
 #endif
+        purr_wm_start();
+        */
     }
 
     // System watchdog loop

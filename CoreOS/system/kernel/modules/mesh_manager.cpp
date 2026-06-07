@@ -2,7 +2,7 @@
 
 #ifdef PURR_HAS_MESH
 
-#include <Arduino.h>
+#include "../purr_idf_compat.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>

@@ -1,5 +1,5 @@
 #include "pi_manager.h"
-#include <Arduino.h>
+#include "../purr_idf_compat.h"
 
 // Forward declarations to kitt.cpp — pi_manager calls back into KITT
 // to trigger display yield/reclaim without a circular include.

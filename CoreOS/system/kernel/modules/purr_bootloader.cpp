@@ -12,9 +12,10 @@
 #include "touch_cst816s.h"
 #include "partition_manager.h"
 #include "../kitt.h"
-#include <Arduino.h>
-#include <Preferences.h>
-#include <esp_app_desc.h>
+#include "../purr_idf_compat.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "esp_app_desc.h"
 #include <esp_app_format.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
@@ -557,12 +558,12 @@ static void on_tap(int tag) {
     case PB_SOS:
         if (tag == TAG_NO) {
             // Dismiss — clear counter so normal bootloader home shows
-            Preferences p; p.begin("purr_bl", false); p.putUChar("boot_tries", 0); p.end();
+            { nvs_handle_t h; if (nvs_open("purr_bl", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u8(h, "boot_tries", 0); nvs_commit(h); nvs_close(h); } }
             s_boot_tries = 0;
             s_screen = PB_HOME;
         } else if ((tag & 0xF0) == 0x10) {
             // BOOT ANYWAY — clear counter and chainload
-            Preferences p; p.begin("purr_bl", false); p.putUChar("boot_tries", 0); p.end();
+            { nvs_handle_t h; if (nvs_open("purr_bl", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u8(h, "boot_tries", 0); nvs_commit(h); nvs_close(h); } }
             pm_launch(0);  // never returns
         } else if ((tag & 0xF0) == 0x20) {
             // WIPE — go through normal confirm flow

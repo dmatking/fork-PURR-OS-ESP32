@@ -36,7 +36,7 @@ if (-not $env:IDF_PYTHON) {
     # 1. Try PATH: find first python.exe that can import esptool
     $py = (Get-Command python -ErrorAction SilentlyContinue).Source
     if ($py) {
-        $ok = & $py -c "import esptool" 2>$null; if ($?) { $found = $py }
+        & $py -c "import esptool" 2>$null; if ($?) { $found = $py }
     }
     # 2. Search IDF tools directory for a venv python
     if (-not $found -and $env:IDF_TOOLS_PATH) {
@@ -53,7 +53,7 @@ if (-not $env:IDF_PYTHON) {
         $env:IDF_PYTHON = $found
         Write-Host "[sdk] IDF Python: $found" -ForegroundColor DarkGray
     } else {
-        Write-Warning "[sdk] Could not locate IDF Python with esptool — flash may fail"
+        Write-Warning "[sdk] Could not locate IDF Python with esptool - flash may fail"
         $env:IDF_PYTHON = 'python'
     }
 }

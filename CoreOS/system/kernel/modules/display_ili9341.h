@@ -1,29 +1,42 @@
 #pragma once
+// display_ili9341.h — ILI9341 display driver (pure ESP-IDF)
+
 #include <stdint.h>
 
-// CYD ILI9341 wiring
-// Backlight pin differs by CYD variant:
-//   S024C (2.4" capacitive, CST816S) = 27   ← active target
-//   S028R (2.8" resistive,  XPT2046) = 21
+// CYD ESP32-2432S028R (original) and S024C (newer) variants
 #ifdef CYD_VARIANT_S024C
-#  define CYD_TFT_BL  27
+#  define CYD_TFT_BL   27
+#  define CYD_TFT_MOSI 23
+#  define CYD_TFT_MISO 19
+#  define CYD_TFT_SCK  18
+#  define CYD_TFT_CS   5
+#  define CYD_TFT_DC   2
+#  define CYD_TFT_RST  4
 #else
-#  define CYD_TFT_BL  21
+// ESP32-2432S028R (v0.4.0/v0.5.0 original)
+#  define CYD_TFT_BL   21
+#  define CYD_TFT_MOSI 13
+#  define CYD_TFT_MISO 12
+#  define CYD_TFT_SCK  14
+#  define CYD_TFT_CS   15
+#  define CYD_TFT_DC   2
+#  define CYD_TFT_RST  4
 #endif
 #define CYD_TFT_WIDTH  320
 #define CYD_TFT_HEIGHT 240
 
-void display_ili9341_init();
-void display_ili9341_update();
-void display_ili9341_deinit();
+void display_ili9341_init(void);
+void display_ili9341_update(void);
+void display_ili9341_deinit(void);
 void display_ili9341_set_brightness(uint8_t level);
 
-// Row-based text output (boot splash / emergency / verbose log)
-void display_ili9341_clear();
+void display_ili9341_clear(void);
 void display_ili9341_text(uint8_t row, const char* text);
 void display_ili9341_set_text_colors(uint16_t fg_rgb565, uint16_t bg_rgb565);
 
-// Drawing primitives (used by purr_shell and any future TFT-direct UI)
+void display_ili9341_push_block(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+void display_ili9341_push_colors(int16_t x, int16_t y, int16_t w, int16_t h,
+                                  const uint16_t* colors);
 void display_ili9341_fill_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
 void display_ili9341_draw_hline(int16_t x, int16_t y, int16_t w, uint16_t color);
 void display_ili9341_draw_string(int16_t x, int16_t y, const char* s,

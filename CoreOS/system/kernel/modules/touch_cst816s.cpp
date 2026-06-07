@@ -1,53 +1,70 @@
-// touch_cst816s.cpp — CST816S capacitive I2C touch driver
-// Used on CYD ESP32-2432S024C (2.4" capacitive variant).
+// touch_cst816s.cpp — CST816S capacitive I2C touch driver (pure ESP-IDF)
 
 #ifdef PURR_HAS_TOUCH_CST816S
 
 #include "touch_cst816s.h"
-#include <Arduino.h>
-#include <Wire.h>
+#include "driver/i2c_master.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char* TAG = "touch";
 
 #define CST_ADDR   0x15
 #define CST_SDA    33
 #define CST_SCL    32
 #define CST_INT    21
 #define CST_RST    25
-#define CST_REG    0x01   // first data register (6 bytes: gesture, fingers, XH, XL, YH, YL)
+#define CST_REG    0x01
 
-// Landscape coordinate mapping for TFT rotation=1 (USB on right, 320×240).
-// CST816S reports portrait coords: raw_x=0..239, raw_y=0..319.
-// Adjust these if touch appears mirrored after testing.
-#define MAP_SCREEN_X(rx, ry)  ((int16_t)(ry))          // portrait y → landscape x
-#define MAP_SCREEN_Y(rx, ry)  ((int16_t)(rx))          // portrait x → landscape y
+#define MAP_SCREEN_X(rx, ry)  ((int16_t)(ry))
+#define MAP_SCREEN_Y(rx, ry)  ((int16_t)(rx))
 
-static TwoWire _wire(0);
+static i2c_master_bus_handle_t s_bus = NULL;
+static i2c_master_dev_handle_t s_dev = NULL;
 
-void touch_cst816s_init() {
-    pinMode(CST_RST, OUTPUT);
-    digitalWrite(CST_RST, LOW);  delay(10);
-    digitalWrite(CST_RST, HIGH); delay(50);
+void touch_cst816s_init(void) {
+    // Hardware reset
+    gpio_set_direction((gpio_num_t)CST_RST, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)CST_RST, 0); vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level((gpio_num_t)CST_RST, 1); vTaskDelay(pdMS_TO_TICKS(50));
 
-    pinMode(CST_INT, INPUT);
+    gpio_set_direction((gpio_num_t)CST_INT, GPIO_MODE_INPUT);
 
-    _wire.begin(CST_SDA, CST_SCL, 400000);
-    Serial.printf("[touch] CST816S init  SDA=%d SCL=%d INT=%d RST=%d\n",
-                  CST_SDA, CST_SCL, CST_INT, CST_RST);
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port      = I2C_NUM_0,
+        .sda_io_num    = (gpio_num_t)CST_SDA,
+        .scl_io_num    = (gpio_num_t)CST_SCL,
+        .clk_source    = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .intr_priority = 0,
+        .trans_queue_depth = 0,
+        .flags = { .enable_internal_pullup = true },
+    };
+    i2c_new_master_bus(&bus_cfg, &s_bus);
+
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address  = CST_ADDR,
+        .scl_speed_hz    = 400000,
+        .scl_wait_us     = 0,
+        .flags = {},
+    };
+    i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev);
+
+    ESP_LOGI(TAG, "CST816S init  SDA=%d SCL=%d INT=%d RST=%d", CST_SDA, CST_SCL, CST_INT, CST_RST);
 }
 
 bool touch_cst816s_get_event(cst_touch_event_t* ev) {
+    uint8_t reg = CST_REG;
     uint8_t buf[6] = {};
 
-    _wire.beginTransmission(CST_ADDR);
-    _wire.write(CST_REG);
-    if (_wire.endTransmission(false) != 0) {
+    esp_err_t err = i2c_master_transmit_receive(s_dev, &reg, 1, buf, 6, 10);
+    if (err != ESP_OK) {
         ev->pressed = false;
         return false;
     }
-    if (_wire.requestFrom((uint8_t)CST_ADDR, (uint8_t)6) != 6) {
-        ev->pressed = false;
-        return false;
-    }
-    for (int i = 0; i < 6; i++) buf[i] = _wire.read();
 
     uint8_t  fingers = buf[1];
     uint16_t raw_x   = ((uint16_t)(buf[2] & 0x0F) << 8) | buf[3];

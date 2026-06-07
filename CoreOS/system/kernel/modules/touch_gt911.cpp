@@ -1,66 +1,69 @@
-// touch_gt911.cpp — GT911 5-point I2C capacitive touch driver
+// touch_gt911.cpp — GT911 5-point I2C capacitive touch driver (pure ESP-IDF)
 // Used on JC3248W535 (ESP32-S3, 3.5" 480x320).
-// WIP — verify pins and I2C address on hardware.
 
 #ifdef PURR_HAS_TOUCH_GT911
 
 #include "touch_gt911.h"
-#include <Arduino.h>
-#include <Wire.h>
+#include "driver/gpio.h"
+#include "driver/i2c_master.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
-#define GT911_ADDR       0x5D   // flip to 0x14 if unresponsive
+#define GT911_ADDR       0x5D
 #define GT911_SDA        19
 #define GT911_SCL        20
 #define GT911_INT        18
 #define GT911_RST        38
 
-// GT911 register map (relevant subset)
-#define GT911_REG_STATUS 0x814E  // touch status: bit7=buffer ready, bits[3:0]=point count
-#define GT911_REG_PT1    0x8150  // first touch point (8 bytes: x_lo, x_hi, y_lo, y_hi, sz_lo, sz_hi, track_id, 0)
+#define GT911_REG_STATUS 0x814E
+#define GT911_REG_PT1    0x8150
 
-static TwoWire _wire(0);
+static i2c_master_bus_handle_t _i2c_bus = NULL;
+static i2c_master_dev_handle_t _gt911_dev = NULL;
 
 static void _write_reg(uint16_t reg, uint8_t val) {
-    _wire.beginTransmission(GT911_ADDR);
-    _wire.write((uint8_t)(reg >> 8));
-    _wire.write((uint8_t)(reg & 0xFF));
-    _wire.write(val);
-    _wire.endTransmission();
+    uint8_t buf[] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF), val };
+    i2c_master_transmit(_gt911_dev, buf, sizeof(buf), 100);
 }
 
 static bool _read_regs(uint16_t reg, uint8_t* buf, uint8_t len) {
-    _wire.beginTransmission(GT911_ADDR);
-    _wire.write((uint8_t)(reg >> 8));
-    _wire.write((uint8_t)(reg & 0xFF));
-    if (_wire.endTransmission(false) != 0) return false;
-    if (_wire.requestFrom((uint8_t)GT911_ADDR, len) != len) return false;
-    for (uint8_t i = 0; i < len; i++) buf[i] = _wire.read();
-    return true;
+    uint8_t addr[] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
+    esp_err_t ret = i2c_master_transmit_receive(_gt911_dev, addr, sizeof(addr), buf, len, 100);
+    return ret == ESP_OK;
 }
 
 void touch_gt911_init() {
-    // Hard reset sequence
-    pinMode(GT911_RST, OUTPUT);
-    pinMode(GT911_INT, OUTPUT);
+    i2c_master_bus_config_t bus_cfg = {};
+    bus_cfg.i2c_port = I2C_NUM_0;
+    bus_cfg.sda_io_num = GT911_SDA;
+    bus_cfg.scl_io_num = GT911_SCL;
+    bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus_cfg.glitch_ignore_cnt = 7;
 
-    // Pull INT low before reset to select I2C address 0x5D
-    digitalWrite(GT911_INT, LOW);
-    digitalWrite(GT911_RST, LOW);  delay(20);
-    digitalWrite(GT911_RST, HIGH); delay(10);
+    i2c_new_master_bus(&bus_cfg, &_i2c_bus);
 
-    // Float INT so GT911 can use it as interrupt output
-    pinMode(GT911_INT, INPUT);
-    delay(50);
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.device_address = GT911_ADDR;
+    i2c_master_bus_add_device(_i2c_bus, &dev_cfg, &_gt911_dev);
 
-    _wire.begin(GT911_SDA, GT911_SCL, 400000);
+    gpio_set_direction((gpio_num_t)GT911_RST, GPIO_MODE_OUTPUT);
+    gpio_set_direction((gpio_num_t)GT911_INT, GPIO_MODE_OUTPUT);
 
-    // Read product ID to confirm comms (should read "911\0")
+    gpio_set_level((gpio_num_t)GT911_INT, 0);
+    gpio_set_level((gpio_num_t)GT911_RST, 0);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    gpio_set_level((gpio_num_t)GT911_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    gpio_set_direction((gpio_num_t)GT911_INT, GPIO_MODE_INPUT);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
     uint8_t id[4] = {};
     if (_read_regs(0x8140, id, 4)) {
-        Serial.printf("[touch] GT911 ID: %c%c%c  addr=0x%02X\n",
-                      id[0], id[1], id[2], GT911_ADDR);
+        ESP_LOGI("touch", "GT911 ID: %c%c%c  addr=0x%02X", id[0], id[1], id[2], GT911_ADDR);
     } else {
-        Serial.printf("[touch] GT911 no response at 0x%02X — try 0x14\n", GT911_ADDR);
+        ESP_LOGI("touch", "GT911 no response at 0x%02X — try 0x14", GT911_ADDR);
     }
 }
 
@@ -75,18 +78,15 @@ bool touch_gt911_get_event(gt911_touch_event_t* ev) {
     uint8_t pts = (status & 0x0F);
 
     if (!ready || pts == 0) {
-        // Clear buffer-ready flag
         if (ready) _write_reg(GT911_REG_STATUS, 0);
         ev->pressed = false;
         ev->points  = 0;
         return true;
     }
 
-    // Read first touch point
     uint8_t buf[7] = {};
     bool ok = _read_regs(GT911_REG_PT1, buf, 7);
 
-    // Clear buffer-ready flag
     _write_reg(GT911_REG_STATUS, 0);
 
     if (!ok) { ev->pressed = false; return false; }
@@ -96,10 +96,9 @@ bool touch_gt911_get_event(gt911_touch_event_t* ev) {
 
     ev->pressed = true;
     ev->points  = pts;
-    // GT911 reports in display coordinates directly — landscape 480x320
     ev->x = (int16_t)raw_x;
     ev->y = (int16_t)raw_y;
     return true;
 }
 
-#endif  // PURR_HAS_TOUCH_GT911
+#endif

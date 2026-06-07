@@ -1,5 +1,6 @@
 #include "touch_xpt2046.h"
-#include <Arduino.h>
+#include "../purr_idf_compat.h"
+#include "driver/gpio.h"
 
 // CYD touch SPI pins
 static const int8_t T_MOSI = 32;

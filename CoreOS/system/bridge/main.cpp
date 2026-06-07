@@ -2,9 +2,10 @@
 // and brokers radio handoff for /friends/ firmware.
 
 #include "../kernel/kitt.h"
-#include <Arduino.h>
-#include <SPIFFS.h>
+#include "../kernel/purr_idf_compat.h"
 #include <ArduinoJson.h>
+#include <stdio.h>
+#include <sys/stat.h>
 
 extern KITT kitt;
 
@@ -33,18 +34,19 @@ static KITT::generic_key_t string_to_key(const char* s) {
 
 static void load_keymap(const char* path) {
     keymap_count = 0;
-    File f = SPIFFS.open(path, "r");
+    FILE* f = fopen(path, "r");
     if (!f) {
         Serial.printf("[bridge] keymap not found: %s\n", path);
         return;
     }
+    char buf[1024] = {};
+    fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
     JsonDocument doc;
-    if (deserializeJson(doc, f) != DeserializationError::Ok) {
-        f.close();
+    if (deserializeJson(doc, buf) != DeserializationError::Ok) {
         Serial.println("[bridge] keymap parse error");
         return;
     }
-    f.close();
 
     // keymap JSON: { "pin_number_string": "KEY_NAME", ... }
     for (JsonPair kv : doc.as<JsonObject>()) {
@@ -91,7 +93,8 @@ static void bridge_task(void*) {
     // KITT exposes device_name; keymap path is in config.
     // For now load the default cattopad map if present, heltec buttons otherwise.
     const char* kmap = "/system/bridge/keymaps/cattopad_4x5.json";
-    if (!SPIFFS.exists(kmap))
+    struct stat st;
+    if (stat(kmap, &st) != 0)
         kmap = "/system/bridge/keymaps/heltec.json";
     load_keymap(kmap);
 

@@ -54,10 +54,13 @@
 #  include "../micropython/mpython_runtime.h"
 #endif
 
-#include <Arduino.h>
-#include <SPIFFS.h>
-#include <nvs_flash.h>
-#include <Preferences.h>
+#include "purr_idf_compat.h"
+#include "esp_spiffs.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "esp_log.h"
+#include <dirent.h>
+#include <stdio.h>
 
 #ifdef PURR_HAS_LVGL
 #  include <lvgl.h>
@@ -88,7 +91,6 @@ static int gen_buf_tail = 0;
 static KITT::touch_event_t last_touch = {};
 
 // Watchdog heartbeat
-static Preferences nvs_prefs;
 static uint32_t last_heartbeat_ms = 0;
 static uint32_t last_battery_refresh = 0;
 
@@ -194,8 +196,15 @@ bool KITT::init(const char* device_json_path) {
     Serial.printf("[kitt] PURR OS v%s  KITT v%s  boot start\n", PURR_OS_VERSION, KITT_VERSION);
 
     // Step 2: mount filesystem
-    if (!SPIFFS.begin(true)) {
-        Serial.println("[kitt] ERR 0x01 SPIFFS mount failed");
+    nvs_flash_init();
+    esp_vfs_spiffs_conf_t spiffs_cfg = {
+        .base_path              = "/spiffs",
+        .partition_label        = NULL,
+        .max_files              = 20,
+        .format_if_mount_failed = true,
+    };
+    if (esp_vfs_spiffs_register(&spiffs_cfg) != ESP_OK) {
+        ESP_LOGE("kitt", "ERR 0x01 SPIFFS mount failed");
         return false;
     }
 
@@ -244,23 +253,28 @@ bool KITT::init(const char* device_json_path) {
     }
 
     // Step 8: check NVS boot flag for flasher mode
-    nvs_prefs.begin("kitt_boot", true);
-    bool flash_flag = nvs_prefs.getBool("flash_flag", false);
-    nvs_prefs.end();
-
-    if (flash_flag) {
-        kitt_flasher = true;
-        log("KITT", "FLASHER MODE");
+    {
+        nvs_handle_t h;
+        uint8_t flash_flag = 0;
+        if (nvs_open("kitt_boot", NVS_READONLY, &h) == ESP_OK) {
+            nvs_get_u8(h, "flash_flag", &flash_flag);
+            nvs_close(h);
+        }
+        if (flash_flag) {
+            kitt_flasher = true;
+            log("KITT", "FLASHER MODE");
 #ifdef PURR_HAS_FLASHER
-        flasher_run(&cfg);
-        // never returns
+            flasher_run(&cfg);
 #else
-        log("KITT", "flasher not compiled in this build — clearing flag");
-        nvs_prefs.begin("kitt_boot", false);
-        nvs_prefs.putBool("flash_flag", false);
-        nvs_prefs.end();
-        kitt_flasher = false;
+            log("KITT", "flasher not compiled — clearing flag");
+            if (nvs_open("kitt_boot", NVS_READWRITE, &h) == ESP_OK) {
+                nvs_set_u8(h, "flash_flag", 0);
+                nvs_commit(h);
+                nvs_close(h);
+            }
+            kitt_flasher = false;
 #endif
+        }
     }
 
     // Step 9: WiFi
@@ -362,18 +376,27 @@ bool KITT::init(const char* device_json_path) {
 #endif
 
     // Step 18: write KITT_READY to NVS and clear factory crash-loop counter
-    nvs_prefs.begin("kitt_boot", false);
-    nvs_prefs.putBool("kitt_ready", true);
-    nvs_prefs.end();
-    nvs_prefs.begin("purr_bl", false);
-    nvs_prefs.putUChar("boot_tries", 0);
-    nvs_prefs.end();
+    {
+        nvs_handle_t h;
+        if (nvs_open("kitt_boot", NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_u8(h, "kitt_ready", 1);
+            nvs_commit(h); nvs_close(h);
+        }
+        if (nvs_open("purr_bl", NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_u8(h, "boot_tries", 0);
+            nvs_commit(h); nvs_close(h);
+        }
+    }
 
     // Step 19: first heartbeat
     last_heartbeat_ms = millis();
-    nvs_prefs.begin("kitt_hb", false);
-    nvs_prefs.putUInt("kitt_hb", last_heartbeat_ms);
-    nvs_prefs.end();
+    {
+        nvs_handle_t h;
+        if (nvs_open("kitt_hb", NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_u32(h, "kitt_hb", last_heartbeat_ms);
+            nvs_commit(h); nvs_close(h);
+        }
+    }
 
     kitt_ready = true;
     log("KITT", "ready");
@@ -387,10 +410,12 @@ void KITT::update() {
 
     // Heartbeat — 500ms interval
     if (now - last_heartbeat_ms >= 500) {
-        nvs_prefs.begin("kitt_hb", false);
-        nvs_prefs.putUInt("kitt_hb", now);
-        nvs_prefs.end();
         last_heartbeat_ms = now;
+        nvs_handle_t h;
+        if (nvs_open("kitt_hb", NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_u32(h, "kitt_hb", now);
+            nvs_commit(h); nvs_close(h);
+        }
     }
 
     // GPIO input polling
@@ -561,15 +586,19 @@ void KITT::show_boot_splash() {
         text_print(1, cfg.device);
         return;
     }
-    File f = SPIFFS.open(cfg.boot_splash, "r");
+    char fpath[96];
+    snprintf(fpath, sizeof(fpath), "/spiffs%s", cfg.boot_splash);
+    FILE* f = fopen(fpath, "r");
     if (!f) { text_print(0, "PURR OS"); return; }
+    char line[48];
     uint8_t row = 0;
-    while (f.available() && row < 8) {
-        String line = f.readStringUntil('\n');
-        line.trim();
-        text_print(row++, line.c_str());
+    while (fgets(line, sizeof(line), f) && row < 8) {
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r' || line[len-1] == ' '))
+            line[--len] = '\0';
+        text_print(row++, line);
     }
-    f.close();
+    fclose(f);
 }
 
 void KITT::log(const char* tag, const char* message) {
@@ -769,33 +798,41 @@ bool KITT::pi_handshake_high()      { return false; }
 
 void KITT::apps_scan() {
     app_count = 0;
-    File root = SPIFFS.open("/apps");
-    if (!root || !root.isDirectory()) return;
-    File entry = root.openNextFile();
-    while (entry && app_count < MAX_APPS) {
-        if (entry.isDirectory()) {
-            String mpath = String("/apps/") + entry.name() + "/manifest.json";
-            File mf = SPIFFS.open(mpath.c_str(), "r");
-            if (mf) {
-                JsonDocument doc;
-                if (deserializeJson(doc, mf) == DeserializationError::Ok) {
-                    auto& a = app_list[app_count++];
-                    strlcpy(a.name,    doc["name"]    | "", sizeof(a.name));
-                    strlcpy(a.version, doc["version"] | "1.0", sizeof(a.version));
-                    snprintf(a.path, sizeof(a.path), "/apps/%s", entry.name());
-                    a.is_lightweight = doc["is_lightweight"] | false;
-                    a.needs_wifi     = doc["needs_wifi"]     | false;
-                    a.needs_bt       = doc["needs_bt"]       | false;
-                    a.needs_lora     = doc["needs_lora"]     | false;
-                    a.min_ram_kb     = doc["min_ram_kb"]     | 64;
-                    a.icon_path[0]   = '\0';
-                }
-                mf.close();
-            }
-        }
-        entry = root.openNextFile();
+    DIR* dir = opendir("/spiffs/apps");
+    if (!dir) {
+        ESP_LOGW("kitt", "apps_scan: /spiffs/apps not found");
+        return;
     }
-    Serial.printf("[kitt] apps_scan: %d apps\n", app_count);
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL && app_count < MAX_APPS) {
+        if (entry->d_type != DT_DIR || entry->d_name[0] == '.') continue;
+
+        char mpath[512];
+        snprintf(mpath, sizeof(mpath), "/spiffs/apps/%s/manifest.json", entry->d_name);
+        FILE* mf = fopen(mpath, "r");
+        if (!mf) continue;
+
+        char buf[512];
+        size_t n = fread(buf, 1, sizeof(buf) - 1, mf);
+        fclose(mf);
+        buf[n] = '\0';
+
+        JsonDocument doc;
+        if (deserializeJson(doc, buf) == DeserializationError::Ok) {
+            auto& a = app_list[app_count++];
+            strlcpy(a.name,    doc["name"]    | "", sizeof(a.name));
+            strlcpy(a.version, doc["version"] | "1.0", sizeof(a.version));
+            snprintf(a.path, sizeof(a.path), "/apps/%s", entry->d_name);
+            a.is_lightweight = doc["is_lightweight"] | false;
+            a.needs_wifi     = doc["needs_wifi"]     | false;
+            a.needs_bt       = doc["needs_bt"]       | false;
+            a.needs_lora     = doc["needs_lora"]     | false;
+            a.min_ram_kb     = doc["min_ram_kb"]     | 64;
+            a.icon_path[0]   = '\0';
+        }
+    }
+    closedir(dir);
+    ESP_LOGI("kitt", "apps_scan: %d apps", app_count);
 }
 
 void KITT::firmware_scan() {

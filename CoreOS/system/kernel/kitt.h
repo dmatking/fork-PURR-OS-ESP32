@@ -139,7 +139,7 @@ public:
     // ── App & Firmware ───────────────────────────────────────────────────────
     typedef struct {
         char     name[64];
-        char     path[128];
+        char     path[512];
         char     version[16];
         bool     is_lightweight;
         bool     needs_wifi;
@@ -151,7 +151,7 @@ public:
 
     typedef struct {
         char name[64];
-        char path[128];
+        char path[256];
         char type[16];
         char args[128];
         bool needs_wifi;

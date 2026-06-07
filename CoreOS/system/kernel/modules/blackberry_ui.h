@@ -4,4 +4,12 @@
 // Targets: CYD (touch, PURR_BBUI_TARGET_TOUCH) + T-Deck Plus (trackball+keys, PURR_BBUI_TARGET_KEYS)
 // See: PURR_OS_docs/12_TDeck_BlackBerry6_UI_Spec.md
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void blackberry_ui_start();
+
+#ifdef __cplusplus
+}
+#endif

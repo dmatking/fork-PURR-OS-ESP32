@@ -1,62 +1,64 @@
-# build.ps1 — Build and run the PURR OS MiniWin simulator (Windows, 320x240)
-# Requires: cmake + a C compiler (MSVC via Visual Studio, or MinGW via scoop/choco)
+#Requires -Version 5.1
+# PURR OS Simulator — build + run
 #
 # Usage:
-#   .\build.ps1           — build and run
-#   .\build.ps1 -Build    — build only
-#   .\build.ps1 -Run      — run last build
+#   .\build.ps1                           # blackberry shell, build + run
+#   .\build.ps1 -Shell blackberry         # BlackberryUI (320x240)
+#   .\build.ps1 -Shell explorer           # Explorer shell (320x240)
+#   .\build.ps1 -Shell classic            # standalone mw_user.c
+#   .\build.ps1 -Shell blackberry -Build  # build only, don't launch
+#   .\build.ps1 -Clean                    # wipe build dir first
 
 param(
-    [switch]$Build,
-    [switch]$Run,
+    [ValidateSet('blackberry','explorer','classic')]
+    [string]$Shell  = 'blackberry',
+    [switch]$Build,      # build only (no auto-launch)
+    [switch]$Run,        # run only (skip build)
     [switch]$Clean
 )
-
-$SimDir   = $PSScriptRoot
-$BuildDir = Join-Path $SimDir "build"
 
 # Default: build + run
 if (-not $Build -and -not $Run) { $Build = $true; $Run = $true }
 
+$SimDir   = $PSScriptRoot
+$BuildDir = Join-Path $SimDir "build_$Shell"
+
 if ($Clean -and (Test-Path $BuildDir)) {
-    Write-Host "[sim] Cleaning build dir..." -ForegroundColor Yellow
+    Write-Host "[sim] cleaning $BuildDir" -ForegroundColor DarkGray
     Remove-Item -Recurse -Force $BuildDir
 }
 
 if ($Build) {
-    if (-not (Test-Path $BuildDir)) { New-Item -ItemType Directory $BuildDir | Out-Null }
+    New-Item -ItemType Directory -Force $BuildDir | Out-Null
 
-    Write-Host "[sim] Configuring..." -ForegroundColor Cyan
-    Push-Location $BuildDir
-
-    # Try MinGW first (lighter, no VS install needed), fall back to default generator
+    # Detect C++ compiler
+    $generator = $null
     $mingw = Get-Command mingw32-make -ErrorAction SilentlyContinue
     if ($mingw) {
-        cmake .. -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+        $generator = "MinGW Makefiles"
+        Write-Host "[sim] using MinGW g++" -ForegroundColor DarkGray
+    } elseif (Get-Command cl -ErrorAction SilentlyContinue) {
+        Write-Host "[sim] using MSVC" -ForegroundColor DarkGray
     } else {
-        cmake .. -DCMAKE_BUILD_TYPE=Release
+        Write-Error "[sim] No C++ compiler found. Install MinGW (via scoop/choco) or Visual Studio Build Tools."
     }
 
-    if ($LASTEXITCODE -ne 0) { Pop-Location; exit 1 }
+    Write-Host "[sim] configuring  shell=$Shell  $BuildDir" -ForegroundColor Cyan
+    $cfg = @("-S", $SimDir, "-B", $BuildDir, "-DPURR_SHELL=$Shell", "-DCMAKE_BUILD_TYPE=Release")
+    if ($generator) { $cfg += @("-G", $generator) }
+    & cmake @cfg
+    if ($LASTEXITCODE -ne 0) { Write-Error "[sim] cmake configure failed" }
 
-    Write-Host "[sim] Building..." -ForegroundColor Cyan
-    cmake --build . --config Release
-
-    Pop-Location
-
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[sim] Build FAILED" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "[sim] Build OK" -ForegroundColor Green
+    Write-Host "[sim] building..." -ForegroundColor Cyan
+    & cmake --build $BuildDir --config Release
+    if ($LASTEXITCODE -ne 0) { Write-Error "[sim] cmake build failed" }
+    Write-Host "[sim] build OK" -ForegroundColor Green
 }
 
 if ($Run) {
-    $exe = Get-ChildItem $BuildDir -Recurse -Filter "purr_sim.exe" | Select-Object -First 1
-    if (-not $exe) {
-        Write-Host "[sim] purr_sim.exe not found — run with -Build first" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "[sim] Launching $($exe.FullName)" -ForegroundColor Green
-    & $exe.FullName
+    $exe = Get-ChildItem -Recurse $BuildDir -Filter "purr_sim.exe" -ErrorAction SilentlyContinue |
+           Select-Object -First 1 -ExpandProperty FullName
+    if (-not $exe) { Write-Error "[sim] purr_sim.exe not found — run with -Build first" }
+    Write-Host "[sim] launching $exe" -ForegroundColor Green
+    & $exe
 }

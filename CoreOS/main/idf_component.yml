@@ -16,11 +16,9 @@ dependencies:
   bblanchon/arduinojson:
     version: "~7.0.0"
 
-  ## arduino-esp32 — Arduino layer over ESP-IDF
-  ## Provides: Serial, SPI, Preferences, SPIFFS, USBHIDKeyboard, etc.
-  ## 3.1.x targets IDF 5.3.x — fixes LL API breaks in 5.2.x.
-  espressif/arduino-esp32:
-    version: "~3.1.0"
+  ## arduino-esp32 REMOVED — codebase now uses pure ESP-IDF.
+  ## Replaced by: driver (GPIO/SPI/I2C/LEDC), esp_lcd, nvs_flash, spiffs,
+  ## esp_timer, esp_log. See PURR_IDF_MIGRATION.md.
 
   ## Meshtastic co-resident mesh stack (PURR_ENABLE_MESH=1 builds only)
   ## NOT available in the IDF component registry.

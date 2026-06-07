@@ -1,9 +1,16 @@
 #include "display_ssd1306.h"
-#include <Wire.h>
+#include "driver/i2c_master.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 
-// SSD1306 128×64 driver — direct I2C via Arduino Wire, no Adafruit dependency.
+// SSD1306 128×64 driver — IDF i2c_master, no Arduino/Wire dependency.
 // Font: 6×8 (cols), 95 printable ASCII characters (0x20–0x7E).
+
+static i2c_master_bus_handle_t s_bus = NULL;
+static i2c_master_dev_handle_t s_dev = NULL;
 
 #define SSD1306_ADDR    0x3C
 #define SSD1306_CMD     0x00
@@ -114,39 +121,33 @@ static const uint8_t FONT6x8[95][5] = {
 static uint8_t s_fb[1024];
 static bool    s_ok = false;
 
+static void ssd_write(uint8_t type, const uint8_t* data, size_t len) {
+    if (!s_dev) return;
+    uint8_t buf[len + 1];
+    buf[0] = type;
+    memcpy(buf + 1, data, len);
+    i2c_master_transmit(s_dev, buf, len + 1, 20);
+}
+
 static void ssd_cmd(uint8_t c) {
-    Wire.beginTransmission(SSD1306_ADDR);
-    Wire.write(SSD1306_CMD);
-    Wire.write(c);
-    Wire.endTransmission();
+    ssd_write(SSD1306_CMD, &c, 1);
 }
 
 static void ssd_cmd2(uint8_t c0, uint8_t c1) {
-    Wire.beginTransmission(SSD1306_ADDR);
-    Wire.write(SSD1306_CMD);
-    Wire.write(c0);
-    Wire.write(c1);
-    Wire.endTransmission();
+    uint8_t d[2] = {c0, c1};
+    ssd_write(SSD1306_CMD, d, 2);
 }
 
 static void ssd_cmd3(uint8_t c0, uint8_t c1, uint8_t c2) {
-    Wire.beginTransmission(SSD1306_ADDR);
-    Wire.write(SSD1306_CMD);
-    Wire.write(c0); Wire.write(c1); Wire.write(c2);
-    Wire.endTransmission();
+    uint8_t d[3] = {c0, c1, c2};
+    ssd_write(SSD1306_CMD, d, 3);
 }
 
 static void ssd_flush() {
-    ssd_cmd3(0x21, 0x00, 0x7F); // column address: 0 to 127
-    ssd_cmd3(0x22, 0x00, 0x07); // page address: 0 to 7
-    // Write framebuffer in 16-byte chunks (I2C buffer limit)
-    for (int i = 0; i < 1024; i += 16) {
-        Wire.beginTransmission(SSD1306_ADDR);
-        Wire.write(SSD1306_DATA);
-        for (int j = 0; j < 16 && (i + j) < 1024; j++)
-            Wire.write(s_fb[i + j]);
-        Wire.endTransmission();
-    }
+    ssd_cmd3(0x21, 0x00, 0x7F);
+    ssd_cmd3(0x22, 0x00, 0x07);
+    for (int i = 0; i < 1024; i += 16)
+        ssd_write(SSD1306_DATA, &s_fb[i], 16);
 }
 
 static void fb_draw_char(int col, int row, char c) {
@@ -167,19 +168,33 @@ static void fb_clear_row(int row) {
 
 // ── Init sequence ─────────────────────────────────────────────────────────────
 void display_ssd1306_init() {
-    Wire.begin(OLED_SDA, OLED_SCL);
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port      = I2C_NUM_0,
+        .sda_io_num    = (gpio_num_t)OLED_SDA,
+        .scl_io_num    = (gpio_num_t)OLED_SCL,
+        .clk_source    = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags = { .enable_internal_pullup = true },
+    };
+    i2c_new_master_bus(&bus_cfg, &s_bus);
 
-    // Reset
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address  = SSD1306_ADDR,
+        .scl_speed_hz    = 400000,
+    };
+    i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev);
+
     if (OLED_RST >= 0) {
-        pinMode(OLED_RST, OUTPUT);
-        digitalWrite(OLED_RST, LOW);  delay(10);
-        digitalWrite(OLED_RST, HIGH); delay(10);
+        gpio_set_direction((gpio_num_t)OLED_RST, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)OLED_RST, 0); vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level((gpio_num_t)OLED_RST, 1); vTaskDelay(pdMS_TO_TICKS(10));
     }
 
-    // Probe
-    Wire.beginTransmission(SSD1306_ADDR);
-    if (Wire.endTransmission() != 0) {
-        Serial.println("[disp] SSD1306 not found");
+    // Probe — try a dummy write
+    uint8_t probe = 0xAE;
+    if (i2c_master_transmit(s_dev, &probe, 1, 20) != ESP_OK) {
+        ESP_LOGE("ssd1306", "not found");
         return;
     }
 
@@ -215,7 +230,7 @@ void display_ssd1306_init() {
     memset(s_fb, 0, sizeof(s_fb));
     ssd_flush();
     s_ok = true;
-    Serial.println("[disp] SSD1306 OK 128x64");
+    ESP_LOGI("ssd1306", "OK 128x64");
 }
 
 void display_ssd1306_update() {}

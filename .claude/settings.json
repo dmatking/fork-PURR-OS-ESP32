@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython\" && git show 268ffa5:CoreOS/system/kernel/modules/blackberry_ui.cpp > /tmp/blackberry_ui_minwin.cpp && wc -l /tmp/blackberry_ui_minwin.cpp)",
+      "Bash(powershell -ExecutionPolicy Bypass -File setup.ps1)",
+      "Bash(curl -L -o lua-5.4.6.tar.gz \"https://www.lua.org/ftp/lua-5.4.6.tar.gz\")",
+      "Bash(grep -v \"^$\")",
+      "Bash(grep \"\\\\.cpp\\\\|\\\\.h\\\\|\\\\.py\\\\|\\\\.ps1\\\\|\\\\.txt\\\\|\\\\.json\\\\|\\\\.md\\\\|\\\\.csv\\\\|\\\\.c$\\\\|\\\\.lua\")",
+      "Bash(grep -v \"CoreOS/build\\\\|\\\\.claude\\\\|managed_components\\\\|\\\\.obj\\\\|\\\\.a$\\\\|\\\\.elf\\\\|\\\\.bin$\\\\|\\\\.map$\")",
+      "Bash(gh pr *)",
+      "PowerShell(gh pr view 1 --repo PastorCatto/PURR-OS-ESP32 --json 'title,body,files' | ConvertFrom-Json | Select-Object -Property title, body, @{Name='FileCount';Expression={$_.files.Length}})",
+      "Bash(cp /tmp/touch_gt911.h \"C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/system/kernel/modules/\")",
+      "Bash(cp /tmp/touch_gt911_arduino.cpp \"C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/system/kernel/modules/touch_gt911.cpp\")",
+      "Bash(cp /tmp/touch_mxt336t.h /tmp/touch_xpt2046.h \"C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/system/kernel/modules/\")",
+      "Bash(cp /tmp/touch_mxt336t_arduino.cpp \"C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/system/kernel/modules/touch_mxt336t.cpp\")",
+      "Bash(cp /tmp/touch_xpt2046_arduino.cpp \"C:/Users/PastorCatto/Documents/Projects/PURR-OS-ESP32-MicroPython/CoreOS/system/kernel/modules/touch_xpt2046.cpp\")",
+      "Bash(xargs basename -a)",
+      "Bash(./Builder/SDK.ps1 -Target cyd_boot)",
+      "Bash(idf.py -DTARGET_DEVICE=cyd_boot build)",
+      "Bash(ninja -j4 purr_os_core.elf)",
+      "PowerShell(. \"C:\\\\esp\\\\v5.3.5\\\\esp-idf\\\\export.ps1\" 2>&1)",
+      "Bash(cmake --build . --target purr_os_core.elf)",
+      "PowerShell($env:IDF_PYTHON = 'C:\\\\Espressif\\\\tools\\\\python\\\\v5.3.5\\\\venv\\\\Scripts\\\\python.exe' ; & \"C:\\\\Espressif\\\\tools\\\\python\\\\v5.3.5\\\\venv\\\\Scripts\\\\python.exe\" -c \"import esptool; print\\('esptool OK'\\)\")",
+      "Bash(curl -s \"https://github.com/witnessmenow/CYD-2USB/raw/main/Documents/Pinout.jpg\" -o /tmp/cyd_pinout.jpg)",
+      "Bash(git ls-tree *)",
+      "Bash(rm -rf build_cyd)",
+      "Bash(export IDF_PATH=/c/esp/v5.3.5/esp-idf)",
+      "Bash(export IDF_TOOLS_PATH=/c/Espressif/tools)",
+      "Bash(python3 __TRACKED_VAR__/tools/idf.py -DTARGET_DEVICE=cyd -B build_cyd set-target esp32)",
+      "Bash(grep -n \"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\|os.path.sep\\\\|pathsep\\\\|WINDOWS\\\\|win32\" \"c:\\\\Users\\\\PastorCatto\\\\Documents\\\\Projects\\\\PURR-OS-ESP32-MicroPython\\\\Builder\\\\sdk_core.py\")"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
+    ]
+  }
+}

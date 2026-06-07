@@ -10,6 +10,11 @@
 set(TARGET_DEVICE  "heltec" CACHE STRING "Target: heltec | cyd | cyd_boot | tdeck")
 set(BUILD_MINI     0        CACHE STRING "1 = strip MicroPython runtime")
 
+# CYD display variant (cyd target only)
+#   s028r  — ESP32-2432S028R (original, v0.4.0/v0.5.0) with XPT2046 touch
+#   s024c  — ESP32-2432S024C (newer) with CST816S I2C touch
+set(CYD_DISPLAY_VARIANT "s028r" CACHE STRING "CYD variant: s028r | s024c")
+
 # UI shell selection (cyd and tdeck only).
 #   both       — BlackberryUI preferred, Explorer as fallback  [default]
 #   blackberry — BlackberryUI only
@@ -57,7 +62,6 @@ set(INCLUDE_DIRS
 )
 
 set(REQUIRES
-    espressif__arduino-esp32
     bblanchon__arduinojson
     esp_wifi
     nvs_flash
@@ -65,6 +69,7 @@ set(REQUIRES
     esp_adc
     app_update
     esp_timer
+    driver
 )
 
 # ── Bluetooth (optional) ──────────────────────────────────────────────────────
@@ -107,22 +112,67 @@ if(TARGET_DEVICE STREQUAL "heltec")
     )
     list(APPEND INCLUDE_DIRS "../apps/smol")
 
+# ── Device-specific: CYD variants (S028R and S024C) ─────────────────────────
+elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c")
+    # Map variant targets to generic cyd with variant flag set
+    set(CMAKE_TARGET "cyd")
+    if(TARGET_DEVICE STREQUAL "cyd_s028r")
+        set(CYD_DISPLAY_VARIANT "s028r")
+    else()
+        set(CYD_DISPLAY_VARIANT "s024c")
+    endif()
+
+    list(APPEND SRCS
+        "../system/kernel/modules/display_ili9341.cpp"
+        "../system/kernel/modules/partition_manager_stubs.cpp"
+        "../system/kernel/modules/purr_wm.cpp"
+        "../system/kernel/modules/blackberry_ui.cpp"
+        "../system/kernel/modules/explorer.cpp"
+        "../system/kernel/modules/classicmac.cpp"
+        "../system/kernel/modules/ui_stubs.cpp"
+    )
+
+    if(CYD_DISPLAY_VARIANT STREQUAL "s024c")
+        list(APPEND SRCS "../system/kernel/modules/touch_cst816s.cpp")
+        message(STATUS "CYD variant: S024C (CST816S I2C touch)")
+    else()
+        list(APPEND SRCS "../system/kernel/modules/touch_xpt2046.cpp")
+        message(STATUS "CYD variant: S028R (XPT2046 SPI touch)")
+    endif()
+
+    list(APPEND REQUIRES fatfs esp_partition esp_lcd driver esp_timer nvs_flash sdmmc miniwinwm lvgl/lvgl)
+    list(APPEND PURR_DEFS PURR_HAS_LVGL=1)
+
 # ── Device-specific: CYD (full OS — goes in ota_0) ───────────────────────────
 elseif(TARGET_DEVICE STREQUAL "cyd")
     list(APPEND SRCS
         "../system/kernel/modules/display_ili9341.cpp"
-        "../system/kernel/modules/touch_cst816s.cpp"
-        "../system/kernel/modules/partition_manager.cpp"
-        "../system/kernel/modules/explorer.cpp"
+        "../system/kernel/modules/partition_manager_stubs.cpp"
+        "../system/kernel/modules/purr_wm.cpp"
         "../system/kernel/modules/blackberry_ui.cpp"
+        "../system/kernel/modules/explorer.cpp"
+        "../system/kernel/modules/classicmac.cpp"
+        "../system/kernel/modules/ui_stubs.cpp"
+        # Lua deferred — 32-bit preprocessor issue to resolve separately
+        # "../system/kernel/modules/lua_runtime.cpp"
     )
-    list(APPEND INCLUDE_DIRS
-        "../components/TFT_eSPI"
-        "../components/miniwinwm/MiniWin"
-        "../components/miniwinwm/MiniWin/hal"
-        "../components/miniwinwm/MiniWin/hal/PURR_CYD"
-    )
-    list(APPEND REQUIRES fatfs esp_partition TFT_eSPI miniwinwm)
+
+    # Select touch driver based on variant (default s028r for original hardware)
+    set(_CYD_VARIANT "${CYD_DISPLAY_VARIANT}")
+    if(NOT _CYD_VARIANT)
+        set(_CYD_VARIANT "s028r")
+    endif()
+
+    if(_CYD_VARIANT STREQUAL "s024c")
+        list(APPEND SRCS "../system/kernel/modules/touch_cst816s.cpp")
+        message(STATUS "CYD variant: S024C (CST816S I2C touch)")
+    else()
+        list(APPEND SRCS "../system/kernel/modules/touch_xpt2046.cpp")
+        message(STATUS "CYD variant: S028R (XPT2046 SPI touch)")
+    endif()
+
+    list(APPEND REQUIRES fatfs esp_partition esp_lcd driver esp_timer nvs_flash sdmmc miniwinwm lvgl/lvgl)
+    list(APPEND PURR_DEFS PURR_HAS_LVGL=1)
 
 # ── Device-specific: CYD bootloader (factory partition — minimal recovery image) ──
 elseif(TARGET_DEVICE STREQUAL "cyd_boot")
@@ -137,25 +187,23 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
         "../system/system/main.cpp"
         "../system/kernel/modules/display_ili9341.cpp"
         "../system/kernel/modules/touch_cst816s.cpp"
-        "../system/kernel/modules/partition_manager.cpp"
+        "../system/kernel/modules/partition_manager_stubs.cpp"
         "../system/kernel/modules/purr_bootloader.cpp"
         "../system/kernel/modules/stub_managers.cpp"
     )
     set(REQUIRES
-        espressif__arduino-esp32
         bblanchon__arduinojson
         nvs_flash
         spiffs
-        fatfs
         esp_partition
         app_update
         esp_timer
-        TFT_eSPI
+        esp_lcd
+        driver
     )
     # miniwinwm excluded: cyd_boot draws directly to the display.
     # Adding MiniWin would require mw_user_init/paint/message stubs and adds
     # significant code size to a minimal recovery image.
-    list(APPEND INCLUDE_DIRS "../components/TFT_eSPI")
     # Always mini — no MicroPython in the bootloader image
     set(BUILD_MINI 1 CACHE STRING "" FORCE)
     message(STATUS "cyd_boot: minimal factory bootloader image (no WiFi/BT/OS modules)")
@@ -180,23 +228,23 @@ elseif(TARGET_DEVICE STREQUAL "jc3248w535")
     list(APPEND SRCS
         "../system/kernel/modules/display_st7796.cpp"
         "../system/kernel/modules/touch_gt911.cpp"
-        "../system/kernel/modules/partition_manager.cpp"
+        # TEMP: disabled until esp_vfs_fat.h path is fixed
+        # "../system/kernel/modules/partition_manager.cpp"
     )
-    list(APPEND INCLUDE_DIRS "../components/TFT_eSPI")
-    list(APPEND REQUIRES fatfs esp_partition TFT_eSPI)
-    set(BUILD_MINI 1 CACHE STRING "" FORCE)  # WIP: no MicroPython until target is stable
-    message(WARNING "jc3248w535: WIP target — ST7796 + GT911, no shell yet. Verify pins before flashing.")
+    list(APPEND REQUIRES fatfs esp_partition esp_lcd driver esp_timer)
+    set(BUILD_MINI 1 CACHE STRING "" FORCE)
+    message(STATUS "jc3248w535: ✓ Bootloader boots confirmed. UI shell pending (use cyd_boot until app UI ready).")
 
 # ── Device-specific: Waveshare 1.69" (WIP) ───────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "waveshare169")
     list(APPEND SRCS
         "../system/kernel/modules/display_st7789.cpp"
         "../system/kernel/modules/touch_cst816s.cpp"
-        "../system/kernel/modules/partition_manager.cpp"
+        # TEMP: disabled until esp_vfs_fat.h path is fixed
+        # "../system/kernel/modules/partition_manager.cpp"
     )
-    list(APPEND INCLUDE_DIRS "../components/TFT_eSPI")
-    list(APPEND REQUIRES fatfs esp_partition TFT_eSPI)
-    set(BUILD_MINI 1 CACHE STRING "" FORCE)  # WIP: no MicroPython until target is stable
+    list(APPEND REQUIRES fatfs esp_partition esp_lcd driver esp_timer)
+    set(BUILD_MINI 1 CACHE STRING "" FORCE)
     message(WARNING "waveshare169: WIP target — ST7789 + CST816S, no shell yet. Verify pins before flashing.")
 
 else()
@@ -233,29 +281,66 @@ set(PURR_DEFS "")
 
 if(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND PURR_DEFS PURR_DISPLAY_SSD1306=1)
-elseif(TARGET_DEVICE STREQUAL "cyd")
-    # Full OS image (ota_0) — no bootloader module; recovery is in the factory partition
+elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c")
+    # Map variant targets to generic cyd PURR_DEFS
     list(APPEND PURR_DEFS
         PURR_DISPLAY_ILI9341=1
-        PURR_HAS_TOUCH_CST816S=1
         PURR_HAS_PARTITION_MGR=1
-        CYD_VARIANT_S024C=1
     )
-    # UI shell — controlled by PURR_SHELL (default: both)
-    # BlackberryUI requires MiniWin source to be cloned into components/miniwinwm/
-    set(_miniwin_src "${CMAKE_CURRENT_SOURCE_DIR}/../components/miniwinwm/MiniWin/miniwin.c")
+
+    if(TARGET_DEVICE STREQUAL "cyd_s024c")
+        list(APPEND PURR_DEFS
+            PURR_HAS_TOUCH_CST816S=1
+            CYD_VARIANT_S024C=1
+        )
+    else()
+        list(APPEND PURR_DEFS
+            PURR_HAS_TOUCH_XPT2046=1
+        )
+    endif()
+
+    # UI shells — rendered via PURR WM + LVGL (no MiniWin dependency)
     if(PURR_SHELL STREQUAL "blackberry" OR PURR_SHELL STREQUAL "both")
-        if(NOT EXISTS "${_miniwin_src}")
-            message(FATAL_ERROR
-                "BlackberryUI requires MiniWin source — not found at:\n"
-                "  components/miniwinwm/MiniWin/miniwin.c\n"
-                "Clone your MiniWin fork into CoreOS/components/miniwinwm/ and retry.\n"
-                "  git clone <your-miniwin-fork> CoreOS/components/miniwinwm/MiniWin")
-        endif()
         list(APPEND PURR_DEFS PURR_HAS_BLACKBERRY_UI=1 PURR_BBUI_TARGET_TOUCH=1)
     endif()
     if(PURR_SHELL STREQUAL "explorer" OR PURR_SHELL STREQUAL "both")
         list(APPEND PURR_DEFS PURR_HAS_EXPLORER=1)
+    endif()
+    if(PURR_SHELL STREQUAL "classicmac")
+        list(APPEND PURR_DEFS PURR_HAS_CLASSICMAC=1)
+    endif()
+elseif(TARGET_DEVICE STREQUAL "cyd")
+    # Full OS image (ota_0) — no bootloader module; recovery is in the factory partition
+    set(_CYD_VARIANT "${CYD_DISPLAY_VARIANT}")
+    if(NOT _CYD_VARIANT)
+        set(_CYD_VARIANT "s028r")
+    endif()
+
+    list(APPEND PURR_DEFS
+        PURR_DISPLAY_ILI9341=1
+        PURR_HAS_PARTITION_MGR=1
+    )
+
+    if(_CYD_VARIANT STREQUAL "s024c")
+        list(APPEND PURR_DEFS
+            PURR_HAS_TOUCH_CST816S=1
+            CYD_VARIANT_S024C=1
+        )
+    else()
+        list(APPEND PURR_DEFS
+            PURR_HAS_TOUCH_XPT2046=1
+        )
+    endif()
+
+    # UI shells — rendered via PURR WM + LVGL (no MiniWin dependency)
+    if(PURR_SHELL STREQUAL "blackberry" OR PURR_SHELL STREQUAL "both")
+        list(APPEND PURR_DEFS PURR_HAS_BLACKBERRY_UI=1 PURR_BBUI_TARGET_TOUCH=1)
+    endif()
+    if(PURR_SHELL STREQUAL "explorer" OR PURR_SHELL STREQUAL "both")
+        list(APPEND PURR_DEFS PURR_HAS_EXPLORER=1)
+    endif()
+    if(PURR_SHELL STREQUAL "classicmac")
+        list(APPEND PURR_DEFS PURR_HAS_CLASSICMAC=1)
     endif()
 elseif(TARGET_DEVICE STREQUAL "cyd_boot")
     # Factory bootloader image — minimal, always shows recovery UI
@@ -311,3 +396,8 @@ if(NOT BUILD_MINI)
 endif()
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC ${PURR_DEFS})
+
+# Ensure LUA_32BITS is defined for all files including Lua headers
+if(TARGET_DEVICE STREQUAL "cyd" OR TARGET_DEVICE STREQUAL "cyd_boot")
+    target_compile_options(${COMPONENT_LIB} PRIVATE -DLUA_32BITS=1)
+endif()

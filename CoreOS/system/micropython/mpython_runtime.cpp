@@ -1,7 +1,7 @@
 #include "mpython_runtime.h"
 #include "../kernel/kitt.h"
 
-#include <Arduino.h>
+#include "../kernel/purr_idf_compat.h"
 #include <SPIFFS.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>

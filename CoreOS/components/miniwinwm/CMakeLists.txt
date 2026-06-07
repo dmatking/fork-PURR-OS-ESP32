@@ -47,10 +47,10 @@ idf_component_register(
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/gl/fonts/truetype/mcufont"
-    REQUIRES     espressif__arduino-esp32
-                 nvs_flash
+    REQUIRES     nvs_flash
                  esp_timer
-                 TFT_eSPI
+                 esp_lcd
+                 driver
 )
 
 # Tell MiniWin HAL files which platform they're compiling for
@@ -65,8 +65,7 @@ file(GLOB IDF_ALL_COMPONENT_INCLUDES LIST_DIRECTORIES true
 list(FILTER IDF_ALL_COMPONENT_INCLUDES EXCLUDE REGEX ".*/linux/include$")
 list(FILTER IDF_ALL_COMPONENT_INCLUDES EXCLUDE REGEX ".*/riscv/include$")
 target_include_directories(${COMPONENT_LIB} PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../managed_components/espressif__arduino-esp32/cores/esp32"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../managed_components/espressif__arduino-esp32/variants/esp32"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel/modules"
     ${IDF_ALL_COMPONENT_INCLUDES}
     "${idf_path}/components/driver/deprecated"
