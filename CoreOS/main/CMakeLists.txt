@@ -44,6 +44,7 @@ message(STATUS "PURR OS  target=${TARGET_DEVICE}  shell=${PURR_SHELL}  mini=${BU
 # ── Core sources (all targets) ────────────────────────────────────────────────
 # Paths are relative to this file (CoreOS/main/), so prefix ../ to reach project root.
 set(SRCS
+    "../system/Arduino.cpp"
     "../system/kernel/main.cpp"
     "../system/kernel/kitt.cpp"
     "../system/kernel/device_config.cpp"
@@ -55,10 +56,12 @@ set(SRCS
 )
 
 set(INCLUDE_DIRS
+    "../system"
     "../system/kernel"
     "../system/kernel/modules"
     "../system/bridge"
     "../system/system"
+    "../components/TFT_eSPI"
 )
 
 set(REQUIRES
@@ -69,6 +72,7 @@ set(REQUIRES
     esp_adc
     app_update
     esp_timer
+    TFT_eSPI
     driver
 )
 

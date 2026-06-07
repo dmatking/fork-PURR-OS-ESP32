@@ -5,6 +5,17 @@
 #include <cstdint>
 #include <cstring>
 #include "driver/gpio.h"
+
+// Standard BSD string functions
+inline size_t strlcpy(char* dst, const char* src, size_t dsize) {
+    size_t len = strlen(src);
+    if (dsize > 0) {
+        size_t copy_len = (len >= dsize) ? dsize - 1 : len;
+        memcpy(dst, src, copy_len);
+        dst[copy_len] = '\0';
+    }
+    return len;
+}
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
 #include "esp_timer.h"
@@ -12,6 +23,8 @@
 #include "freertos/task.h"
 #include "rom/ets_sys.h"
 #include "esp_log.h"
+#include "String.h"
+#include "Print.h"
 
 // Pin modes
 #define INPUT  GPIO_MODE_INPUT
@@ -79,16 +92,15 @@ inline void ledcWrite(uint8_t channel, uint8_t duty) {
     ledc_update_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)(channel & 0x0F));
 }
 
-// Minimal Serial API (just logging)
-class SerialClass {
+// Serial API
+class SerialClass : public Print {
 public:
     void begin(uint32_t baud) { (void)baud; }
-    void printf(const char* fmt, ...);
 };
 
 extern SerialClass Serial;
 
-// SPI class (minimal, for TFT_eSPI)
+// SPI class
 class SPIClass {
 private:
     spi_device_handle_t _handle = nullptr;
@@ -110,15 +122,8 @@ public:
         spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
 
         spi_device_interface_config_t dev_cfg = {};
-        dev_cfg.command_bits = 0;
-        dev_cfg.address_bits = 0;
-        dev_cfg.dummy_bits = 0;
         dev_cfg.mode = 0;
-        dev_cfg.duty_cycle_pos = 128;
-        dev_cfg.cs_ena_pretrans = 0;
-        dev_cfg.cs_ena_posttrans = 0;
         dev_cfg.clock_speed_hz = 40000000;
-        dev_cfg.input_delay_ns = 0;
         dev_cfg.spics_io_num = cs;
         dev_cfg.queue_size = 7;
         spi_bus_add_device(SPI2_HOST, &dev_cfg, &_handle);

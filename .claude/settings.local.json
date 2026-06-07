@@ -80,7 +80,8 @@
       "Bash(grep -v \"//\\\\|mw_\\\\|kitt_\")",
       "Bash(python gen_sim_shell.py --shell blackberry --out /tmp/shell_sim.cpp)",
       "Bash(python gen_sim_shell.py --shell blackberry --out /tmp/shell_test.cpp)",
-      "Bash(xargs grep -l \"lvgl\\\\|LVGL\")"
+      "Bash(xargs grep -l \"lvgl\\\\|LVGL\")",
+      "Bash(C:/esp/v5.3.5/esp-idf/tools/idf.py -DTARGET_DEVICE=cyd_s024c -B build_cyd build)"
     ]
   }
 }

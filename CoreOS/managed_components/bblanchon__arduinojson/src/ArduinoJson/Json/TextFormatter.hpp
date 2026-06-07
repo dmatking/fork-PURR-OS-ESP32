@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstring>
 #include <stdint.h>
 #include <string.h>  // for strlen
 
