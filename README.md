@@ -1,19 +1,21 @@
-# PURR OS — v0.8.0
+# PURR OS — v0.9.0
 
 > **MEGA DISCLAIMER:** This project is very much vibe-coded. It has gone from 0 to "Jesus Christ" at an alarming rate. It is fully open-source and humans are actively encouraged to help. Please.
 
 **P.U.R.R.** = Portable Unified Runtime & Radio Operating System
-Powered by the **K.I.T.T** (Kernel Interface Translation Toolkit) kernel — a modular, C and C++ -backed embedded OS for ESP32 hardware.
+Powered by the **K.I.T.T** (Kernel Interface Translation Toolkit) kernel — a modular C++ embedded OS for ESP32 hardware, built on pure ESP-IDF 5.3.5.
 
-## 🤖 Using Docs with AI Models
+---
 
-All PURR OS documentation is **version-controlled and designed for AI-assisted development**. When adapting or extending the codebase with Claude, GPT, or similar models:
+## Using Docs with AI Models
 
-1. **Reference the docs** — Read `PURR_OS_docs/` files relevant to your task
+All PURR OS documentation is version-controlled and designed for AI-assisted development. When adapting or extending the codebase with Claude, GPT, or similar models:
+
+1. **Reference the docs** — Read `docs/PURR_OS_docs/` files relevant to your task
 2. **Ask specific questions** — "How do I add a new sensor module?" (see `02_KITT_Kernel_Spec.md`)
 3. **Get accurate context** — AI models produce better code when given full specification
 
-**[→ See AI Development Guide →](PURR_OS_docs/00_AI_Development_Guide.md)**
+**[-> See AI Development Guide ->](docs/PURR_OS_docs/00_AI_Development_Guide.md)**
 
 ---
 
@@ -41,28 +43,24 @@ For more details, see **[QUICKSTART.md](QUICKSTART.md)**.
 
 | Component | Version | Release Date |
 |-----------|---------|--------------|
-| PURR OS   | v0.8.0  | 2026-06-06   |
-| KITT      | v0.4.1  | 2026-06-06   |
+| PURR OS   | v0.9.0  | 2026-06-07   |
+| KITT      | v0.5.0  | 2026-06-07   |
 
-Version strings are defined in [`CoreOS/system/kernel/purr_version.h`](CoreOS/system/kernel/purr_version.h) and automatically embedded into the firmware image via `esp_app_desc_t` — visible in the bootloader's slot card and on the homescreen.
+Version strings are defined in [CoreOS/system/kernel/purr_version.h](CoreOS/system/kernel/purr_version.h) and automatically embedded into the firmware image via `esp_app_desc_t` — visible in the bootloader's slot card and on the homescreen.
 
-### Release Notes: v0.8.0 / KITT v0.4.1
+Full release history is in **[CHANGELOG.md](CHANGELOG.md)** at the repository root.
 
-**✅ Major Updates:**
-- Removed Arduino IDE dependency → pure **ESP-IDF 5.3.5**
-- Added **Linux/macOS support** (zero codebase changes)
-- MiniWin window manager as core UI layer
-- Swappable UI skins (BlackBerry, Explorer, ClassicMac)
-- Display type targets: **`cyd_s028r`** (original), **`cyd_s024c`** (newer)
-- XPT2046 & CST816S touch drivers unified
-- Memory optimizations (target 260KB+ heap for apps)
-- **All documentation now version-controlled & AI-friendly** (see [00_AI_Development_Guide.md](PURR_OS_docs/00_AI_Development_Guide.md))
+### Release Notes: v0.9.0 / KITT v0.5.0
 
-**🐛 KITT v0.4.1 Fixes:**
-- Display driver abstraction layer
-- Touch controller registration API
-- Partition manager for OTA & firmware backup
-- Recovery SOS mode implementation
+Major updates:
+- Arduino dependency removed entirely — pure ESP-IDF 5.3.5 across all drivers
+- All hardware drivers reorganized as discrete IDF components under `CoreOS/components/drv_*/`
+- TFT_eSPI is self-contained in `lib_tftespi/` with a minimal Arduino shim; no `lib_arduino` needed
+- WiFi stub for heltec — `drv_wifi` compiles a no-op stub so heltec links without the WiFi stack
+- `PURR_HAS_MINIWIN` guard in `system/system/main.cpp` — `cyd_boot` no longer requires the MiniWin header
+- SD card support live in the factory partition — install, backup, restore firmware from SD with no network
+- IDF include propagation workarounds applied consistently (`idf_component_get_property` + `target_link_libraries`)
+- All three targets (cyd_s024c, cyd_boot, heltec) build clean
 
 ---
 
@@ -70,7 +68,7 @@ Version strings are defined in [`CoreOS/system/kernel/purr_version.h`](CoreOS/sy
 
 PURR OS is an embedded operating system for ESP32 devices. It runs a custom kernel (KITT), exposes a MicroPython runtime for `.meow` apps, manages optional radio/BT/USB modules, and renders a full windowed UI via the **MiniWin** window manager. Think Windows CE vibes, on a $10 ESP32 LCD board.
 
-The architecture splits across two flash partitions: a small **PURR Kernel** that lives in the factory slot (OTA-immune, handles boot decisions and recovery) and the **PURR Userland** in ota_0 that gets updated over-the-air.
+The architecture splits across two flash partitions: a small **PURR Kernel** that lives in the factory slot (OTA-immune, handles boot decisions and SD recovery) and the **PURR Userland** in ota_0 that gets updated over-the-air.
 
 ---
 
@@ -78,14 +76,13 @@ The architecture splits across two flash partitions: a small **PURR Kernel** tha
 
 | Target | Chip | Display | Touch | Status | Notes |
 |--------|------|---------|-------|--------|-------|
-| `cyd_s028r` | ESP32-2432S028R | ILI9341 2.4" 320×240 | XPT2046 SPI | ✅ Active | Original variant (v0.4.0/v0.5.0) |
-| `cyd_s024c` | ESP32-2432S024C | ILI9341 2.4" 320×240 | CST816S I2C | ✅ Active | Newer variant |
-| `cyd` | ESP32-2432S024C | ILI9341 2.4" 320×240 | CST816S I2C | ✅ Active | Alias for S024C (use specific target) |
-| `cyd_boot` | ESP32-2432S024C | ILI9341 2.4" 320×240 | CST816S I2C | ✅ Active | PURR Kernel → `factory` |
-| `heltec` | ESP32-S3 | SSD1306 OLED 128×64 | — | ✅ Working | WiFi + LoRa, Smol shell |
-| `tdeck` | ESP32-S3 | ST7789 | trackball | 🚧 WIP | Shell pending |
-| `jc3248w535` | ESP32-S3 | ST7796 3.5" 480×320 | GT911 cap | 🚧 WIP | Verify pins before flashing |
-| `waveshare169` | ESP32-S3 | ST7789 1.69" 240×280 | CST816S cap | 🚧 WIP | Verify pins before flashing |
+| `cyd_s028r` | ESP32-2432S028R | ILI9341 2.4" 320x240 | XPT2046 SPI | Active | Original variant |
+| `cyd_s024c` | ESP32-2432S024C | ILI9341 2.4" 320x240 | CST816S I2C | Active | Newer variant |
+| `cyd_boot` | ESP32-2432S024C | ILI9341 2.4" 320x240 | CST816S I2C | Active | PURR Kernel -> factory partition |
+| `heltec` | ESP32-S3 | SSD1306 OLED 128x64 | — | Working | WiFi + LoRa, Smol shell |
+| `tdeck` | ESP32-S3 | ST7789 | trackball | WIP | Shell pending |
+| `jc3248w535` | ESP32-S3 | ST7796 3.5" 480x320 | GT911 cap | WIP | Verify pins before flashing |
+| `waveshare169` | ESP32-S3 | ST7789 1.69" 240x280 | CST816S cap | WIP | Verify pins before flashing |
 
 ---
 
@@ -103,11 +100,11 @@ The architecture splits across two flash partitions: a small **PURR Kernel** tha
 
 ### Boot sequence
 
-1. IDF bootloader reads OTA data → jumps to factory (PURR Kernel)
-2. PURR Kernel reads `esp_app_desc_t` from ota_0 — if it's a PURR image, chainloads in ~20ms
-3. If **GPIO 0 is held** at power-on → forces bootloader UI
-4. If ota_0 has crashed 3 times in a row without clearing the counter → **SOS mode**
-5. If ota_0 is empty or non-PURR firmware → bootloader UI (pure passthrough)
+1. IDF bootloader reads OTA data -> jumps to factory (PURR Kernel)
+2. PURR Kernel reads `esp_app_desc_t` from ota_0 — if it is a PURR image, chainloads in ~20ms
+3. If **GPIO 0 is held** at power-on -> forces bootloader UI
+4. If ota_0 has crashed 3 times in a row without clearing the counter -> **SOS mode**
+5. If ota_0 is empty or non-PURR firmware -> bootloader UI (pure passthrough)
 
 The PURR Kernel is **OTA-immune** — it can only be updated by flashing over USB. This means the device always has a recovery path regardless of what is in the OTA slots.
 
@@ -115,33 +112,32 @@ The PURR Kernel is **OTA-immune** — it can only be updated by flashing over US
 
 ## PURR Kernel (factory partition)
 
-The factory image is more than a recovery tool — it is the boot manager:
+The factory image is a full recovery environment (394 KB, fits comfortably in the 1 MB factory slot):
 
 - **Fast-path chainload** — boots PURR userland in ~20ms on every normal power-on
-- **Crash-loop detection** — KITT increments an NVS counter before each chainload and the userland clears it on successful init; 3 failures → SOS mode
+- **Crash-loop detection** — KITT increments an NVS counter before each chainload and the userland clears it on successful init; 3 failures -> SOS mode
 - **SOS recovery screen** — wipe slot / boot anyway / dismiss
 - **Bootloader UI** — lists all OTA slots with firmware version read direct from flash; per-slot Boot / Wipe / Install
-- **Firmware backup** — before overwriting a slot that has PURR firmware, offers to dump it to SD card (`/PURR_BACKUP_OTA0.bin`); after install, offers to restore or boot new firmware
-- **SD install** — flashes any `.bin` from SD card into any OTA slot using the IDF OTA API
+- **SD card install** — flashes any `.bin` from SD card into any OTA slot using the IDF OTA API (CS GPIO5, MOSI 23, MISO 19, SCLK 18)
+- **Firmware backup** — before overwriting a slot that has PURR firmware, offers to dump it to SD; after install, offers to restore or boot new firmware
 - **Third-party firmware** — ota_1 slot can hold any ESP32 firmware; PURR Kernel acts as a pure passthrough bootloader for non-PURR images
+- **No network required** — factory partition has no WiFi stack
 
 ---
 
 ## UI Shells (CYD — powered by MiniWin)
 
-All CYD UI shells run on top of **[MiniWin](https://github.com/miniwinwm/miniwinwm)** (MIT licensed), wired to the ILI9341 and CST816S via a PURR-specific HAL port (`CoreOS/components/miniwinwm/MiniWin/hal/PURR_CYD/`).
+All CYD UI shells run on top of **[MiniWin](https://github.com/miniwinwm/miniwinwm)** (MIT licensed), wired to the ILI9341 and CST816S via a PURR-specific HAL port (`CoreOS/components/lib_miniwin/MiniWin/hal/PURR_CYD/`).
 
 | Shell | Flag | Description |
 |-------|------|-------------|
 | `blackberry` | `PURR_HAS_BLACKBERRY_UI` | BlackBerry OS 6-style — status bar, swipe-up app drawer, BB nav |
 | `explorer` | `PURR_HAS_EXPLORER` | Windows CE / PDA style — taskbar, overlapping windows, Start launcher |
-| `both` | both above | BlackberryUI preferred, Explorer as fallback (default for CYD) |
 | `smol` | — | Minimal OLED shell (Heltec / T-Deck) |
-| `none` | — | Headless — no UI shell compiled |
 
-MiniWin runs as a FreeRTOS task (core 1, priority 3, 12KB stack). The root window callbacks (`mw_user_root_paint_function`, `mw_user_root_message_function`) are the homescreen. Apps open as borderless `mw_add_window()` windows on top.
+MiniWin runs as a FreeRTOS task (core 1, priority 3, 12KB stack). Apps open as borderless `mw_add_window()` windows on top.
 
-> **Note:** MiniWin source must be cloned into `CoreOS/components/miniwinwm/` before building. A FATAL_ERROR is raised at cmake time if it is missing.
+> MiniWin source must be cloned into `CoreOS/components/lib_miniwin/` before building. A FATAL_ERROR is raised at cmake time if it is missing.
 
 ---
 
@@ -154,7 +150,7 @@ MiniWin runs as a FreeRTOS task (core 1, priority 3, 12KB stack). The root windo
 | Meshtastic | `PURR_ENABLE_MESH` | OFF | Requires LoRa |
 | MTP USB | `PURR_ENABLE_MTP` | OFF | USB file transfer |
 | OTA Flasher | `PURR_ENABLE_FLASHER` | OFF | In-app OTA flasher module |
-| MicroPython | `BUILD_MINI=0` | ON (off for CYD WIP) | `.meow` app runtime |
+| MicroPython | `BUILD_MINI=0` | ON (off for cyd_boot always) | `.meow` app runtime |
 
 ---
 
@@ -212,6 +208,8 @@ MiniWin runs as a FreeRTOS task (core 1, priority 3, 12KB stack). The root windo
 ```
 PURR-OS/
 │
+├── CHANGELOG.md                — Full release history (all versions)
+│
 ├── Builder/                    — Build tooling (run from here)
 │   ├── SDK.ps1                 — Main entry point: sources IDF, calls sdk_core.py
 │   ├── sdk_core.py             — Python SDK: interactive menu, build/flash/monitor
@@ -230,8 +228,8 @@ PURR-OS/
 │   ├── CMakeLists.txt          — project(purr_os_core), PROJECT_VER set here
 │   ├── partitions_cyd.csv      — CYD 4MB layout
 │   ├── partitions_heltec.csv   — Heltec layout
-│   ├── partitions_jc3248w535.csv — JC3248W535 16MB layout
-│   ├── partitions_waveshare169.csv — Waveshare 1.69" 4MB layout
+│   ├── partitions_jc3248w535.csv
+│   ├── partitions_waveshare169.csv
 │   │
 │   ├── main/                   — Top-level IDF component
 │   │   └── CMakeLists.txt      — Source selection, PURR_SHELL, PURR_DEFS, per-target blocks
@@ -240,56 +238,29 @@ PURR-OS/
 │   │   ├── kernel/             — KITT kernel core
 │   │   │   ├── purr_version.h  — Single source of truth: PURR_OS_VERSION, KITT_VERSION
 │   │   │   ├── kitt.h/.cpp     — Kernel: boot, lifecycle, 60+ APIs
-│   │   │   ├── main.cpp        — Arduino entry: kitt.init() + system_start()
+│   │   │   ├── main.cpp        — IDF app_main entry: kitt.init() + system_start()
 │   │   │   ├── device_config.h — Parses device.json into device_config_t
 │   │   │   ├── devices/        — Per-hardware JSON profiles
-│   │   │   │   ├── cyd.json, heltec.json, jc3248w535.json, waveshare169.json, …
-│   │   │   └── modules/
-│   │   │       ├── display_ili9341.h/.cpp    — ILI9341 (CYD)
-│   │   │       ├── display_ssd1306.h/.cpp    — SSD1306 OLED (Heltec)
-│   │   │       ├── display_st7796.h/.cpp     — ST7796 480×320 (JC3248W535, WIP)
-│   │   │       ├── display_st7789.h/.cpp     — ST7789 240×280 (Waveshare, WIP)
-│   │   │       ├── touch_cst816s.h/.cpp      — CST816S I2C cap touch
-│   │   │       ├── touch_gt911.h/.cpp        — GT911 I2C 5-point cap touch (WIP)
-│   │   │       ├── partition_manager.h/.cpp  — OTA slot manager + SD dump/install
-│   │   │       ├── purr_bootloader.h/.cpp    — Factory kernel UI (boot/wipe/install/SOS)
-│   │   │       ├── stub_managers.cpp         — Linker stubs for factory kernel build
-│   │   │       ├── wifi_manager.h/.cpp       — WiFi: scan, connect, NVS credentials
-│   │   │       ├── bt_manager.h/.cpp         — Bluetooth BLE + Classic
-│   │   │       ├── lora_manager.h/.cpp       — LoRa radio
-│   │   │       ├── power_manager.h/.cpp      — Battery ADC, CPU freq scaling
-│   │   │       ├── blackberry_ui.h/.cpp      — BB-style shell (MiniWin root window)
-│   │   │       ├── explorer.h/.cpp           — Windows CE shell (MiniWin)
-│   │   │       ├── mtp_manager.h/.cpp        — MTP USB file transfer
-│   │   │       └── flasher.h/.cpp            — OTA partition flasher module
-│   │   │
-│   │   ├── system/             — System task
-│   │   │   └── main.cpp        — Boot decision: chainload / SOS / bootloader UI / shell
-│   │   │
-│   │   └── micropython/        — MicroPython runtime
-│   │       ├── mpython_runtime.h/.cpp
-│   │       └── kitt_module.c   — `import kitt` Python extension
+│   │   │   └── modules/        — Kernel modules (partition_manager, purr_bootloader, ...)
+│   │   ├── system/
+│   │   │   └── main.cpp        — system_task: chainload logic, shell launch
+│   │   └── micropython/        — MicroPython runtime (BUILD_MINI=0 only)
 │   │
-│   ├── apps/
-│   │   └── smol/               — Smol OLED shell (Heltec / T-Deck)
-│   │
-│   └── components/
-│       ├── TFT_eSPI/           — TFT_eSPI display library (IDF wrapper)
-│       └── miniwinwm/          — MiniWin WM + PURR_CYD HAL port
-│           └── MiniWin/hal/PURR_CYD/
-│               ├── miniwin_config.h  — 320×240 landscape, 20ms tick
-│               ├── hal_lcd.cpp       — Draws via display_ili9341
-│               ├── hal_touch.cpp     — Reads via touch_cst816s
-│               ├── hal_timer.cpp     — esp_timer 20ms tick
-│               ├── hal_delay.cpp     — vTaskDelay / ets_delay_us
-│               └── hal_non_vol.cpp   — NVS calibration storage
+│   └── components/             — IDF components (all hardware drivers)
+│       ├── drv_display/        — ILI9341, ST7789, ST7796, SSD1306, ILI9488
+│       ├── drv_touch/          — CST816S, XPT2046, GT911, MXT336T
+│       ├── drv_bt/             — Bluetooth manager
+│       ├── drv_gps/            — GPS UART manager
+│       ├── drv_hid/            — USB HID keyboard matrix
+│       ├── drv_lora/           — LoRa manager + swappable kernels (SX1262/SX1276/RAK3172)
+│       ├── drv_wifi/           — WiFi manager (no-op stub for heltec)
+│       ├── lib_tftespi/        — TFT_eSPI with self-contained minimal Arduino shim
+│       ├── lib_miniwin/        — MiniWin WM + PURR_CYD HAL (clone separately)
+│       └── lib_radiolib/       — RadioLib LoRa physical layer
 │
-├── LoRa Kernels/               — Swappable LoRa backends
-│   ├── SX1262/                 — Heltec V3, T-Deck (default)
-│   ├── RAK3172/                — UART AT — CattoBoardV1 PCB
-│   └── SX1276_RFM95W/          — Generic RFM95W breakout
-│
-└── PURR_OS_docs/               — Hardware docs, schematics
+└── docs/
+    ├── PURR_OS_docs/           — Architecture, kernel spec, UI specs, boot sequence
+    └── CHANGELOG.md            — Redirects to root CHANGELOG.md
 ```
 
 ---
@@ -300,7 +271,7 @@ PURR-OS/
 
 PURR OS targets **ESP-IDF 5.3.x** (tested on **v5.3.5**). Do not use v5.4+ or v5.2 — the arduino-esp32 3.1.x managed component pins to `>=5.3,<5.4`, and the build system applies patches specific to IDF 5.3.x internals (`esp_driver_gpio`, `esp_timer` component split).
 
-Install: [ESP-IDF v5.3.5 Getting Started](https://docs.espressif.com/projects/esp-idf/en/v5.3.5/esp32/get-started/)
+Install: ESP-IDF v5.3.5 Getting Started — https://docs.espressif.com/projects/esp-idf/en/v5.3.5/esp32/get-started/
 
 On Windows the recommended path is `C:\esp\v5.3.5\esp-idf` with IDF Tools installed via the ESP-IDF installer. The SDK scripts auto-detect IDF via `IDF_PATH`.
 
@@ -309,7 +280,7 @@ On Windows the recommended path is `C:\esp\v5.3.5\esp-idf` with IDF Tools instal
 ## First-Time Setup
 
 1. Install **ESP-IDF v5.3.5**
-2. Clone this repo — MiniWin source must be present in `CoreOS/components/miniwinwm/MiniWin/` (a FATAL_ERROR will tell you if it is missing at cmake time)
+2. Clone this repo — MiniWin source must be present in `CoreOS/components/lib_miniwin/MiniWin/` (a FATAL_ERROR will tell you if it is missing at cmake time)
 3. Run `.\Builder\SDK.ps1` — sources IDF, walks through target/module/shell selection, applies arduino-esp32 patches, builds and flashes
 
 For CYD first flash (two images required):
@@ -322,19 +293,18 @@ This builds the PURR Kernel and userland back-to-back and flashes everything in 
 
 ## Documentation
 
-All PURR OS specifications and architecture docs are in **[`PURR_OS_docs/`](PURR_OS_docs/)**:
+All PURR OS specifications and architecture docs are in **[`docs/PURR_OS_docs/`](docs/PURR_OS_docs/)**:
 
 | Doc | Content |
 |-----|---------|
-| [`00_AI_Development_Guide.md`](PURR_OS_docs/00_AI_Development_Guide.md) | **→ How to use these docs with AI models** (Claude, GPT, etc.) |
-| [`01_Architecture.md`](PURR_OS_docs/01_Architecture.md) | System design, component relationships, layer separation |
-| [`02_KITT_Kernel_Spec.md`](PURR_OS_docs/02_KITT_Kernel_Spec.md) | Kernel API, task lifecycle, memory model |
-| [`05_Boot_Sequence.md`](PURR_OS_docs/05_Boot_Sequence.md) | Hardware init, OTA chainload, SOS recovery |
-| [`06_WindowsCE_UI_Spec.md`](PURR_OS_docs/06_WindowsCE_UI_Spec.md) | UI shell architecture, MiniWin integration |
-| [`12_TDeck_BlackBerry6_UI_Spec.md`](PURR_OS_docs/12_TDeck_BlackBerry6_UI_Spec.md) | BlackBerry OS 6-inspired shell implementation |
-| [and more...](PURR_OS_docs/) | App bundles, protocols, hardware specs |
-
-**→ Start here if you're modifying the codebase:** [00_AI_Development_Guide.md](PURR_OS_docs/00_AI_Development_Guide.md)
+| [`00_AI_Development_Guide.md`](docs/PURR_OS_docs/00_AI_Development_Guide.md) | How to use these docs with AI models |
+| [`01_Architecture.md`](docs/PURR_OS_docs/01_Architecture.md) | System design, component relationships, layer separation |
+| [`02_KITT_Kernel_Spec.md`](docs/PURR_OS_docs/02_KITT_Kernel_Spec.md) | Kernel API, task lifecycle, memory model |
+| [`05_Boot_Sequence.md`](docs/PURR_OS_docs/05_Boot_Sequence.md) | Hardware init, OTA chainload, SOS recovery |
+| [`06_WindowsCE_UI_Spec.md`](docs/PURR_OS_docs/06_WindowsCE_UI_Spec.md) | UI shell architecture, MiniWin integration |
+| [`12_TDeck_BlackBerry6_UI_Spec.md`](docs/PURR_OS_docs/12_TDeck_BlackBerry6_UI_Spec.md) | BlackBerry OS 6-inspired shell implementation |
+| [and more...](docs/PURR_OS_docs/) | App bundles, protocols, hardware specs |
+| **[CHANGELOG.md](CHANGELOG.md)** | **Full release history — all versions** |
 
 ---
 
@@ -344,12 +314,12 @@ This project is open-source and very much needs humans. Current open areas:
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Explorer shell | 🚧 Stub | Windows CE / PDA UI on MiniWin |
-| JC3248W535 port | 🚧 WIP | Compiles, pins unverified on hardware |
-| Waveshare 1.69" port | 🚧 WIP | Compiles, pins unverified on hardware |
-| T-Deck port | 🚧 WIP | ST7789 driver + BB6 keyboard shell |
-| App SDK | 📝 Planned | `.meow` MicroPython API docs + examples |
-| Kernel OTA | 💡 Idea | Safe factory partition update mechanism |
-| Testing | 🙏 Always needed | Hardware verification, flash compatibility |
+| Explorer shell | Stub | Windows CE / PDA UI on MiniWin |
+| JC3248W535 port | WIP | Compiles, pins unverified on hardware |
+| Waveshare 1.69" port | WIP | Compiles, pins unverified on hardware |
+| T-Deck port | WIP | ST7789 driver + BB6 keyboard shell |
+| App SDK | Planned | `.meow` MicroPython API docs + examples |
+| Kernel OTA | Idea | Safe factory partition update mechanism |
+| Testing | Always needed | Hardware verification, flash compatibility |
 
 Issues and PRs welcome.

@@ -80,16 +80,16 @@ TARGETS = {
     "cyd_s028r": {
         "chip":         "esp32",
         "desc":         "CYD S028R (ESP32-2432S028R, original)",
-        "spec":         "ESP32  4MB  ILI9341 2.4\"  XPT2046 SPI touch  LVGL + PURR WM — full OS (ota_0)",
-        "shells":       ["blackberry", "explorer", "classicmac", "both", "none"],
+        "spec":         "ESP32  4MB  ILI9341 2.4\"  XPT2046 SPI touch  MiniWin WM — full OS (ota_0)",
+        "shells":       [],
         "default_lora": False,
         "fixed":        False,
     },
     "cyd_s024c": {
         "chip":         "esp32",
         "desc":         "CYD S024C (ESP32-2432S024C, newer)",
-        "spec":         "ESP32  4MB  ILI9341 2.4\"  CST816S I2C touch  LVGL + PURR WM — full OS (ota_0)",
-        "shells":       ["blackberry", "explorer", "classicmac", "both", "none"],
+        "spec":         "ESP32  4MB  ILI9341 2.4\"  CST816S I2C touch  MiniWin WM — full OS (ota_0)",
+        "shells":       [],
         "default_lora": False,
         "fixed":        False,
     },
@@ -97,7 +97,7 @@ TARGETS = {
         "chip":         "esp32",
         "desc":         "CYD (alias for S024C)",
         "spec":         "Use cyd_s028r or cyd_s024c instead",
-        "shells":       ["blackberry", "explorer", "classicmac", "both", "none"],
+        "shells":       [],
         "default_lora": False,
         "fixed":        False,
     },
@@ -113,7 +113,7 @@ TARGETS = {
         "chip":         "esp32s3",
         "desc":         "LilyGo T-Deck",
         "spec":         "ESP32-S3  16MB  ST7789  trackball (WIP)",
-        "shells":       ["blackberry", "smol"],
+        "shells":       ["smol"],
         "default_lora": True,
         "fixed":        False,
     },
@@ -207,18 +207,14 @@ LORA_KERNEL_DESCS = {
 }
 
 SHELL_DESCS = {
-    "both":       "BlackberryUI + Explorer — both registered, BB launches first (LVGL)",
-    "blackberry": "BlackberryUI — BB-style status bar + app drawer (LVGL)",
-    "explorer":   "Explorer — Windows CE / PDA taskbar + icon grid (LVGL)",
-    "classicmac": "ClassicMac — Mac System 7/8 Platinum desktop + menu bar (LVGL)",
-    "smol":       "Smol — minimal OLED shell",
-    "none":       "Headless — no UI shell compiled",
+    "smol": "Smol — minimal OLED shell",
+    "none": "Headless — no UI shell compiled",
 }
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DEFAULT_CFG = {
     "target":       "heltec",
-    "shell":        "both",
+    "shell":        "smol",
     "lora_kernel":  "sx1262",
     "flash_port":   "",
     "flash_baud":   460800,
@@ -327,24 +323,6 @@ def pick_lora_kernel(cfg):
         cfg["lora_kernel"] = "sx1262"
 
 
-def pick_shell(cfg):
-    shells = TARGETS[cfg["target"]]["shells"]
-    if not shells:
-        return
-    header(f"UI shell — {cfg['target']}:")
-    current = cfg.get("shell", shells[0])
-    for i, s in enumerate(shells, 1):
-        marker = f"{C_GRN} *{C_RST}" if s == current else "  "
-        print(f"  [{i}]{marker} {s:<12}  {C_GRY}{SHELL_DESCS.get(s, '')}{C_RST}")
-    print()
-    raw = input("  Choice [1]: ").strip() or "1"
-    try:
-        idx = int(raw) - 1
-        cfg["shell"] = shells[idx] if 0 <= idx < len(shells) else shells[0]
-    except ValueError:
-        cfg["shell"] = shells[0]
-
-
 def pick_modules(cfg):
     target = cfg["target"]
     if TARGETS[target]["fixed"]:
@@ -425,7 +403,6 @@ def configure(cfg, full=True):
             pick_tdeck_variant(cfg)
         elif cfg["target"] == "cyd":
             pick_cyd_variant(cfg)
-    pick_shell(cfg)
     pick_modules(cfg)
     pick_ports(cfg)
     save_cfg(cfg)
@@ -449,9 +426,6 @@ def _cmake_flags(cfg):
     fixed  = t["fixed"]
 
     flags = [f"-DTARGET_DEVICE={cmake_target}"]
-
-    if t["shells"]:
-        flags.append(f"-DPURR_SHELL={cfg.get('shell', 'both')}")
 
     # BUILD_MINI (inverted micropython)
     if fixed:
@@ -887,9 +861,6 @@ def show_banner(cfg):
     mini = (not mods.get("micropython", True)) or t["fixed"]
     print(f"  Variant  : {'mini — no MicroPython' if mini else 'full — with MicroPython'}")
 
-    if t["shells"] and cfg.get("shell"):
-        print(f"  Shell    : {cfg['shell']}")
-
     mod_strs = []
     if mods.get("bt"):      mod_strs.append("bt")
     if mods.get("lora"):    mod_strs.append(f"lora({cfg.get('lora_kernel','sx1262')})")
@@ -1083,8 +1054,6 @@ def sim_menu():
 def _apply_cli(cfg, args):
     if args.target:
         cfg["target"] = args.target
-    if args.shell:
-        cfg["shell"] = args.shell
     if args.mini:
         cfg["modules"]["micropython"] = False
     if args.no_bt:
@@ -1120,7 +1089,6 @@ def main():
     )
     p.add_argument("--target",      choices=list(TARGETS.keys()),
                    metavar="heltec|cyd_s028r|cyd_s024c|cyd|cyd_boot|tdeck|jc3248w535|waveshare169")
-    p.add_argument("--shell",       choices=["both", "blackberry", "explorer", "smol", "none"])
     p.add_argument("--build",       action="store_true")
     p.add_argument("--flash",       metavar="PORT", default="")
     p.add_argument("--monitor",     metavar="PORT", default="")
@@ -1166,11 +1134,9 @@ def main():
             do_monitor(cfg, port=args.monitor)
         return
 
-    # Interactive — apply any pre-set target/shell before entering menu
+    # Interactive — apply any pre-set target before entering menu
     if args.target:
         cfg["target"] = args.target
-    if args.shell:
-        cfg["shell"] = args.shell
     main_menu(cfg)
 
 

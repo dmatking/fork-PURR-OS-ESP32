@@ -2,6 +2,79 @@
 
 ---
 
+## [0.9.0] — 2026-06-07 — KITT 0.5.0 — Arduino removed, pure IDF, SD recovery environment
+
+### Arduino dependency removed (lib_arduino dropped)
+- Removed `lib_arduino` as a standalone component from all targets and all REQUIRES lists
+- All driver source files ported to pure ESP-IDF APIs:
+  - `drv_bt/bt_manager.cpp` — replaced `millis()` with `esp_timer_get_time() / 1000`
+  - `drv_gps/gps_manager.cpp` — same millis replacement
+  - `drv_display/display_ili9341.cpp` — replaced Arduino LEDC API with `ledc_timer_config` / `ledc_channel_config` / `ledc_set_duty` / `ledc_update_duty`
+  - `drv_hid/keyboard_matrix.cpp` — replaced `pinMode/digitalWrite/digitalRead/delayMicroseconds` with `gpio_set_direction/gpio_set_level/gpio_get_level/esp_rom_delay_us`
+  - `drv_hid/hid_main.cpp` — rewrote `setup()/loop()` to IDF FreeRTOS task pattern
+  - `drv_touch/touch_mxt336t.cpp` — replaced Wire.h with IDF `i2c_master_transmit/receive`; replaced `attachInterrupt` with `gpio_isr_handler_add`
+  - `drv_lora/kernels/*/lora_manager.cpp` — replaced `millis()` with IDF timer
+  - `drv_display/display_st7789.cpp`, `display_st7796.cpp`, `display_ili9488.cpp` — removed unused `purr_idf_compat.h` includes
+- Redundant `#ifdef PURR_HAS_*` guards removed from driver .cpp files (CMakeLists already handles conditional compilation)
+
+### TFT_eSPI — self-contained minimal Arduino shim
+- `CoreOS/components/lib_tftespi/Arduino.h` — minimal shim containing only what TFT_eSPI needs:
+  - Timing: `millis()`, `micros()`, `delay()`, `delayMicroseconds()`
+  - GPIO: `pinMode()`, `digitalWrite()`, `digitalRead()`, `yield()`
+  - Math: `random()`, `min/max`, `constrain`, `ltoa()`
+  - PROGMEM: no-op macros for `pgm_read_*`
+  - `SPIClass` stub + `extern SPIClass SPI`
+  - `String` class with `toCharArray`, `indexOf`, `substring`, `+=`
+- `CoreOS/components/lib_tftespi/Print.h` — minimal `Print` base class for TFT_eSPI
+- `CoreOS/components/lib_tftespi/SPI.h` — thin wrapper including Arduino.h
+- `CoreOS/components/lib_tftespi/arduino_compat.cpp` — defines `SPIClass SPI` global
+- `lib_tftespi/CMakeLists.txt` — compiles `TFT_eSPI.cpp` + `arduino_compat.cpp`; `INCLUDE_DIRS "." "Extensions"`
+
+### IDF component structure (drv_* components)
+All hardware drivers moved from `system/kernel/modules/` monolith into discrete IDF components under `CoreOS/components/`:
+- `drv_display/` — ILI9341, ST7789, ST7796, SSD1306, ILI9488
+- `drv_touch/` — CST816S, XPT2046, GT911, MXT336T
+- `drv_bt/` — Bluetooth manager
+- `drv_gps/` — GPS UART manager
+- `drv_hid/` — USB HID keyboard matrix
+- `drv_lora/kernels/` — LoRa backends (SX1262, SX1276, RAK3172)
+- `drv_wifi/` — WiFi manager
+
+### IDF include propagation workarounds
+IDF v5.3 does not propagate `INTERFACE_INCLUDE_DIRECTORIES` through `REQUIRES` for some component pairs. Applied `idf_component_get_property(lib <name> COMPONENT_LIB)` + `target_link_libraries(PRIVATE ${lib})` workaround in:
+- `drv_touch/CMakeLists.txt` — for `esp_driver_gpio`, `esp_driver_i2c`, `esp_driver_spi`
+- `drv_display/CMakeLists.txt` — for `esp_driver_ledc`
+- `main/CMakeLists.txt` (cyd_boot) — for `fatfs`, `sdmmc`
+
+### WiFi stub for heltec
+- `drv_wifi/wifi_manager_stub.cpp` — no-op implementations of all `wifi_manager_*` functions; compiled for heltec in place of the real WiFi stack
+- `drv_wifi/CMakeLists.txt` — exposes `INCLUDE_DIRS "."` even for stub build so `kitt.cpp` can include `wifi_manager.h` unconditionally
+
+### purr_wm.h include guard
+- `system/system/main.cpp` — `#include "purr_wm.h"` wrapped in `#ifdef PURR_HAS_MINIWIN`; `cyd_boot` does not have MiniWin and no longer fails to find the header
+
+### SD card recovery environment in factory partition (`cyd_boot`)
+Previously `cyd_boot` used `partition_manager_stubs.cpp` with no-op SD functions. SD support is now fully live in the factory partition:
+- `main/CMakeLists.txt` (cyd_boot) — switched from `partition_manager_stubs.cpp` to `partition_manager.cpp`; added `fatfs` and `sdmmc` to REQUIRES
+- `partition_manager.cpp` — SD card init (`sdspi`, CS GPIO5, MOSI 23, MISO 19, SCLK 18); `pm_sd_list()` returns `.bin` / `.purr` files from SD root; `pm_install()` writes SD file to OTA slot via `esp_ota_begin/write/end`; `pm_dump_to_sd()` reads OTA partition and writes a trimmed binary to SD
+- Bug fix: `pm_sd_list()` was storing full mount paths in `files[].path` while `pm_install()` was prepending the mount prefix again — resulting in double path (`/sdcard//sdcard/file.bin`); fixed to store bare filenames in `path`
+- Bug fix: `purr_bootloader.cpp` backup path `"/PURR_BACKUP_OTA0.bin"` had a spurious leading slash; removed
+- `partition_manager.cpp` — `dev_cfg.gpio_cs` cast to `gpio_num_t` (strict C++ type check)
+
+### Build sizes (v0.9.0)
+
+| Target | Binary | Partition | Free |
+|--------|--------|-----------|------|
+| `cyd_s024c` | 831 KB | ota_0 1.5 MB | 20% |
+| `cyd_boot` | 394 KB | factory 1 MB | 62% |
+| `heltec` | 269 KB | factory 2 MB | 74% |
+
+### Version bumps
+- `purr_version.h` — `PURR_OS_VERSION` 0.8.0 → 0.9.0; `KITT_VERSION` 0.4.1 → 0.5.0
+- `CoreOS/CMakeLists.txt` — `PROJECT_VER` 0.7.0 → 0.9.0
+
+---
+
 ## [0.7.0] — 2026-06-04 — KITT 0.4.0 — PURR Kernel, factory chainload, SOS recovery, new targets
 
 ### PURR Kernel — factory partition redesign
@@ -118,371 +191,82 @@
   - `ota_0` grown to 1.5 MB — full PURR OS image lives here
   - `ota_1` at 1 MB — generic third-party slot
   - `spiffs` at `0x390000`, 448 KB
-- All flash offsets updated in `Builder/Build.ps1` and `Builder/sdk_core.py`:
-  - `cyd` → app at `0x110000` (ota_0), SPIFFS at `0x390000`
-  - `cyd_boot` → app at `0x10000` (factory), SPIFFS at `0x390000`
+- All flash offsets updated in `Builder/Build.ps1` and `Builder/sdk_core.py`
 
 ### New build target: `cyd_boot` (factory recovery image)
 - `CoreOS/main/CMakeLists.txt` — `cyd_boot` target block: overrides SRCS/REQUIRES to a minimal set (no WiFi, no BT, no OS modules, no MicroPython); forces `BUILD_MINI=1`
 - Compile flags: `PURR_HAS_BOOTLOADER=1 PURR_IS_BOOTLOADER_IMG=1`
-- `Builder/Build.ps1` — `cyd_boot` added as target [3]; chip = `esp32`; defaults fall back to `cyd.defaults`; app offset = `0x10000`
-- `Builder/SDK.ps1` / `sdk_core.py` — `cyd_boot` added as selectable target with `fixed=True` (no module toggles)
 
 ### purr_bootloader — generic OTA slot scanner
-- `CoreOS/system/kernel/modules/purr_bootloader.cpp` — complete rewrite (~300 lines):
-  - Scans all OTA slots dynamically using `esp_ota_get_partition_description()` to read firmware version directly from flash
-  - Per-slot button tags: `TAG_BOOT(s)`, `TAG_WIPE(s)`, `TAG_INSTALL(s)`
-  - Screen states: `PB_HOME`, `PB_CONFIRM_WIPE`, `PB_CONFIRM_BOOT`, `PB_INSTALL_SELECT`, `PB_INSTALLING`
-  - Valid slots: shows BOOT + WIPE buttons with firmware version; empty slots: shows INSTALL
-  - Blue LED heartbeat in factory image mode
-- `CoreOS/system/kernel/modules/purr_bootloader.h` — stripped to single declaration `purr_bootloader_start()`
-- `CoreOS/system/system/main.cpp` — `PURR_IS_BOOTLOADER_IMG` path calls `purr_bootloader_start()`; OTA path checks GPIO0 and calls `pm_boot_to_factory()` instead of inline bootloader
+- Scans all OTA slots dynamically using `esp_ota_get_partition_description()` to read firmware version directly from flash
+- Screen states: `PB_HOME`, `PB_CONFIRM_WIPE`, `PB_CONFIRM_BOOT`, `PB_INSTALL_SELECT`, `PB_INSTALLING`
+- Blue LED heartbeat in factory image mode
 
 ### partition_manager — new APIs
-- `CoreOS/system/kernel/modules/partition_manager.h` — two new declarations:
-  - `pm_boot_slot()` — returns active OTA slot index (0/1/…) or -1 if booted from factory
-  - `pm_boot_to_factory()` — sets factory as boot target via `esp_ota_set_boot_partition()` + `esp_restart()`
-- `CoreOS/system/kernel/modules/partition_manager.cpp` — both implemented; `pm_delete()` updated to reset otadata to factory when the deleted slot was the active boot slot
-
-### PURR_SHELL cmake variable
-- `CoreOS/main/CMakeLists.txt` — `PURR_SHELL` cache variable added (`both | blackberry | explorer | smol | none`); default `both` preserves existing Build.ps1 behaviour
-- `cyd` target: shell selection drives `PURR_HAS_BLACKBERRY_UI`, `PURR_HAS_EXPLORER` compile flags
-- `tdeck` target: same, with `PURR_BBUI_TARGET_KEYS` instead of `PURR_BBUI_TARGET_TOUCH`
+- `pm_boot_slot()` — returns active OTA slot index or -1 if booted from factory
+- `pm_boot_to_factory()` — sets factory as boot target + esp_restart()
 
 ### Builder SDK — full rewrite
-- `Builder/SDK.ps1` — new thin PS1 wrapper:
-  - Auto-detects IDF `export.ps1` from candidate paths or `$env:IDF_EXPORT_PATH`
-  - Maps all switches (`-Target`, `-Shell`, `-Build`, `-Flash`, `-Monitor`, `-Clean`, `-Mini`, `-NoBt`, `-Lora`, `-NoLora`, `-Mesh`, `-Mtp`, `-Flasher`, `-LoraKernel`, `-TdeckPlus`, `-Configure`, `-Baud`) to Python CLI args
-  - Calls `python sdk_core.py @pyArgs`
-- `Builder/sdk_core.py` — full Python SDK (380 lines):
-  - Config: JSON in `Builder/purr_sdk.cfg`; persisted between runs
-  - Interactive wizard: target picker → shell picker → module toggles (LoRa/mesh lock) → port entry
-  - `_cmake_flags()` — builds full `-D` flag list including `PURR_SHELL`
-  - Arduino patches ported from Build.ps1 (4 patches: ADC rename, I2C slave stubs, ESP_SR header, esp_timer REQUIRES)
-  - `run_live()` — subprocess with live streaming output, KeyboardInterrupt → terminate
-  - `do_build()`, `do_flash()` (per-target offsets), `do_monitor()`, `_build_spiffs()`
-  - Main menu: `b/B/f/m/r/a/c/s/q` (`B` = clean build)
-  - Non-interactive CLI via argparse
-  - `_idf_py()` — resolves `idf.py` via `IDF_PATH/tools/idf.py` + `sys.executable` to fix Windows `FileNotFoundError` when calling bare `idf.py` via subprocess
+- `Builder/SDK.ps1` — thin PS1 wrapper; auto-detects IDF `export.ps1`; calls `sdk_core.py`
+- `Builder/sdk_core.py` — full Python SDK (380 lines): interactive wizard, config persistence, cmake flag builder, arduino patches, build/flash/monitor
 
 ### MiniWin window manager integration
-- `CoreOS/components/miniwinwm/` — MiniWin (MIT) added as local IDF component (same pattern as TFT_eSPI):
-  - `CMakeLists.txt` — GLOBs core `.c` sources from `MiniWin/`, excludes all upstream platform HAL dirs, adds PURR_CYD HAL `.cpp` files explicitly; defines `PURR_CYD=1`; only active for `cyd`/`cyd_boot` targets
-  - `MiniWin/hal/PURR_CYD/miniwin_config.h` — 320×240 landscape, 20ms tick
-  - `MiniWin/hal/PURR_CYD/hal_lcd.cpp` — `mw_hal_lcd_*` wired to `display_ili9341`; colour conversion `0x00RRGGBB → RGB565`; monochrome + colour bitmap clip via pixel-by-pixel fill (optimize later)
-  - `MiniWin/hal/PURR_CYD/hal_touch.cpp` — `mw_hal_touch_*` wired to `touch_cst816s`; coordinates scaled `0..319/239 → 0..4095` for MiniWin calibration matrix; `is_recalibration_required` always `false` (CST816S is pre-calibrated capacitive)
-  - `MiniWin/hal/PURR_CYD/hal_timer.cpp` — `esp_timer` 20ms periodic, increments `mw_tick_counter`
-  - `MiniWin/hal/PURR_CYD/hal_delay.cpp` — Arduino `delay()` / `delayMicroseconds()`
-  - `MiniWin/hal/PURR_CYD/hal_non_vol.cpp` — NVS blob store for MiniWin calibration data (namespace `miniwin`, key `mw_cal`)
-- `CoreOS/main/CMakeLists.txt` — `miniwinwm` added to REQUIRES for `cyd` and `cyd_boot`
-
-### UI shell direction
-- `purr_explorer` — designated as Windows CE / PDA style shell: taskbar at bottom, overlapping movable windows, Start-menu app launcher, modal dialogs via MiniWin; implementation pending PDA design references
-- `purr_blackberry_ui` — stays BB-style (fixed layout, status bar, app drawer) but will be rebuilt on MiniWin primitives instead of raw TFT calls
-
-### Fixes
-- `Builder/sdk_core.py` — `_idf_py()` helper: on Windows, bare `"idf.py"` in `subprocess.Popen` raises `FileNotFoundError` because Python scripts aren't executable by name; fix resolves full path via `$IDF_PATH/tools/idf.py` and invokes with `sys.executable`
-- `CoreOS/system/kernel/modules/display_ili9341.h` — corrected CYD variant comment: active target is S024C (2.4" capacitive, CST816S, BL=GPIO27), not S028R
+- `CoreOS/components/miniwinwm/` — MiniWin (MIT) added as local IDF component
+- PURR_CYD HAL: `hal_lcd`, `hal_touch`, `hal_timer`, `hal_delay`, `hal_non_vol` wired to ILI9341 + CST816S
 
 ---
 
 ## [0.5.1] — 2026-05-31 — Build system fixes + IDF 5.1/5.2 compatibility
 
-### Builder — cmake flag propagation fix
-- `build.sh` / `Build.ps1` — cmake `-D` flags now passed to both `set-target` **and** `build`
-  - Previously `idf.py set-target` ran cmake with default values (`BUILD_MINI=0`), causing it to
-    attempt resolving the `micropython` component before the build step could override the flag
-  - Both scripts now collect flags into an array and splat them onto every `idf.py` call
-
-### CoreOS — CMakeLists.txt: MicroPython auto-fallback
-- `main/CMakeLists.txt` — if the MicroPython submodule header is absent, build automatically
-  falls back to mini mode with a CMake `WARNING` instead of a hard configure error
-  - Prevents `micropython: unknown component` failures when the submodule hasn't been cloned
-
-### Builder — sdkconfig defaults: FreeRTOS tick rate
-- `targets/heltec.defaults` — added `CONFIG_FREERTOS_HZ=1000` (arduino-esp32 hard-requires 1000Hz)
-- `targets/cyd.defaults` — same; applies to all arduino-esp32 targets
-
-### IDF version constraint (arduino-esp32 3.0.0 compatibility matrix)
-- `main/idf_component.yml` — IDF ceiling set to `<5.3.0`
-  - IDF 6.x: `wifi_provisioning` component removed → cmake failure
-  - IDF 5.3+: ESP32-S3 touch driver API replaced (`driver/touch_sensor.h` → `driver/touch_sens.h`,
-    `touch_value_t` removed); arduino-esp32 3.0.0 uses the old API → compile failure
-  - **IDF 5.1.x and 5.2.x are the only confirmed-working versions** with arduino-esp32 3.0.0
-- `Builder/HOWTO.md` — Prerequisites §1 updated; troubleshooting table extended with touch and
-  wifi_provisioning error → fix mappings
+- cmake `-D` flags now passed to both `set-target` and `build`
+- MicroPython auto-fallback to mini mode if submodule absent
+- `CONFIG_FREERTOS_HZ=1000` added to all arduino-esp32 targets
+- `idf_component.yml` IDF ceiling set to `<5.3.0` (arduino-esp32 3.0.0 compatibility)
 
 ---
 
-## [0.5.0] — 2026-05-30 — Builder SDK, per-module flags, sdk.py deprecated
+## [0.5.0] — 2026-05-30 — Builder SDK, per-module flags
 
-### Builder — full rewrite (interactive + direct mode)
-- `Builder/build.sh` (bash, Linux/macOS/Git Bash) — complete rewrite
-  - No args → interactive wizard: device picker, LoRa kernel picker, numbered module toggle menu
-  - Direct mode: `--target TARGET [--mini] [--clean] [--flash PORT] [--monitor PORT]`
-  - Module flags: `--no-bt`, `--with-mtp`, `--with-flasher`, `--no-lora`, `--lora-kernel K`
-  - `load_config` / `save_config` — persists choices to `purr_build.cfg` between runs
-  - `install_lora_kernel` — copies selected backend from `LoRa Kernels/` into `CoreOS/system/kernel/modules/`
-  - Sets `ARDUINO_SKIP_IDF_VERSION_CHECK=1` to bypass arduino-esp32's IDF version ceiling check
-- `Builder/Build.ps1` (PowerShell 5.1+, Windows native) — new script; full feature parity with build.sh
-  - All Unicode replaced with ASCII to avoid PS 5.1 Windows-1252 decode bug (`→` → `->`, etc.)
-  - Params: `-Target`, `-Mini`, `-Clean`, `-Flash`, `-Monitor`, `-Setup`, `-LoraKernel`,
-    `-NoBt`, `-WithMtp`, `-WithFlasher`, `-NoLora`
-- `Builder/HOWTO.md` — new comprehensive build guide: prerequisites, per-target instructions,
-  partition tables, flash/monitor workflows, troubleshooting table
-- `.gitignore` — added `Builder/purr_build.cfg`
-- `sdk.py` — **deprecated**; replaced by `build.sh` / `Build.ps1`
-
-### CoreOS — CMakeLists.txt restructured for IDF 5.x
-- `CoreOS/CMakeLists.txt` — stripped to 3-line project boilerplate
-  (`idf_component_register` must live in a component subdirectory in IDF 5.x+)
-- `CoreOS/main/CMakeLists.txt` — **new file**; all build logic moved here
-  - Per-module CMake cache variables: `PURR_ENABLE_BT`, `PURR_ENABLE_LORA`, `PURR_ENABLE_MTP`, `PURR_ENABLE_FLASHER`
-  - LoRa auto-enabled for `heltec` / `tdeck`; disabled for `cyd`
-  - Managed component REQUIRES use `namespace__name` format: `espressif__arduino-esp32`,
-    `bblanchon__arduinojson`, `lvgl__lvgl`
-  - Device-specific source/include/REQUIRES selected via `TARGET_DEVICE`
-  - `PURR_HAS_*` preprocessor defines emitted via `target_compile_definitions`
-- `CoreOS/main/idf_component.yml` — moved from project root; dependencies unchanged
-
-### CoreOS — KITT: optional Bluetooth
-- `kitt.cpp` — added `#ifdef PURR_HAS_BT` guards in six locations:
-  1. `bt_manager.h` include
-  2. BT init block in `KITT::init()`
-  3. `bt_manager_update()` call in `KITT::update()`
-  4. `ts.bt_enabled` tray update (with `#else ts.bt_enabled = false`)
-  5. `bt_manager_deinit()` in `KITT::shutdown()`
-  6. All 19 BT API forwarding methods — full implementations when `PURR_HAS_BT`, no-op stubs otherwise
+- `Builder/build.sh` — interactive wizard + direct mode; module flags; config persistence
+- `Builder/Build.ps1` — PowerShell parity
+- `CoreOS/main/CMakeLists.txt` — per-module CMake cache variables: `PURR_ENABLE_BT/LORA/MTP/FLASHER`
+- `kitt.cpp` — `#ifdef PURR_HAS_BT` guards across all 6 call sites + 19 API methods
 
 ---
 
 ## [0.4.1] — 2026-05-29 — Multi-target build system
 
-### Builder/ (new top-level folder)
-Enter this folder and run `./build.sh` — it resolves `CoreOS/` automatically.
-
-- `Builder/build.sh` — build wrapper; `--target heltec|cyd|tdeck`, `--mini`, `--clean`, `--flash PORT`, `--monitor PORT`
-  - Validates `IDF_PATH`, warns on missing MicroPython submodule or TBD LoRa pin stubs
-  - Copies `targets/<target>.defaults` → `CoreOS/sdkconfig.defaults`, cds into `CoreOS/`, runs `idf.py`
-- `Builder/targets/heltec.defaults` — 8MB flash, 80MHz, `partitions_heltec.csv`, ESP32-S3 240MHz, debug log level
-- `Builder/targets/cyd.defaults` — 4MB flash, 40MHz, `partitions_cyd.csv`, FatFS LFN, LVGL memory hint
-
-### CoreOS — `partitions_heltec.csv` (new)
-- 8MB Heltec layout: factory 2MB + ota_0 2MB + ota_1 2MB + spiffs ~1.9MB
-
-### CoreOS — `CMakeLists.txt` (rewritten)
-- Conditional on `TARGET_DEVICE` and `BUILD_MINI` CMake cache variables (set by `build.sh`)
-- Heltec: compiles `display_ssd1306`, `lora_manager`, `smol`; no LVGL, no fatfs, no esp_partition
-- CYD: compiles `display_ili9341`, `touch_xpt2046`, `partition_manager`, `launcher`; adds `lvgl`, `fatfs`, `esp_partition`
-- T-Deck: placeholder stub (smol shell until BB6 shell lands)
-- `--mini`: excludes `mpython_runtime.cpp` + `kitt_module.c` + `micropython` component; all shells still work
+- `Builder/build.sh` — `--target heltec|cyd|tdeck`, `--mini`, `--clean`, `--flash`, `--monitor`
+- `partitions_heltec.csv` — 8MB layout: factory 2MB + ota_0 2MB + ota_1 2MB + spiffs ~1.9MB
+- `CMakeLists.txt` — conditional per-target source/include/REQUIRES selection
 
 ---
 
 ## [0.4.0] — 2026-05-29 — CYD target + standalone launcher OS
 
-### New target: CYD (ESP32-2432S028R)
-- `devices/cyd.json` — device profile: ILI9341 display, XPT2046 touch, WiFi+BT, 4MB flash
-
-### CoreOS — display_ili9341 (new)
-- `display_ili9341.h/.cpp` — ILI9341 driver; 320×240 landscape (rotation 1); LEDC backlight on GPIO21; double-buffer LVGL flush via TFT_eSPI
-
-### CoreOS — touch_xpt2046 (new)
-- `touch_xpt2046.h/.cpp` — XPT2046 resistive touch via software SPI (MOSI=32, MISO=39, SCLK=25, CS=33, IRQ=36); 4-sample averaging; calibrated to 320×240 landscape; registers as LVGL `LV_INDEV_TYPE_POINTER`
-
-### CoreOS — partition_manager (new, replaces flasher for CYD)
-- `partition_manager.h/.cpp` — multi-OTA partition manager
-  - Scans `ota_0`…`ota_3` at boot; detects valid images by ESP32 magic byte (0xE9)
-  - Per-slot names stored in NVS namespace `purr_pm`
-  - `pm_launch(slot)` — `esp_ota_set_boot_partition()` + `esp_restart()`; never returns
-  - `pm_install(slot, sd_path, name, cb)` — streams .bin from SD → `esp_ota_begin/write/end`; validates magic and size; progress callback for UI
-  - `pm_delete(slot)` — erase + clear NVS entry
-  - SD card on VSPI (CS=5, CLK=18, MOSI=23, MISO=19) at 20MHz
-
-### CoreOS — launcher app (new)
-- `apps/launcher/launcher.h/.cpp` — LVGL touch UI running on 320×240 CYD
-  - Dark-themed card layout: one card per OTA slot
-  - Occupied slot: firmware name, size, LAUNCH + DELETE buttons
-  - Empty slot: + INSTALL button → file picker from SD root
-  - Install screen: scrollable list of .bin/.purr files on SD; Flash button per file
-  - Progress screen: bar + status label updated during flash via `pm_progress_cb_t`
-  - Status bar: OS name, WiFi indicator, battery percent
-  - Spawns own FreeRTOS task (core 1, priority 2)
-
-### CoreOS — system layer
-- `system/system/main.cpp` — added CYD detection: if `display == 320×240`, routes to `launcher_start()` instead of MicroPython explorer shell
-
-### CoreOS — partition table
-- `partitions_cyd.csv` — 4MB CYD layout: factory (1.25MB PURR OS), ota_0 (1.375MB), ota_1 (1MB), spiffs (320KB)
-
-### CoreOS — KITT
-- `kitt.cpp` — added `ili9341` display init branch (Step 5); added `xpt2046` touch init branch with LVGL pointer indev registration (Step 12)
-
-### Build
-- `CMakeLists.txt` — added `display_ili9341.cpp`, `touch_xpt2046.cpp`, `partition_manager.cpp`, `apps/launcher/launcher.cpp`; added `esp_partition` to REQUIRES
+- CYD (ESP32-2432S028R) target: ILI9341, XPT2046, WiFi+BT, 4MB flash
+- `display_ili9341.h/.cpp` — ILI9341 driver; LEDC backlight; double-buffer LVGL flush
+- `touch_xpt2046.h/.cpp` — XPT2046 resistive touch; 4-sample averaging; 320×240 landscape
+- `partition_manager.h/.cpp` — multi-OTA slot manager; SD card install; per-slot NVS names
+- `apps/launcher/` — LVGL touch UI: slot cards, file picker, install progress, status bar
 
 ---
 
 ## [0.3.0] — 2026-05-25 — C++ CoreOS Rewrite + CattoHID
 
-### Project Restructure
-- Split repo into four top-level folders:
-  - `CoreOS/` — C++ ESP-IDF kernel (new)
-  - `CattoHID/` — ESP32-S2 HID firmware (new)
-  - `Userland/` — Python .meow app bundles (kept)
-  - `pre-rewrite/` — Original MicroPython, reference only (never deleted)
-- Added `PURR_OS_docs/board.md` — token-efficient markdown conversion of 6-page KiCad schematic PDF
-- Added `.gitignore` — excludes schematic PDF binary
-
-### CoreOS — Kernel (system/kernel/)
-- `device_config.h/.cpp` — parses device.json via ArduinoJson into `device_config_t`; handles display, radios array, flash size string, PSRAM, CPU freq
-- `kitt.h` — full public API: lifecycle, display, input, WiFi, BT, LoRa, power, app/firmware management, memory stats, callbacks
-- `kitt.cpp` — complete 20-step boot sequence; NVS heartbeat (500ms); LVGL keypad input driver; all 60+ API methods implemented
-- `main.cpp` — Arduino entry point; calls `kitt.init()` then `system_start()`
-- `device.json` + `devices/` — hardware profiles: heltec, cattopad, box3, ingenico
-
-### CoreOS — Hardware Modules (system/kernel/modules/)
-
-| Module | Notes |
-|--------|-------|
-| `display_ssd1306` | Adafruit SSD1306, row-based text, Heltec V3 target |
-| `display_ili9488` | TFT_eSPI + LVGL double-buffer flush, backlight PWM, CattoPad target |
-| `lora_manager` | SX1262 via Heltec LoRa lib; full config, TX/RX, yield/reclaim |
-| `wifi_manager` | Async scan, connect, NVS credential persistence, yield/reclaim |
-| `bt_manager` | Full API surface; NVS paired device list, discovery timer, yield/reclaim — BLE stack deferred to NimBLE integration |
-| `power_manager` | ADC1 battery read, voltage→percent map, CPU freq scaling via `setCpuFrequencyMhz` |
-| `touch_mxt336t` | I2C interrupt-driven, T100 message read, event struct |
-| `pi_manager` | Gate/handshake state machine, UART halt sequence, display yield callbacks to kitt.cpp |
-| `flasher` | OTA write via Arduino `Update.h`, NVS boot flag, display fallback for both display types |
-| `mtp_manager` | Interface defined — tinyusb MTP class integration deferred |
-
-### CoreOS — System Layer
-- `system/bridge/main.cpp` — JSON keymap loader; raw GPIO→generic keycode translation; radio yield/reclaim brokering for /friends/ firmware
-- `system/system/main.cpp` — shell launcher (calls `smol_start()` for ≤128px displays, `app_launch(explorer.meow)` for large); crash logger; memory threshold monitor; OTA staging via NVS boot flag
-- `system/bridge/keymaps/heltec.json` — GPIO 0→SELECT, 47→BACK
-- `system/bridge/keymaps/cattopad_4x5.json` — directional + action keys
-
-### CoreOS — Boot
-- `boot/watchdog/main.cpp` — FreeRTOS task; reads NVS heartbeat every 1s; triggers `esp_restart()` if stale >3s; waits for KITT_READY flag before monitoring
-- `boot/emergency/main.cpp` — checks BOOT pin at power-on; minimal SPIFFS + display init; flashes `/recovery/recovery.bin` via OTA; 60s timeout then reboot
-- `CMakeLists.txt` — ESP-IDF project; lists all sources; requires: arduino, lvgl, ArduinoJson, esp_wifi, bt, nvs_flash, spiffs, fatfs, esp_adc, app_update
-
-### CattoHID (ESP32-S2 Pure HID Controller)
-- `keyboard_matrix.h/.cpp` — 6×14 matrix scan (6 rows: IO6/IO14-18, 14 cols: IO21/IO13-7/IO0-5); 3-sample debounce; 5µs settle delay; just-pressed/just-released helpers
-- `keymap.h` — 84-key QWERTY HID keycode table (HUT 1.4); modifier definitions with row/col/bit mapping
-- `usb_hid.h/.cpp` — native USB HID via Arduino `USBHIDKeyboard`; 6KRO; report dedup (only sends on change)
-- `main.cpp` — 1ms scan loop; builds HID report from debounced matrix; handles modifiers separately from key slots
-- `CMakeLists.txt` — ESP-IDF build targeting ESP32-S2
-
-### Userland — Python Apps (preserved)
-All existing `.meow` bundles kept unchanged as porting reference:
-- `explorer.meow` — Win95/CE desktop shell
-- `explorer_lvgl.meow` — LVGL-accelerated CE shell
-- `ClassicMac.meow` — Mac System 7/8 shell
-- `finder.meow` — Mac-style filesystem browser
-- `smol.meow` — text shell for 128×64 OLED (Heltec V3/V4)
-- `purr_ui.meow` — tile grid launcher with drag-to-rearrange
+- Full C++/ESP-IDF kernel (KITT) with 20-step boot, 60+ APIs
+- `device_config.h` — parses device.json via ArduinoJson
+- Hardware modules: display_ssd1306, display_ili9488, lora_manager, wifi_manager, bt_manager, power_manager, touch_mxt336t, pi_manager, flasher, mtp_manager
+- `CattoHID/` — ESP32-S2 HID firmware: keyboard matrix, HID report, USB
 
 ---
 
-## [0.2.1] — 2026-05-25 — smol C++ Rewrite
+## [0.2.x] — 2026-05-25/26
 
-### CoreOS — Built-in Apps (apps/)
-- `apps/smol/smol.h/.cpp` — full C++ rewrite of the `smol.meow` text shell; no MicroPython dependency
-  - 8-row × 16-char layout on 128×64 OLED: header, divider, 5-row scrollable app list, hint bar
-  - UP/DOWN/SELECT navigation; double-SELECT to confirm launch; BACK opens PURR menu
-  - PURR menu: About (device name, resolution, free RAM), System Info (RAM, CPU freq, uptime), Quit PURR OS (`esp_restart`)
-  - Adaptive refresh: 150ms while active, 3s when idle >3s
-  - Filters large-display-only apps (explorer, classicmac) from the list
-  - Graceful "no runtime yet" message when `app_launch` fails (MicroPython binding still pending)
-  - Child-process tracking: yields display and keys while a launched app is running
-
-### CoreOS — KITT API addition
-- `kitt.h` / `kitt.cpp` — added `get_key_event(generic_key_t*, bool*)`: reads injected generic keys directly from the ring buffer; intended for C++ shells that don't use LVGL
-
-### CoreOS — System Layer update
-- `system/system/main.cpp` — replaced `app_launch(smol.meow)` with `smol_start()` for ≤128px displays; large-display path unchanged
-
-### Build
-- `CMakeLists.txt` — added `apps/smol/smol.cpp` to SRCS; added `apps/smol` to INCLUDE_DIRS
-
----
-
-## [0.2.2] — 2026-05-26 — LoRa rewrite (RAK3172 UART AT), board.md correction
-
-### CoreOS — lora_manager rewrite
-- `lora_manager.h` — replaced SPI pin defines with `LORA_UART_TX` / `LORA_UART_RX` / `LORA_UART_BAUD`; pins marked TBD pending PCB verification
-- `lora_manager.cpp` — full rewrite from SPI (Heltec SX1262) to RAK3172 UART AT command protocol
-  - P2P mode (`AT+NWM=0`); configures freq, SF, BW, CR, TX power via `AT+PFREQ/PSF/PBW/PCR/PTP`
-  - Continuous RX window (`AT+PRECV=65535`); parses `+EVT:RXP2P:<rssi>:<snr>:<hex>` unsolicited events
-  - yield: closes RX window + `AT+SLEEP`; reclaim: re-applies full P2P config
-  - `lora_manager_update()` accumulates Serial2 bytes line-by-line for event parsing
-
-### Docs
-- `PURR_OS_docs/board.md` — corrected ESP32-S2 role (runs PURR OS, not HID-only); added note that UART2 connects to RAK3172 (pins TBD)
-
----
-
-## [0.2.3] — 2026-05-26 — LoRa Kernels library
-
-### LoRa Kernels (new top-level folder)
-Drop-in lora_manager.h/.cpp pairs — identical public API, different radio backends.
-Copy any folder's contents into `CoreOS/system/kernel/modules/` to switch radios.
-
-| Folder | Radio | Interface | Notes |
-|--------|-------|-----------|-------|
-| `RAK3172/` | RAK3172 (STM32WL) | UART AT | P2P mode; active board target; TX/RX pins TBD |
-| `SX1262/` | SX1262 | SPI | Heltec V3 pin defaults; requires arduino-LoRa |
-| `SX1276_RFM95W/` | SX1276 / RFM95W | SPI | Generic breakout pin defaults; DIO0 not DIO1 |
-
-All three kernels implement the same function set:
-`init`, `update`, `deinit`, `enabled`, `set/get frequency/power/SF/BW/CR/sync`, `send`, `busy`, `data_available`, `read`, `yield`, `reclaim`, `yielded`
-
----
-
-## [0.2.4] — 2026-05-26 — LoRa presence check, dynamic OS name
-
-### CoreOS — KITT
-- `kitt.h` — added `os_name()` to public API (115 methods total)
-- `kitt.cpp` — `os_name_buf` defaults to `"PUR OS"`; upgraded to `"PURR OS"` at boot if LoRa init succeeds; logged either way
-  - PUR OS = no radio / init failed
-  - PURR OS = LoRa confirmed present and responding
-
-### CoreOS — smol
-- `smol.cpp` — desktop header and About screen now use `kitt.os_name()` instead of hardcoded `"PURR OS"`
-
----
-
-## [0.3.0] — 2026-05-26 — MicroPython runtime + `import kitt`
-
-### CoreOS — system/micropython/ (new)
-- `mpython_runtime.h` — C-compatible header: runtime API (`mpython_init`, `mpython_exec_app`, process queries) + `extern "C"` KITT bridge function declarations
-- `mpython_runtime.cpp` — C++ implementation
-  - Process table (4 slots): each .meow app gets its own FreeRTOS task + `TaskHandle_t`
-  - `mpython_exec_app(path)` — reads `<path>/main.py` from SPIFFS, launches into MicroPython task
-  - `mpython_process_running/kill/ram_kb` — process lifecycle queries
-  - All `c_kitt_*` bridge functions: thin `extern "C"` wrappers around the global `kitt` object (display, input, WiFi, LoRa, system, notifications)
-  - MicroPython heap: 256 KB static (increase if PSRAM available)
-- `kitt_module.c` — pure C MicroPython extension module; auto-registered via `MP_REGISTER_MODULE`
-  - `import kitt` available to all .meow Python apps
-  - Exports: `text_print`, `text_clear`, `display_width/height`, `os_name`, `device_name`, `poll_key`, `poll_key_pressed`, `KEY_*` constants, `wifi_connected/ssid/rssi/connect/disconnect`, `lora_enabled/available/rssi/send/read`, `free_ram`, `uptime_ms`, `battery_percent`, `cpu_mhz`, `notify`, `popup`
-
-### CoreOS — KITT wired up
-- `kitt.cpp` — `app_launch()` now calls `mpython_exec_app()`; `process_kill/running/ram_usage_kb` delegate to runtime; `mpython_init()` called at boot step 15
-- `CMakeLists.txt` — added `system/micropython/mpython_runtime.cpp`, `kitt_module.c`; added `micropython` to REQUIRES
-
-### Note
-The `micropython` ESP-IDF component must be added before this compiles. Add to `idf_component.yml` or clone into `components/micropython`. Existing .meow apps use the old IPC pub/sub API and will need porting to `import kitt`.
-
----
-
-## Pending / Next Steps
-
-- **MicroPython→KITT bindings** — C extension modules so userland .meow apps can call KITT APIs; required before any Python app runs under CoreOS
-- **BLE stack** — NimBLE-Arduino component wiring in `bt_manager.cpp`
-- **MTP mode** — tinyusb MTP class for `mtp_manager.cpp` (drag-and-drop file access over USB)
-- **CattoHID keymap verification** — row/col→physical key correspondence needs confirmed against PCB routing once board is in hand
-- **First flash target** — Heltec V3 with `heltec.json`; minimum boot goal: SSD1306 splash + NVS heartbeat
+- **0.2.1** — smol C++ rewrite (8-row OLED shell, UP/DOWN/SELECT navigation)
+- **0.2.2** — LoRa rewrite (SX1262 → RAK3172 UART AT)
+- **0.2.3** — LoRa Kernels library (SX1262 / RAK3172 / SX1276 drop-in backends)
+- **0.2.4** — LoRa presence check; dynamic OS name (PUR OS / PURR OS)
 
 ---
 
