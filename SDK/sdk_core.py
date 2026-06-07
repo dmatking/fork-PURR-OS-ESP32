@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PURR OS SDK v0.7.0 — interactive build / flash / monitor tool.
+"""PURR OS SDK v0.9.0 — interactive build / flash / monitor tool.
 Invoked by SDK.ps1 (or directly: python sdk_core.py [flags]).
 """
 
@@ -37,13 +37,21 @@ CFG_FILE   = os.path.join(SCRIPT_DIR, "purr_sdk.cfg")
 
 
 def _idf_py():
-    """Return the idf.py invocation as a list.
-    On Windows, bare 'idf.py' won't be found by subprocess — resolve via IDF_PATH."""
+    """Return the idf.py invocation as a list using the IDF virtualenv python."""
     idf_path = os.environ.get("IDF_PATH", "")
     if idf_path:
         candidate = os.path.join(idf_path, "tools", "idf.py")
         if os.path.exists(candidate):
-            return [sys.executable, candidate]
+            # Prefer the IDF virtualenv python (has click, pyparsing, etc.).
+            # Falls back to sys.executable if no venv found (export.sh already sourced).
+            import glob as _glob
+            pattern = os.path.join(
+                os.path.expanduser("~"), ".espressif",
+                "python_env", "idf*", "bin", "python"
+            )
+            matches = sorted(_glob.glob(pattern), reverse=True)
+            python = matches[0] if matches else sys.executable
+            return [python, candidate]
     return ["idf.py"]
 
 
@@ -441,7 +449,7 @@ def _cmake_flags(cfg):
         flags.append(f"-D{cmake_name}={val}")
 
     # Hard-enforce: CYD has no LoRa/Mesh hardware regardless of saved config
-    if target in ("cyd", "cyd_boot"):
+    if cmake_target == "cyd" or target == "cyd_boot":
         mods = dict(mods)
         mods["lora"] = False
         mods["mesh"] = False
@@ -856,7 +864,7 @@ def show_banner(cfg):
 
     div()
     wip_tag = f"  {C_YLW}[WIP]{C_RST}" if "WIP" in t.get("spec", "") else ""
-    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.7.0{C_RST}  {C_GRY}KITT v0.4.0{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
+    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.9.0{C_RST}  {C_GRY}KITT v0.5.0{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
 
     mini = (not mods.get("micropython", True)) or t["fixed"]
     print(f"  Variant  : {'mini — no MicroPython' if mini else 'full — with MicroPython'}")

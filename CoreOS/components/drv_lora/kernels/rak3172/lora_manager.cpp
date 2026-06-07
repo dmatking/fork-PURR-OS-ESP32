@@ -1,5 +1,5 @@
 #include "lora_manager.h"
-#include <Arduino.h>
+#include "esp_timer.h"
 
 // RAK3172 (STM32WL) — LoRa P2P mode via UART AT commands.
 // Unsolicited RX event format: +EVT:RXP2P:<rssi>:<snr>:<hex_payload>

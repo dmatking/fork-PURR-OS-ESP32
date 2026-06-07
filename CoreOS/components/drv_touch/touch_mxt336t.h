@@ -4,7 +4,9 @@
 
 // Atmel mXT336T I2C address and interrupt pin (adjust per schematic)
 #define MXT_I2C_ADDR 0x4A
-#define MXT_INT_PIN   2
+#define MXT_INT_PIN  2
+#define MXT_SDA_PIN  21
+#define MXT_SCL_PIN  22
 
 typedef struct {
     uint16_t x;

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include "driver/gpio.h"
 
 // Standard BSD string functions
@@ -27,8 +28,10 @@ inline size_t strlcpy(char* dst, const char* src, size_t dsize) {
 #include "Print.h"
 
 // Pin modes
-#define INPUT  GPIO_MODE_INPUT
-#define OUTPUT GPIO_MODE_OUTPUT
+#define INPUT        GPIO_MODE_INPUT
+#define OUTPUT       GPIO_MODE_OUTPUT
+#define INPUT_PULLUP   0x10
+#define INPUT_PULLDOWN 0x11
 
 // Logic levels
 #define HIGH 1
@@ -36,7 +39,15 @@ inline size_t strlcpy(char* dst, const char* src, size_t dsize) {
 
 // GPIO functions
 inline void pinMode(uint8_t pin, uint8_t mode) {
-    gpio_set_direction((gpio_num_t)pin, (gpio_mode_t)mode);
+    if (mode == INPUT_PULLUP) {
+        gpio_set_direction((gpio_num_t)pin, GPIO_MODE_INPUT);
+        gpio_set_pull_mode((gpio_num_t)pin, GPIO_PULLUP_ONLY);
+    } else if (mode == INPUT_PULLDOWN) {
+        gpio_set_direction((gpio_num_t)pin, GPIO_MODE_INPUT);
+        gpio_set_pull_mode((gpio_num_t)pin, GPIO_PULLDOWN_ONLY);
+    } else {
+        gpio_set_direction((gpio_num_t)pin, (gpio_mode_t)mode);
+    }
 }
 
 inline void digitalWrite(uint8_t pin, uint8_t val) {
@@ -96,6 +107,7 @@ inline void ledcWrite(uint8_t channel, uint8_t duty) {
 class SerialClass : public Print {
 public:
     void begin(uint32_t baud) { (void)baud; }
+    void printf(const char* fmt, ...);
 };
 
 extern SerialClass Serial;
@@ -136,6 +148,102 @@ public:
         tx.length = len * 8;
         spi_device_transmit(_handle, &tx);
     }
+
+    uint8_t transfer(uint8_t val) {
+        if (!_handle) return 0;
+        spi_transaction_t tx = {};
+        uint8_t rx = 0;
+        tx.tx_buffer = &val;
+        tx.rx_buffer = &rx;
+        tx.length = 8;
+        spi_device_transmit(_handle, &tx);
+        return rx;
+    }
+
+    uint16_t transfer16(uint16_t val) {
+        uint16_t be = (val >> 8) | (val << 8);
+        if (!_handle) return 0;
+        spi_transaction_t tx = {};
+        uint16_t rx = 0;
+        tx.tx_buffer = &be;
+        tx.rx_buffer = &rx;
+        tx.length = 16;
+        spi_device_transmit(_handle, &tx);
+        return (rx >> 8) | (rx << 8);
+    }
+
+    void beginTransaction(uint32_t /*settings*/) {}
+    void endTransaction() {}
+
+    void setFrequency(uint32_t /*freq*/) {}
+    void setDataMode(uint8_t /*mode*/) {}
+    void setBitOrder(uint8_t /*order*/) {}
 };
 
 extern SPIClass SPI;
+
+// ── Arduino math / stdlib helpers ─────────────────────────────────────────────
+#include <cstdlib>
+
+inline long random(long max_val) {
+    return (max_val > 0) ? (rand() % max_val) : 0;
+}
+inline long random(long min_val, long max_val) {
+    return (max_val > min_val) ? (min_val + rand() % (max_val - min_val)) : min_val;
+}
+
+inline char* ltoa(long val, char* buf, int base) {
+    char tmp[34]; int i = 0; bool neg = (base == 10 && val < 0);
+    unsigned long uval = neg ? -(unsigned long)val : (unsigned long)val;
+    if (uval == 0) { tmp[i++] = '0'; }
+    else { while (uval) { tmp[i++] = "0123456789abcdef"[uval % base]; uval /= base; } }
+    if (neg) tmp[i++] = '-';
+    for (int j = 0; j < i; j++) buf[j] = tmp[i - 1 - j];
+    buf[i] = '\0'; return buf;
+}
+
+template<typename T> inline T arduinoMin(T a, T b) { return a < b ? a : b; }
+template<typename T> inline T arduinoMax(T a, T b) { return a > b ? a : b; }
+#ifndef min
+#  define min(a, b) arduinoMin((a), (b))
+#endif
+#ifndef max
+#  define max(a, b) arduinoMax((a), (b))
+#endif
+
+// constrain(x, lo, hi)
+#ifndef constrain
+#  define constrain(x, lo, hi) ((x) < (lo) ? (lo) : ((x) > (hi) ? (hi) : (x)))
+#endif
+
+// On ESP32 there's no port register concept; pins > 31 map to GPIO_OUT1 register.
+#ifndef digitalPinToBitMask
+#  define digitalPinToBitMask(pin) (1UL << ((pin) & 31))
+#endif
+#ifndef digitalPinToPort
+#  define digitalPinToPort(pin) (0)
+#endif
+#ifndef portOutputRegister
+#  define portOutputRegister(port) ((volatile uint32_t*)0)
+#endif
+
+// ── AVR/Arduino compat macros used by TFT_eSPI and other libs ─────────────────
+// On ESP32 flash and RAM share the same address space — pgm_read_* are no-ops.
+#ifndef pgm_read_byte
+#  define pgm_read_byte(addr)   (*((const uint8_t  *)(addr)))
+#endif
+#ifndef pgm_read_word
+#  define pgm_read_word(addr)   (*((const uint16_t *)(addr)))
+#endif
+#ifndef pgm_read_dword
+#  define pgm_read_dword(addr)  (*((const uint32_t *)(addr)))
+#endif
+#ifndef PROGMEM
+#  define PROGMEM
+#endif
+#ifndef F
+#  define F(s) (s)
+#endif
+
+// yield() — cooperative multitasking hook; FreeRTOS taskYIELD on ESP32.
+inline void yield() { taskYIELD(); }

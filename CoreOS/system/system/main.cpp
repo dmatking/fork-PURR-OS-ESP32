@@ -1,7 +1,9 @@
 // Sits between KITT and userland apps. Spawns the appropriate shell at boot.
 
 #include "../kernel/kitt.h"
-#include "../kernel/modules/purr_wm.h"
+#ifdef PURR_HAS_MINIWIN
+#  include "purr_wm.h"
+#endif
 #ifdef PURR_DISPLAY_SSD1306
 #  include "../../apps/smol/smol.h"
 #endif

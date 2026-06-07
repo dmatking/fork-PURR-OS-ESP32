@@ -1,7 +1,7 @@
 // gps_manager.cpp — GPS NMEA parser via IDF UART driver (pure ESP-IDF)
 
 #include "gps_manager.h"
-#include "../purr_idf_compat.h"
+#include "esp_timer.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -46,9 +46,9 @@ static bool uart_init_at(uint32_t baud) {
 
 static bool probe_baud(uint32_t baud, uint32_t timeout_ms) {
     if (!uart_init_at(baud)) return false;
-    uint32_t deadline = millis() + timeout_ms;
+    uint32_t deadline = (uint32_t)(esp_timer_get_time() / 1000) + timeout_ms;
     uint8_t ch;
-    while (millis() < deadline) {
+    while ((uint32_t)(esp_timer_get_time() / 1000) < deadline) {
         int n = uart_read_bytes(GPS_UART_NUM, &ch, 1, pdMS_TO_TICKS(10));
         if (n > 0 && ch == '$') return true;
     }

@@ -1,10 +1,9 @@
 // display_st7789.cpp — ST7789 display driver via esp_lcd (pure ESP-IDF)
 // Target: Waveshare 1.69" 240x280
 
-#ifdef PURR_DISPLAY_ST7789
 
 #include "display_st7789.h"
-#include "../purr_idf_compat.h"
+
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
 #include "esp_lcd_panel_io.h"
@@ -100,4 +99,3 @@ void display_st7789_draw_hline(int16_t x, int16_t y, int16_t w, uint16_t color) 
     display_st7789_fill_rect(x, y, w, 1, color);
 }
 
-#endif // PURR_DISPLAY_ST7789

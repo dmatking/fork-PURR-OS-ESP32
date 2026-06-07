@@ -3,7 +3,7 @@ file(GLOB_RECURSE RADIOLIB_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 idf_component_register(
     SRCS         ${RADIOLIB_SRCS}
     INCLUDE_DIRS "src"
-    REQUIRES     driver
+    REQUIRES     driver lib_arduino
 )
 
 # RadioLib pure-IDF mode — no Arduino dependency

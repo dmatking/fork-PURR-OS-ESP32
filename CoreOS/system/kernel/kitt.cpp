@@ -3,43 +3,43 @@
 #include "purr_version.h"
 #include <ArduinoJson.h>
 #ifdef PURR_DISPLAY_SSD1306
-#  include "modules/display_ssd1306.h"
+#  include "display_ssd1306.h"
 #endif
-#include "modules/wifi_manager.h"
+#include "wifi_manager.h"
 #ifdef PURR_HAS_BT
-#  include "modules/bt_manager.h"
+#  include "bt_manager.h"
 #endif
 #include "modules/power_manager.h"
 
 #ifdef PURR_HAS_LORA
-#  include "modules/lora_manager.h"
+#  include "lora_manager.h"
 #endif
 #ifdef PURR_HAS_MESH
 #  include "modules/purr_mesh.h"
 #endif
 #ifdef PURR_DISPLAY_ILI9488
-#  include "modules/display_ili9488.h"
+#  include "display_ili9488.h"
 #endif
 #ifdef PURR_DISPLAY_ILI9341
-#  include "modules/display_ili9341.h"
+#  include "display_ili9341.h"
 #endif
 #ifdef PURR_DISPLAY_ST7796
-#  include "modules/display_st7796.h"
+#  include "display_st7796.h"
 #endif
 #ifdef PURR_DISPLAY_ST7789
-#  include "modules/display_st7789.h"
+#  include "display_st7789.h"
 #endif
 #ifdef PURR_HAS_TOUCH_MXT
-#  include "modules/touch_mxt336t.h"
+#  include "touch_mxt336t.h"
 #endif
 #ifdef PURR_HAS_TOUCH_XPT2046
-#  include "modules/touch_xpt2046.h"
+#  include "touch_xpt2046.h"
 #endif
 #ifdef PURR_HAS_TOUCH_CST816S
-#  include "modules/touch_cst816s.h"
+#  include "touch_cst816s.h"
 #endif
 #ifdef PURR_HAS_TOUCH_GT911
-#  include "modules/touch_gt911.h"
+#  include "touch_gt911.h"
 #endif
 #ifdef PURR_HAS_PI_SLOT
 #  include "modules/pi_manager.h"

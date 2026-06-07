@@ -71,6 +71,12 @@ fi
 
 export IDF_PATH
 
+# Source IDF environment — activates the IDF virtualenv and updates PATH.
+# Suppressed because export.sh is chatty; errors are non-fatal (SDK may still work).
+if [[ -f "$IDF_PATH/export.sh" ]]; then
+    . "$IDF_PATH/export.sh" > /dev/null 2>&1 || true
+fi
+
 PYTHON=$(detect_python)
 if [[ -z "$PYTHON" ]]; then
     echo "[sdk] ERROR: Python 3 not found" >&2

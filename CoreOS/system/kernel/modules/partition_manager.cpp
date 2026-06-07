@@ -73,7 +73,7 @@ static bool slot_has_firmware(const esp_partition_t* part) {
 void pm_init() {
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
-    dev_cfg.gpio_cs = PM_SD_CS;
+    dev_cfg.gpio_cs = (gpio_num_t)PM_SD_CS;
 
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = PM_SD_MOSI,
@@ -164,7 +164,8 @@ int pm_sd_list(pm_sd_file_t* files, int max) {
         if (is_bin || is_purr) {
             strncpy(files[count].name, name, PM_NAME_LEN - 1);
             files[count].name[PM_NAME_LEN - 1] = '\0';
-            snprintf(files[count].path, PM_PATH_LEN, "%s/%s", SD_MOUNT, name);
+            strncpy(files[count].path, name, PM_PATH_LEN - 1);
+            files[count].path[PM_PATH_LEN - 1] = '\0';
             struct stat st; stat(files[count].path, &st);
             files[count].size_bytes = (size_t)st.st_size;
             count++;

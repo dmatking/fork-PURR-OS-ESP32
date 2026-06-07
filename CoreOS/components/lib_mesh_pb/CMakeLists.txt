@@ -16,5 +16,5 @@ idf_component_register(
         "meshtastic/telemetry.pb.c"
         "meshtastic/xmodem.pb.c"
     INCLUDE_DIRS "."
-    REQUIRES     nanopb
+    REQUIRES     lib_nanopb
 )

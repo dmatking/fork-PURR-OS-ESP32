@@ -1,5 +1,5 @@
 #include "lora_manager.h"
-#include <Arduino.h>
+#include "esp_timer.h"
 #include <SPI.h>
 #include <LoRa.h>
 

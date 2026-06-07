@@ -2,7 +2,7 @@
 // Target: CattoPad 3.5" 320x480
 
 #include "display_ili9488.h"
-#include "../purr_idf_compat.h"
+
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
 #include "esp_lcd_panel_io.h"

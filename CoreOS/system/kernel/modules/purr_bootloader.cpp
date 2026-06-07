@@ -529,7 +529,7 @@ static void on_tap(int tag) {
         if (tag == TAG_YES) {
             // Start backup then proceed to file picker
             snprintf(s_backup_path, sizeof(s_backup_path),
-                     "/PURR_BACKUP_OTA%d.bin", s_install_slot);
+                     "PURR_BACKUP_OTA%d.bin", s_install_slot);
             s_install_pct = 0;
             strlcpy(s_install_msg, "Preparing...", sizeof(s_install_msg));
             s_screen = PB_BACKING_UP;

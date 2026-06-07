@@ -3,7 +3,7 @@
 #
 # To activate:
 #   Fork https://github.com/miniwinwm/miniwinwm and clone your fork here so that
-#   MiniWin/miniwin.c appears at CoreOS/components/miniwinwm/MiniWin/miniwin.c
+#   MiniWin/miniwin.c appears at CoreOS/components/lib_miniwin/MiniWin/miniwin.c
 #   The PURR_CYD HAL in MiniWin/hal/PURR_CYD/ is checked in alongside the fork.
 
 if(NOT TARGET_DEVICE STREQUAL "cyd")
@@ -66,10 +66,11 @@ list(FILTER IDF_ALL_COMPONENT_INCLUDES EXCLUDE REGEX ".*/linux/include$")
 list(FILTER IDF_ALL_COMPONENT_INCLUDES EXCLUDE REGEX ".*/riscv/include$")
 target_include_directories(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel/modules"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../drv_display"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../drv_touch"
     ${IDF_ALL_COMPONENT_INCLUDES}
     "${idf_path}/components/driver/deprecated"
     "${idf_path}/components/driver/touch_sensor/esp32/include"
 )
 
-message(STATUS "miniwinwm: PURR_CYD HAL registered (ILI9341 + CST816S)")
+message(STATUS "lib_miniwin: PURR_CYD HAL registered (ILI9341 + CST816S)")

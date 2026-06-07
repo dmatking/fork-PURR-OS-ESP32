@@ -1,10 +1,9 @@
 // display_st7796.cpp — ST7796 display driver via esp_lcd (pure ESP-IDF)
 // Target: JC3248W535 3.5" 480x320
 
-#ifdef PURR_DISPLAY_ST7796
 
 #include "display_st7796.h"
-#include "../purr_idf_compat.h"
+
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
 #include "esp_lcd_panel_io.h"
@@ -97,4 +96,3 @@ void display_st7796_draw_hline(int16_t x, int16_t y, int16_t w, uint16_t c) {
     display_st7796_fill_rect(x, y, w, 1, c);
 }
 
-#endif // PURR_DISPLAY_ST7796

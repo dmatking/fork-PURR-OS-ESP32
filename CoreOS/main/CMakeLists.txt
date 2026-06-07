@@ -35,7 +35,6 @@ message(STATUS "PURR OS  target=${TARGET_DEVICE}  mini=${BUILD_MINI}  bt=${PURR_
 
 # ── Core sources (all targets) ────────────────────────────────────────────────
 set(SRCS
-    "../system/Arduino.cpp"
     "../system/kernel/main.cpp"
     "../system/kernel/kitt.cpp"
     "../system/kernel/device_config.cpp"
@@ -120,6 +119,7 @@ elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c")
         "../system/kernel/modules/partition_manager_stubs.cpp"
         "../system/kernel/modules/ui_stubs.cpp"
     )
+    list(APPEND INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../../Shells/purr_wm")
     list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer nvs_flash sdmmc lib_miniwin purr_wm)
 
 # ── Device-specific: CYD full OS ─────────────────────────────────────────────
@@ -128,6 +128,7 @@ elseif(TARGET_DEVICE STREQUAL "cyd")
         "../system/kernel/modules/partition_manager_stubs.cpp"
         "../system/kernel/modules/ui_stubs.cpp"
     )
+    list(APPEND INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../../Shells/purr_wm")
     list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer nvs_flash sdmmc lib_miniwin purr_wm)
 
 # ── Device-specific: CYD bootloader ──────────────────────────────────────────
@@ -139,7 +140,7 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
         "../system/kernel/idf_compat.c"
         "../system/bridge/main.cpp"
         "../system/system/main.cpp"
-        "../system/kernel/modules/partition_manager_stubs.cpp"
+        "../system/kernel/modules/partition_manager.cpp"
         "../system/kernel/modules/purr_bootloader.cpp"
         "../system/kernel/modules/stub_managers.cpp"
     )
@@ -151,7 +152,10 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
         app_update
         esp_timer
         esp_lcd
+        lib_tftespi
         driver
+        fatfs
+        sdmmc
         drv_display
         drv_touch
     )
@@ -209,6 +213,15 @@ idf_component_register(
     INCLUDE_DIRS ${INCLUDE_DIRS}
     REQUIRES     ${REQUIRES}
 )
+
+# ── IDF include propagation workarounds ───────────────────────────────────────
+# cyd_boot compiles partition_manager.cpp directly; fatfs/sdmmc don't propagate
+# their include dirs through REQUIRES on IDF v5.3, so force them here.
+if(TARGET_DEVICE STREQUAL "cyd_boot")
+    idf_component_get_property(fatfs_lib  fatfs  COMPONENT_LIB)
+    idf_component_get_property(sdmmc_lib  sdmmc  COMPONENT_LIB)
+    target_link_libraries(${COMPONENT_LIB} PRIVATE ${fatfs_lib} ${sdmmc_lib})
+endif()
 
 # ── Compile-time feature flags ────────────────────────────────────────────────
 set(PURR_DEFS "")

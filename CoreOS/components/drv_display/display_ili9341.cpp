@@ -1,8 +1,8 @@
 // display_ili9341.cpp — ILI9341 via TFT_eSPI
 
 #include "display_ili9341.h"
-#include <Arduino.h>
 #include <TFT_eSPI.h>
+#include "driver/ledc.h"
 #include "esp_log.h"
 
 static const char* TAG = "display";
@@ -13,9 +13,21 @@ void display_ili9341_init() {
     tft.begin();
     tft.setRotation(1);
 
-    ledcSetup(1, 5000, 8);
-    ledcAttachPin(CYD_TFT_BL, 1);
-    ledcWrite(1, 255);
+    ledc_timer_config_t tmr = {};
+    tmr.speed_mode      = LEDC_LOW_SPEED_MODE;
+    tmr.duty_resolution = LEDC_TIMER_8_BIT;
+    tmr.timer_num       = LEDC_TIMER_1;
+    tmr.freq_hz         = 5000;
+    tmr.clk_cfg         = LEDC_AUTO_CLK;
+    ledc_timer_config(&tmr);
+
+    ledc_channel_config_t ch = {};
+    ch.gpio_num   = CYD_TFT_BL;
+    ch.speed_mode = LEDC_LOW_SPEED_MODE;
+    ch.channel    = LEDC_CHANNEL_1;
+    ch.timer_sel  = LEDC_TIMER_1;
+    ch.duty       = 255;
+    ledc_channel_config(&ch);
 
 #ifdef PURR_HAS_LVGL
     static lv_disp_draw_buf_t draw_buf;
@@ -37,11 +49,13 @@ void display_ili9341_init() {
 
 void display_ili9341_update() {}
 void display_ili9341_deinit() {
-    ledcWrite(1, 0);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
     tft.writecommand(0x28);
 }
 void display_ili9341_set_brightness(uint8_t level) {
-    ledcWrite(1, level);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, level);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
 }
 
 void display_ili9341_clear() { tft.fillScreen(TFT_BLACK); }

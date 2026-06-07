@@ -38,7 +38,7 @@ idf_component_register(
 
 # ESP32 Xtensa toolchain doesn't expose long long the way Lua 5.4 expects.
 # LUA_32BITS uses int32 for lua_Integer and float for lua_Number — correct for ESP32.
-target_compile_definitions(__idf_lua PUBLIC LUA_32BITS=1)
+target_compile_definitions(__idf_lib_lua PUBLIC LUA_32BITS=1)
 
 # Suppress warnings from Lua upstream C sources
-target_compile_options(__idf_lua PRIVATE -w)
+target_compile_options(__idf_lib_lua PRIVATE -w)

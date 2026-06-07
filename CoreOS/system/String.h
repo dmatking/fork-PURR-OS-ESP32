@@ -107,4 +107,48 @@ public:
     bool operator==(const char* str) const {
         return strcmp(c_str(), str ? str : "") == 0;
     }
+
+    void toCharArray(char* buf, size_t bufsize) const {
+        if (!buf || bufsize == 0) return;
+        size_t copy_len = (len < bufsize - 1) ? len : bufsize - 1;
+        if (buffer) memcpy(buf, buffer, copy_len);
+        buf[copy_len] = '\0';
+    }
+
+    int indexOf(char c) const {
+        if (!buffer) return -1;
+        const char* p = strchr(buffer, c);
+        return p ? (int)(p - buffer) : -1;
+    }
+
+    String substring(size_t start, size_t end = (size_t)-1) const {
+        if (!buffer || start >= len) return String();
+        size_t e = (end == (size_t)-1 || end > len) ? len : end;
+        if (start >= e) return String();
+        size_t slen = e - start;
+        char* tmp = new char[slen + 1];
+        memcpy(tmp, buffer + start, slen);
+        tmp[slen] = '\0';
+        String res(tmp);
+        delete[] tmp;
+        return res;
+    }
+
+    String& operator+=(const char* str) {
+        if (!str) return *this;
+        size_t slen = strlen(str);
+        resize(len + slen + 1);
+        strcat(buffer, str);
+        len += slen;
+        return *this;
+    }
+
+    String& operator+=(const String& other) {
+        return *this += other.c_str();
+    }
+
+    String& operator+=(char c) {
+        char tmp[2] = {c, 0};
+        return *this += tmp;
+    }
 };

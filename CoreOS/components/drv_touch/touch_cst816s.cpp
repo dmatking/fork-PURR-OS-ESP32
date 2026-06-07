@@ -1,7 +1,5 @@
 // touch_cst816s.cpp — CST816S capacitive I2C touch driver (pure ESP-IDF)
 
-#ifdef PURR_HAS_TOUCH_CST816S
-
 #include "touch_cst816s.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
@@ -76,5 +74,3 @@ bool touch_cst816s_get_event(cst_touch_event_t* ev) {
     ev->y       = MAP_SCREEN_Y(raw_x, raw_y);
     return true;
 }
-
-#endif  // PURR_HAS_TOUCH_CST816S

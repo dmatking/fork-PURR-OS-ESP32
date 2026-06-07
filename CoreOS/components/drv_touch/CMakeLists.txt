@@ -1,0 +1,31 @@
+set(SRCS)
+
+if(TARGET_DEVICE STREQUAL "cyd_boot" OR TARGET_DEVICE STREQUAL "waveshare169")
+    list(APPEND SRCS "touch_cst816s.cpp")
+elseif(TARGET_DEVICE STREQUAL "cyd_s024c")
+    list(APPEND SRCS "touch_cst816s.cpp")
+elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd")
+    if(CYD_DISPLAY_VARIANT STREQUAL "s024c")
+        list(APPEND SRCS "touch_cst816s.cpp")
+    else()
+        list(APPEND SRCS "touch_xpt2046.cpp")
+    endif()
+elseif(TARGET_DEVICE STREQUAL "jc3248w535")
+    list(APPEND SRCS "touch_gt911.cpp")
+endif()
+
+if(NOT SRCS)
+    idf_component_register()
+    return()
+endif()
+
+idf_component_register(
+    SRCS         ${SRCS}
+    INCLUDE_DIRS "."
+    REQUIRES     driver
+)
+
+idf_component_get_property(gpio_lib   esp_driver_gpio COMPONENT_LIB)
+idf_component_get_property(i2c_lib    esp_driver_i2c  COMPONENT_LIB)
+idf_component_get_property(spi_lib    esp_driver_spi  COMPONENT_LIB)
+target_link_libraries(${COMPONENT_LIB} PRIVATE ${gpio_lib} ${i2c_lib} ${spi_lib})

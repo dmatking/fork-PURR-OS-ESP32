@@ -1,7 +1,6 @@
 // touch_gt911.cpp — GT911 5-point I2C capacitive touch driver (pure ESP-IDF)
 // Used on JC3248W535 (ESP32-S3, 3.5" 480x320).
 
-#ifdef PURR_HAS_TOUCH_GT911
 
 #include "touch_gt911.h"
 #include "driver/gpio.h"
@@ -101,4 +100,3 @@ bool touch_gt911_get_event(gt911_touch_event_t* ev) {
     return true;
 }
 
-#endif

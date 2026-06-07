@@ -2,7 +2,7 @@
 // BLE stack deferred — stubs complete in interface, BLE init pending NimBLE component.
 
 #include "bt_manager.h"
-#include "../purr_idf_compat.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
@@ -64,7 +64,7 @@ void bt_manager_init() {
 }
 
 void bt_manager_update() {
-    if (discovery_running && millis() > discovery_end)
+    if (discovery_running && (uint32_t)(esp_timer_get_time() / 1000) > discovery_end)
         discovery_running = false;
 }
 
@@ -90,7 +90,7 @@ void bt_manager_start_discovery(uint32_t timeout_ms) {
     if (!bt_on) return;
     discovered_count_val = 0;
     discovery_running    = true;
-    discovery_end        = millis() + timeout_ms;
+    discovery_end        = (uint32_t)(esp_timer_get_time() / 1000) + timeout_ms;
     ESP_LOGI(TAG, "discovery started (%lu ms)", (unsigned long)timeout_ms);
 }
 void bt_manager_stop_discovery()   { discovery_running = false; }

@@ -1,7 +1,6 @@
 // wifi_manager.cpp — WiFi management (pure ESP-IDF)
 
 #include "wifi_manager.h"
-#include "../purr_idf_compat.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
