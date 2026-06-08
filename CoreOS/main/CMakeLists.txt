@@ -6,7 +6,7 @@
 # (no user -D flags), then a full second pass with all user flags applied.
 # The STATUS message below will appear twice; the second print is authoritative.
 
-set(TARGET_DEVICE  "heltec" CACHE STRING "Target: heltec | cyd | cyd_boot | tdeck | jc3248w535 | waveshare169")
+set(TARGET_DEVICE  "heltec" CACHE STRING "Target: heltec | cyd | cyd_s028r | cyd_s024c | cyd_boot | tdeck | tdeck_plus | jc3248w535 | waveshare169")
 set(BUILD_MINI     0        CACHE STRING "1 = strip MicroPython runtime")
 
 # CYD display variant (cyd target only)
@@ -186,6 +186,15 @@ elseif(TARGET_DEVICE STREQUAL "tdeck")
     endif()
     message(WARNING "T-Deck: placeholder build -- ST7789 driver and BB6 shell not yet wired.")
 
+# ── Device-specific: T-Deck Plus (touch screen, GT911) ───────────────────────
+elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
+    list(APPEND SRCS "../apps/smol/smol.cpp")
+    list(APPEND INCLUDE_DIRS "../apps/smol")
+    if(PURR_UI_KERNEL STREQUAL "miniwin")
+        list(APPEND REQUIRES lib_miniwin)
+    endif()
+    message(STATUS "T-Deck Plus: ST7789 320x240 + GT911 touch (SPI3 MOSI=41 SCK=40).")
+
 # ── Device-specific: JC3248W535 ───────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "jc3248w535")
     list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer)
@@ -205,7 +214,7 @@ elseif(TARGET_DEVICE STREQUAL "waveshare169")
     message(WARNING "waveshare169: WIP target — ST7789 + CST816S, no shell yet.")
 
 else()
-    message(FATAL_ERROR "Unknown TARGET_DEVICE='${TARGET_DEVICE}'. Valid: heltec, cyd, cyd_boot, tdeck, jc3248w535, waveshare169")
+    message(FATAL_ERROR "Unknown TARGET_DEVICE='${TARGET_DEVICE}'. Valid: heltec, cyd, cyd_s028r, cyd_s024c, cyd_boot, tdeck, tdeck_plus, jc3248w535, waveshare169")
 endif()
 
 # ── MicroPython runtime ───────────────────────────────────────────────────────
@@ -236,8 +245,16 @@ idf_component_register(
 # ── IDF include propagation workarounds ───────────────────────────────────────
 # IDF 5.3 does not propagate include dirs through REQUIRES chains.
 if(PURR_UI_KERNEL STREQUAL "miniwin")
-    if(TARGET_DEVICE MATCHES "^cyd")
+    if(TARGET_DEVICE STREQUAL "cyd_s028r")
+        set(_mw_dev "cyd_s028r")
+    elseif(TARGET_DEVICE MATCHES "^cyd")
         set(_mw_dev "cyd")
+    elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
+        set(_mw_dev "tdeck_plus")
+    elseif(TARGET_DEVICE STREQUAL "jc3248w535")
+        set(_mw_dev "jc3248")
+    elseif(TARGET_DEVICE STREQUAL "waveshare169")
+        set(_mw_dev "waveshare")
     else()
         set(_mw_dev "generic")
     endif()
@@ -270,7 +287,9 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
         PURR_HAS_TOUCH_CST816S=1 PURR_HAS_PARTITION_MGR=1 CYD_VARIANT_S024C=1
     )
 elseif(TARGET_DEVICE STREQUAL "tdeck")
-    list(APPEND PURR_DEFS PURR_DISPLAY_SSD1306=1)
+    list(APPEND PURR_DEFS PURR_DISPLAY_ST7789=1)
+elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
+    list(APPEND PURR_DEFS PURR_DISPLAY_ST7789=1 PURR_HAS_TOUCH_GT911=1)
     if(BUILD_TDECK_PLUS)
         list(APPEND PURR_DEFS PURR_IS_TDECK_PLUS=1)
     endif()

@@ -151,8 +151,11 @@ def _idf_py():
 _BUILD_DIRS = {
     "heltec":       "build_heltec",
     "cyd":          "build_cyd",
+    "cyd_s028r":    "build_cyd_s028r",
+    "cyd_s024c":    "build_cyd_s024c",
     "cyd_boot":     "build_cyd_boot",
     "tdeck":        "build_tdeck",
+    "tdeck_plus":   "build_tdeck_plus",
     "jc3248w535":   "build_jc3248w535",
     "waveshare169": "build_waveshare169",
 }
@@ -214,29 +217,38 @@ TARGETS = {
     "tdeck": {
         "chip":         "esp32s3",
         "desc":         "LilyGo T-Deck",
-        "spec":         "ESP32-S3  16MB  ST7789  trackball (WIP)",
+        "spec":         "ESP32-S3  16MB  ST7789  trackball — no touch (WIP)",
         "shells":       ["smol"],
         "default_lora": True,
         "default_ui":   "none",
         "fixed":        False,
     },
+    "tdeck_plus": {
+        "chip":         "esp32s3",
+        "desc":         "LilyGo T-Deck Plus",
+        "spec":         "ESP32-S3  ST7789 320x240  GT911 cap touch  SPI3 MOSI=41 SCK=40  I2C SDA=18 SCL=8",
+        "shells":       ["smol"],
+        "default_lora": True,
+        "default_ui":   "miniwin",
+        "fixed":        False,
+    },
     "jc3248w535": {
         "chip":         "esp32s3",
-        "desc":         "JC3248W535 3.5\" (WIP)",
-        "spec":         "ESP32-S3  16MB  8MB PSRAM  ST7796 480x320  GT911 cap touch — WIP, verify pins",
+        "desc":         "JC3248W535 3.5\"",
+        "spec":         "ESP32-S3  16MB  8MB PSRAM  ST7796 480x320  GT911 I2C SDA=19 SCL=20",
         "shells":       [],
         "default_lora": False,
-        "default_ui":   "none",
-        "fixed":        True,   # WIP: no module toggles until stable
+        "default_ui":   "miniwin",
+        "fixed":        False,
     },
     "waveshare169": {
         "chip":         "esp32s3",
-        "desc":         "Waveshare 1.69\" ESP32-S3 (WIP)",
-        "spec":         "ESP32-S3  4MB  ST7789 240x280  CST816S cap touch — WIP, verify pins",
+        "desc":         "Waveshare 1.69\" ESP32-S3",
+        "spec":         "ESP32-S3  4MB  ST7789 240x280  CST816S I2C SDA=6 SCL=7 — verify pins",
         "shells":       [],
         "default_lora": False,
-        "default_ui":   "none",
-        "fixed":        True,   # WIP: no module toggles until stable
+        "default_ui":   "miniwin",
+        "fixed":        False,
     },
 }
 

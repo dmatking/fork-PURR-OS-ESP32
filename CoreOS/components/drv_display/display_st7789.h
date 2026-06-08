@@ -24,3 +24,6 @@ void display_st7789_fill_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint16
 void display_st7789_draw_hline(int16_t x, int16_t y, int16_t w, uint16_t color);
 void display_st7789_draw_string(int16_t x, int16_t y, const char* s,
                                  uint16_t fg, uint16_t bg, uint8_t size);
+// MiniWin HAL helpers — push_block = solid rect, push_colors = multi-color row burst
+void display_st7789_push_block(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+void display_st7789_push_colors(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t* colors);

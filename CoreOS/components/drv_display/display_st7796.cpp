@@ -96,3 +96,18 @@ void display_st7796_draw_hline(int16_t x, int16_t y, int16_t w, uint16_t c) {
     display_st7796_fill_rect(x, y, w, 1, c);
 }
 
+void display_st7796_push_block(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+    display_st7796_fill_rect(x, y, w, h, color);
+}
+
+void display_st7796_push_colors(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t* colors) {
+    if (!s_panel || !colors || w <= 0 || h <= 0) return;
+    static uint16_t row[480];
+    for (int r = 0; r < h; r++) {
+        const uint16_t* src = colors + r * w;
+        int cnt = (w <= 480) ? w : 480;
+        for (int i = 0; i < cnt; i++) row[i] = (uint16_t)((src[i] >> 8) | (src[i] << 8));
+        esp_lcd_panel_draw_bitmap(s_panel, x, y + r, x + w, y + r + 1, row);
+    }
+}
+
