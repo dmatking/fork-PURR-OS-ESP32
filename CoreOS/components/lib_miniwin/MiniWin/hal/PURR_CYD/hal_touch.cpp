@@ -23,9 +23,7 @@ mw_hal_touch_state_t mw_hal_touch_get_state(void) {
 }
 
 bool mw_hal_touch_get_point(uint16_t *x, uint16_t *y) {
-    if (!s_ev.pressed) return false;
-    // CST816S returns landscape screen coords (0..319, 0..239).
-    // Scale to 0..4095 so MiniWin's calibration matrix maps them to the right screen position.
+    if (mw_hal_touch_get_state() == MW_HAL_TOUCH_STATE_UP) return false;
     *x = (uint16_t)((int32_t)s_ev.x * 4096 / CYD_TFT_WIDTH);
     *y = (uint16_t)((int32_t)s_ev.y * 4096 / CYD_TFT_HEIGHT);
     return true;

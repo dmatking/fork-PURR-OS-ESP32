@@ -6,9 +6,7 @@
 #   MiniWin/miniwin.c appears at CoreOS/components/lib_miniwin/MiniWin/miniwin.c
 #   The PURR_CYD HAL in MiniWin/hal/PURR_CYD/ is checked in alongside the fork.
 
-if(NOT TARGET_DEVICE STREQUAL "cyd")
-    # cyd_boot draws directly to the display (no WM) — register empty to skip compilation.
-    # All other non-CYD targets also skip.
+if(NOT PURR_UI_KERNEL STREQUAL "miniwin")
     idf_component_register()
     return()
 endif()
@@ -39,6 +37,7 @@ set(MINIWIN_HAL_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/hal_timer.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/hal_delay.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/hal_non_vol.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/purr_app.cpp"
 )
 
 idf_component_register(

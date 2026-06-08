@@ -1,4 +1,4 @@
-# PURR OS — v0.9.0
+# PURR OS — v0.9.1
 
 > **MEGA DISCLAIMER:** This project is very much vibe-coded. It has gone from 0 to "Jesus Christ" at an alarming rate. It is fully open-source and humans are actively encouraged to help. Please.
 
@@ -42,12 +42,20 @@ For more details, see **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 
 | Component | Version | Release Date |
 |-----------|---------|--------------|
-| PURR OS   | v0.9.0  | 2026-06-07   |
-| KITT      | v0.5.0  | 2026-06-07   |
+| PURR OS   | v0.9.1  | 2026-06-07   |
+| KITT      | v0.5.1  | 2026-06-07   |
 
 Version strings are defined in [CoreOS/system/kernel/purr_version.h](CoreOS/system/kernel/purr_version.h) and automatically embedded into the firmware image via `esp_app_desc_t` — visible in the bootloader's slot card and on the homescreen.
 
 Full release history is in **[CHANGELOG.md](CHANGELOG.md)** at the repository root.
+
+### Release Notes: v0.9.1 / KITT v0.5.1
+
+- MiniWin HAL touch fix: `mw_hal_touch_get_point()` now polls fresh CST816S data — touch was silently ignored in all previous builds
+- Windows CE shell: single full-screen window eliminates focus/z-order issues
+- Start button renders sunken while menu is open; raised otherwise
+- Start menu items are now interactive: press highlight (60ms), "About" dialog, "Shut Down" reboots
+- `mw_paint_all()` on init clears calibration screen artifact
 
 ### Release Notes: v0.9.0 / KITT v0.5.0
 

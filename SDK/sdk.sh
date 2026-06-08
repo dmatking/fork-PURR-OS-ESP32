@@ -161,9 +161,17 @@ while [[ $# -gt 0 ]]; do
             args+=("--flasher")
             shift
             ;;
+        -Scan|--scan)
+            args+=("--scan")
+            shift
+            ;;
         # LoRa / hardware
         -LoraKernel|--lora-kernel)
             args+=("--lora-kernel" "$2")
+            shift 2
+            ;;
+        -UiKernel|--ui-kernel)
+            args+=("--ui-kernel" "$2")
             shift 2
             ;;
         -TdeckPlus|--tdeck-plus)
@@ -190,9 +198,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --clean                Clean build dir before building"
             echo ""
             echo "Flash/Monitor:"
-            echo "  --flash PORT           Flash to serial port"
-            echo "  --full-flash PORT      Flash factory + ota_0 (CYD only)"
-            echo "  --monitor PORT         Open serial monitor"
+            echo "  --flash PORT|auto      Flash to serial port (auto = detect)"
+            echo "  --full-flash PORT|auto Flash factory + ota_0 (CYD only)"
+            echo "  --monitor PORT|auto    Open serial monitor (auto = detect)"
+            echo "  --scan                 List connected serial devices and exit"
             echo ""
             echo "Build options:"
             echo "  --mini                 Strip MicroPython runtime"
@@ -205,6 +214,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Hardware options:"
             echo "  --lora-kernel KERNEL   LoRa kernel (sx1262|rak3172|sx1276)"
+            echo "  --ui-kernel KERNEL     UI kernel (miniwin|none)"
             echo "  --tdeck-plus           T-Deck Plus (with GPS)"
             echo "  --cyd-variant VARIANT  CYD display variant (s028r|s024c)"
             echo ""

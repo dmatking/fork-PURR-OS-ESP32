@@ -19,6 +19,7 @@ set(PURR_ENABLE_BT      1 CACHE STRING "Include Bluetooth manager")
 set(PURR_ENABLE_MTP     0 CACHE STRING "Include MTP USB manager")
 set(PURR_ENABLE_FLASHER 0 CACHE STRING "Include OTA partition flasher")
 set(PURR_ENABLE_LTE     0 CACHE STRING "Include LTE manager (experimental)")
+set(PURR_ENABLE_SHELL   1 CACHE STRING "Include USB serial debug shell (esp_console)")
 
 # LoRa: auto-enabled for heltec/tdeck, off for cyd/cyd_boot.
 if(TARGET_DEVICE STREQUAL "heltec" OR TARGET_DEVICE STREQUAL "tdeck")
@@ -31,7 +32,7 @@ set(PURR_ENABLE_LORA ${_lora_default} CACHE STRING "Include LoRa radio manager")
 # Mesh: requires LoRa. Defaults off.
 set(PURR_ENABLE_MESH 0 CACHE STRING "Include Meshtastic mesh stack (requires LoRa)")
 
-message(STATUS "PURR OS  target=${TARGET_DEVICE}  mini=${BUILD_MINI}  bt=${PURR_ENABLE_BT}  lora=${PURR_ENABLE_LORA}  mesh=${PURR_ENABLE_MESH}  mtp=${PURR_ENABLE_MTP}  flasher=${PURR_ENABLE_FLASHER}  lte=${PURR_ENABLE_LTE}")
+message(STATUS "PURR OS  target=${TARGET_DEVICE}  ui=${PURR_UI_KERNEL}  mini=${BUILD_MINI}  bt=${PURR_ENABLE_BT}  lora=${PURR_ENABLE_LORA}  mesh=${PURR_ENABLE_MESH}  mtp=${PURR_ENABLE_MTP}  flasher=${PURR_ENABLE_FLASHER}  lte=${PURR_ENABLE_LTE}  shell=${PURR_ENABLE_SHELL}")
 
 # ── Core sources (all targets) ────────────────────────────────────────────────
 set(SRCS
@@ -102,6 +103,11 @@ if(PURR_ENABLE_LTE)
     list(APPEND REQUIRES drv_lte)
 endif()
 
+# ── Debug shell ───────────────────────────────────────────────────────────────
+if(PURR_ENABLE_SHELL)
+    list(APPEND REQUIRES drv_shell)
+endif()
+
 # ── Device-specific: Heltec ───────────────────────────────────────────────────
 if(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND SRCS "../apps/smol/smol.cpp")
@@ -119,8 +125,10 @@ elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c")
         "../system/kernel/modules/partition_manager_stubs.cpp"
         "../system/kernel/modules/ui_stubs.cpp"
     )
-    list(APPEND INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../../Shells/purr_wm")
-    list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer nvs_flash sdmmc lib_miniwin purr_wm)
+    list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer nvs_flash sdmmc)
+    if(PURR_UI_KERNEL STREQUAL "miniwin")
+        list(APPEND REQUIRES lib_miniwin)
+    endif()
 
 # ── Device-specific: CYD full OS ─────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "cyd")
@@ -128,8 +136,10 @@ elseif(TARGET_DEVICE STREQUAL "cyd")
         "../system/kernel/modules/partition_manager_stubs.cpp"
         "../system/kernel/modules/ui_stubs.cpp"
     )
-    list(APPEND INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../../Shells/purr_wm")
-    list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer nvs_flash sdmmc lib_miniwin purr_wm)
+    list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer nvs_flash sdmmc)
+    if(PURR_UI_KERNEL STREQUAL "miniwin")
+        list(APPEND REQUIRES lib_miniwin)
+    endif()
 
 # ── Device-specific: CYD bootloader ──────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "cyd_boot")
@@ -215,8 +225,13 @@ idf_component_register(
 )
 
 # ── IDF include propagation workarounds ───────────────────────────────────────
-# cyd_boot compiles partition_manager.cpp directly; fatfs/sdmmc don't propagate
-# their include dirs through REQUIRES on IDF v5.3, so force them here.
+# IDF 5.3 does not propagate include dirs through REQUIRES chains.
+if(PURR_UI_KERNEL STREQUAL "miniwin")
+    target_include_directories(${COMPONENT_LIB} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../components/lib_miniwin/MiniWin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../components/lib_miniwin/MiniWin/hal/PURR_CYD"
+    )
+endif()
 if(TARGET_DEVICE STREQUAL "cyd_boot")
     idf_component_get_property(fatfs_lib  fatfs  COMPONENT_LIB)
     idf_component_get_property(sdmmc_lib  sdmmc  COMPONENT_LIB)
@@ -229,7 +244,10 @@ set(PURR_DEFS "")
 if(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND PURR_DEFS PURR_DISPLAY_SSD1306=1)
 elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c" OR TARGET_DEVICE STREQUAL "cyd")
-    list(APPEND PURR_DEFS PURR_DISPLAY_ILI9341=1 PURR_HAS_PARTITION_MGR=1 PURR_HAS_MINIWIN=1)
+    list(APPEND PURR_DEFS PURR_DISPLAY_ILI9341=1 PURR_HAS_PARTITION_MGR=1)
+    if(PURR_UI_KERNEL STREQUAL "miniwin")
+        list(APPEND PURR_DEFS PURR_HAS_MINIWIN=1)
+    endif()
     if(CYD_DISPLAY_VARIANT STREQUAL "s024c" OR TARGET_DEVICE STREQUAL "cyd_s024c")
         list(APPEND PURR_DEFS PURR_HAS_TOUCH_CST816S=1 CYD_VARIANT_S024C=1)
     else()
@@ -268,6 +286,9 @@ if(PURR_ENABLE_FLASHER)
 endif()
 if(PURR_ENABLE_LTE)
     list(APPEND PURR_DEFS PURR_HAS_LTE=1)
+endif()
+if(PURR_ENABLE_SHELL)
+    list(APPEND PURR_DEFS PURR_HAS_SHELL=1)
 endif()
 if(NOT BUILD_MINI)
     list(APPEND PURR_DEFS PURR_HAS_MICROPYTHON=1)

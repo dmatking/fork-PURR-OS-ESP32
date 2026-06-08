@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""PURR OS SDK v0.9.0 — interactive build / flash / monitor tool.
+"""PURR OS SDK v0.9.1 — interactive build / flash / monitor tool.
 Invoked by SDK.ps1 (or directly: python sdk_core.py [flags]).
 """
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -34,6 +35,94 @@ REPO_DIR   = os.path.dirname(SCRIPT_DIR)
 COREOS_DIR = os.path.join(REPO_DIR, "CoreOS")
 LORA_DIR   = os.path.join(REPO_DIR, "LoRa Kernels")
 CFG_FILE   = os.path.join(SCRIPT_DIR, "purr_sdk.cfg")
+
+
+# ── Serial port scanner ───────────────────────────────────────────────────────
+
+# USB VID/PID pairs common on ESP32 dev boards
+_ESP32_VIDS = {
+    0x1A86,   # CH340 / CH341 (most CYD boards)
+    0x10C4,   # CP210x (Silicon Labs)
+    0x0403,   # FTDI
+    0x303A,   # Espressif native USB (ESP32-S3)
+    0x239A,   # Adafruit
+}
+
+def _scan_serial_ports():
+    """Return list of (port, description) for likely ESP32 serial devices."""
+    results = []
+
+    # Try pyserial first — gives VID/PID + friendly description
+    try:
+        from serial.tools import list_ports
+        for p in list_ports.comports():
+            vid = p.vid if hasattr(p, "vid") else None
+            if vid in _ESP32_VIDS or (p.device and (
+                    "USB" in (p.description or "").upper() or
+                    "CH340" in (p.description or "").upper() or
+                    "CP210" in (p.description or "").upper() or
+                    "FTDI"  in (p.description or "").upper())):
+                results.append((p.device, p.description or ""))
+    except ImportError:
+        pass
+
+    # Fallback: glob /dev/ttyUSB* and /dev/ttyACM* on Linux
+    if not results and sys.platform.startswith("linux"):
+        for pattern in ("/dev/ttyUSB*", "/dev/ttyACM*"):
+            for dev in sorted(glob.glob(pattern)):
+                if dev not in [r[0] for r in results]:
+                    results.append((dev, ""))
+
+    return results
+
+
+def _normalize_port(port):
+    """Ensure Linux/macOS ports have their /dev/ prefix."""
+    if port and sys.platform != "win32" and not port.startswith("/"):
+        return "/dev/" + port
+    return port
+
+
+def _pick_port(prompt_label, saved=""):
+    """
+    Show available serial ports and let the user pick one.
+    If exactly one ESP32-looking port is found, offer it as default.
+    Accepts 'auto' on CLI to select the first found port without prompting.
+    Returns the chosen port string, or "" if skipped.
+    """
+    ports = _scan_serial_ports()
+
+    if not ports:
+        # No devices found — fall back to manual entry
+        if sys.platform.startswith("linux"):
+            example = "/dev/ttyUSB0"
+        elif sys.platform == "darwin":
+            example = "/dev/cu.usbserial-0001"
+        else:
+            example = "COM8"
+        val = input(f"  {prompt_label} (e.g. {example}, blank to skip) [{saved}]: ").strip()
+        return val or saved
+
+    # Show discovered ports
+    print(f"\n  {C_CYN}Detected serial ports:{C_RST}")
+    for i, (dev, desc) in enumerate(ports, 1):
+        tag = f"  {C_GRY}{desc}{C_RST}" if desc else ""
+        print(f"  [{i}] {dev}{tag}")
+
+    default_port = ports[0][0] if len(ports) == 1 else (saved if saved in [p[0] for p in ports] else ports[0][0])
+    default_label = f"{default_port}" if default_port else ""
+
+    raw = input(f"\n  {prompt_label} — number or path (Enter = {default_label}, blank to skip): ").strip()
+
+    if not raw:
+        return default_port
+    if raw.isdigit():
+        idx = int(raw) - 1
+        if 0 <= idx < len(ports):
+            return ports[idx][0]
+        warn(f"Invalid choice — using {default_port}")
+        return default_port
+    return _normalize_port(raw)
 
 
 def _idf_py():
@@ -83,6 +172,7 @@ TARGETS = {
         "spec":         "ESP32-S3  8MB  SSD1306  SX1262 LoRa",
         "shells":       [],
         "default_lora": True,
+        "default_ui":   "none",
         "fixed":        False,
     },
     "cyd_s028r": {
@@ -91,6 +181,7 @@ TARGETS = {
         "spec":         "ESP32  4MB  ILI9341 2.4\"  XPT2046 SPI touch  MiniWin WM — full OS (ota_0)",
         "shells":       [],
         "default_lora": False,
+        "default_ui":   "miniwin",
         "fixed":        False,
     },
     "cyd_s024c": {
@@ -99,6 +190,7 @@ TARGETS = {
         "spec":         "ESP32  4MB  ILI9341 2.4\"  CST816S I2C touch  MiniWin WM — full OS (ota_0)",
         "shells":       [],
         "default_lora": False,
+        "default_ui":   "miniwin",
         "fixed":        False,
     },
     "cyd": {
@@ -107,6 +199,7 @@ TARGETS = {
         "spec":         "Use cyd_s028r or cyd_s024c instead",
         "shells":       [],
         "default_lora": False,
+        "default_ui":   "miniwin",
         "fixed":        False,
     },
     "cyd_boot": {
@@ -115,6 +208,7 @@ TARGETS = {
         "spec":         "ESP32  4MB  ILI9341 2.4\" — factory kernel (OTA-immune, chainloads ota_0)",
         "shells":       [],
         "default_lora": False,
+        "default_ui":   "none",
         "fixed":        True,   # no module toggles; always mini
     },
     "tdeck": {
@@ -123,6 +217,7 @@ TARGETS = {
         "spec":         "ESP32-S3  16MB  ST7789  trackball (WIP)",
         "shells":       ["smol"],
         "default_lora": True,
+        "default_ui":   "none",
         "fixed":        False,
     },
     "jc3248w535": {
@@ -131,6 +226,7 @@ TARGETS = {
         "spec":         "ESP32-S3  16MB  8MB PSRAM  ST7796 480x320  GT911 cap touch — WIP, verify pins",
         "shells":       [],
         "default_lora": False,
+        "default_ui":   "none",
         "fixed":        True,   # WIP: no module toggles until stable
     },
     "waveshare169": {
@@ -139,6 +235,7 @@ TARGETS = {
         "spec":         "ESP32-S3  4MB  ST7789 240x280  CST816S cap touch — WIP, verify pins",
         "shells":       [],
         "default_lora": False,
+        "default_ui":   "none",
         "fixed":        True,   # WIP: no module toggles until stable
     },
 }
@@ -200,6 +297,15 @@ MODULES = [
         "default":  True,
         "inverted": True,   # micropython ON  → BUILD_MINI=0
     },
+    {
+        "key":      "shell",
+        "cmake":    "PURR_ENABLE_SHELL",
+        "label":    "Debug Shell",
+        "desc":     "drv_shell — USB serial REPL (gpio-set, display-color, reboot, ...)",
+        "targets":  ["heltec", "cyd", "tdeck"],
+        "default":  True,
+        "inverted": False,
+    },
 ]
 
 LORA_KERNELS = {
@@ -214,6 +320,16 @@ LORA_KERNEL_DESCS = {
     "sx1276":  "SPI — generic RFM95W breakout",
 }
 
+UI_KERNELS = {
+    "miniwin": "MiniWin",
+    "none":    "none",
+}
+
+UI_KERNEL_DESCS = {
+    "miniwin": "MiniWin embedded WM — direct ILI9341 + touch HAL (CYD targets)",
+    "none":    "no UI framework — headless / raw display only",
+}
+
 SHELL_DESCS = {
     "smol": "Smol — minimal OLED shell",
     "none": "Headless — no UI shell compiled",
@@ -224,6 +340,7 @@ DEFAULT_CFG = {
     "target":       "heltec",
     "shell":        "smol",
     "lora_kernel":  "sx1262",
+    "ui_kernel":    "none",
     "flash_port":   "",
     "flash_baud":   460800,
     "monitor_port": "",
@@ -253,6 +370,10 @@ def load_cfg():
                 else:
                     cfg[k] = v
             _sanitize_cfg(cfg)
+            # Normalize port paths (fix bare ttyUSBx saved without /dev/ prefix)
+            for key in ("flash_port", "monitor_port"):
+                if cfg.get(key):
+                    cfg[key] = _normalize_port(cfg[key])
             info("Loaded purr_sdk.cfg  (--configure to change)")
             return cfg
         except Exception:
@@ -280,6 +401,12 @@ def _sanitize_cfg(cfg):
     # mesh requires lora — strip if lora was just disabled
     if not cfg["modules"].get("lora"):
         cfg["modules"]["mesh"] = False
+    # ui_kernel: fixed targets and non-CYD targets always use "none"
+    if TARGETS.get(target, {}).get("fixed") or target not in ("cyd", "cyd_s028r", "cyd_s024c"):
+        cfg["ui_kernel"] = "none"
+    # If ui_kernel not yet set, apply target default
+    elif "ui_kernel" not in cfg or cfg["ui_kernel"] not in UI_KERNELS:
+        cfg["ui_kernel"] = TARGETS.get(target, {}).get("default_ui", "none")
 
 
 # ── Wizard ────────────────────────────────────────────────────────────────────
@@ -331,6 +458,22 @@ def pick_lora_kernel(cfg):
         cfg["lora_kernel"] = "sx1262"
 
 
+def pick_ui_kernel(cfg):
+    header("UI kernel:")
+    keys = list(UI_KERNELS.keys())
+    for i, k in enumerate(keys, 1):
+        print(f"  [{i}]  {k:<10}  {C_GRY}{UI_KERNEL_DESCS[k]}{C_RST}")
+    print()
+    default_ui = TARGETS[cfg["target"]].get("default_ui", "none")
+    default_idx = keys.index(default_ui) + 1 if default_ui in keys else 1
+    raw = input(f"  Choice [{default_idx}]: ").strip() or str(default_idx)
+    try:
+        idx = int(raw) - 1
+        cfg["ui_kernel"] = keys[idx] if 0 <= idx < len(keys) else default_ui
+    except ValueError:
+        cfg["ui_kernel"] = default_ui
+
+
 def pick_modules(cfg):
     target = cfg["target"]
     if TARGETS[target]["fixed"]:
@@ -368,16 +511,26 @@ def pick_modules(cfg):
         if has_lora:
             print(f"\n        {C_GRY}+-- kernel: {cfg['lora_kernel']}  ([k] to change){C_RST}")
 
+        is_cyd = target in ("cyd", "cyd_s028r", "cyd_s024c")
+        if is_cyd:
+            ui = cfg.get("ui_kernel", TARGETS[target].get("default_ui", "none"))
+            print(f"\n        {C_GRY}+-- ui: {ui}  ([u] to change){C_RST}")
+
         print()
         prompt = f"  Toggle [1-{len(visible)}]"
         if has_lora:
             prompt += ", [k] LoRa kernel"
+        if is_cyd:
+            prompt += ", [u] UI kernel"
         raw = input(prompt + ", or Enter to continue: ").strip()
 
         if not raw:
             break
         if raw.lower() == "k" and has_lora:
             pick_lora_kernel(cfg)
+            continue
+        if raw.lower() == "u" and is_cyd:
+            pick_ui_kernel(cfg)
             continue
         try:
             idx = int(raw) - 1
@@ -396,10 +549,12 @@ def pick_modules(cfg):
 
 def pick_ports(cfg):
     print()
-    fp = input(f"  Flash port (COM5 / COM8, blank to skip) [{cfg.get('flash_port','')}]: ").strip()
+    fp = _pick_port("Flash port", saved=cfg.get("flash_port", ""))
     if fp:
         cfg["flash_port"] = fp
-    mp = input(f"  Monitor port (blank to skip) [{cfg.get('monitor_port','')}]: ").strip()
+    # Default monitor to same port as flash unless already set differently
+    saved_mon = cfg.get("monitor_port", "") or fp
+    mp = _pick_port("Monitor port", saved=saved_mon)
     if mp:
         cfg["monitor_port"] = mp
 
@@ -459,12 +614,19 @@ def _cmake_flags(cfg):
     _flag("PURR_ENABLE_MESH",    "mesh",    False)
     _flag("PURR_ENABLE_MTP",     "mtp",     False)
     _flag("PURR_ENABLE_FLASHER", "flasher", False)
+    _flag("PURR_ENABLE_SHELL",   "shell",   True)
 
     flags.append(f"-DBUILD_TDECK_PLUS={1 if cfg.get('tdeck_plus') else 0}")
 
     # CYD display variant (s028r=original XPT2046, s024c=newer CST816S)
     if cmake_target == "cyd" and display_variant:
         flags.append(f"-DCYD_DISPLAY_VARIANT={display_variant}")
+
+    # UI kernel (miniwin | none)
+    ui = cfg.get("ui_kernel", TARGETS[target].get("default_ui", "none"))
+    if fixed:
+        ui = "none"
+    flags.append(f"-DPURR_UI_KERNEL={ui}")
 
     return flags
 
@@ -710,10 +872,10 @@ def do_flash(cfg, port=None):
     port   = port or cfg.get("flash_port", "")
     baud   = cfg.get("flash_baud", 460800)
 
-    if not port:
-        port = input("  Flash port (e.g. COM8): ").strip()
+    if not port or port == "auto":
+        port = _pick_port("Flash port", saved=cfg.get("flash_port", ""))
         if not port:
-            err("No flash port specified.")
+            err("No flash port specified. Connect your CYD and try again.")
         cfg["flash_port"] = port
         save_cfg(cfg)
 
@@ -752,10 +914,10 @@ def do_flash(cfg, port=None):
 
 def do_monitor(cfg, port=None):
     port = port or cfg.get("monitor_port", "") or cfg.get("flash_port", "")
-    if not port:
-        port = input("  Monitor port (e.g. COM8): ").strip()
+    if not port or port == "auto":
+        port = _pick_port("Monitor port", saved=cfg.get("flash_port", ""))
         if not port:
-            err("No monitor port specified.")
+            err("No monitor port specified. Connect your CYD and try again.")
         cfg["monitor_port"] = port
         save_cfg(cfg)
     info(f"monitor on {port}  (Ctrl+] to exit)")
@@ -797,10 +959,10 @@ def do_full_flash(cfg, port=None):
     port = port or cfg.get("flash_port", "")
     baud = cfg.get("flash_baud", 460800)
 
-    if not port:
-        port = input("  Flash port (e.g. COM8): ").strip()
+    if not port or port == "auto":
+        port = _pick_port("Flash port", saved=cfg.get("flash_port", ""))
         if not port:
-            err("No flash port specified.")
+            err("No flash port specified. Connect your CYD and try again.")
         cfg["flash_port"] = port
         save_cfg(cfg)
 
@@ -864,7 +1026,7 @@ def show_banner(cfg):
 
     div()
     wip_tag = f"  {C_YLW}[WIP]{C_RST}" if "WIP" in t.get("spec", "") else ""
-    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.9.0{C_RST}  {C_GRY}KITT v0.5.0{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
+    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.9.1{C_RST}  {C_GRY}KITT v0.5.1{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
 
     mini = (not mods.get("micropython", True)) or t["fixed"]
     print(f"  Variant  : {'mini — no MicroPython' if mini else 'full — with MicroPython'}")
@@ -875,6 +1037,8 @@ def show_banner(cfg):
     if mods.get("mesh"):    mod_strs.append("mesh")
     if mods.get("mtp"):     mod_strs.append("mtp")
     if mods.get("flasher"): mod_strs.append("flasher")
+    ui = cfg.get("ui_kernel", TARGETS[target].get("default_ui", "none"))
+    if ui != "none":        mod_strs.append(f"ui({ui})")
     print(f"  Modules  : {' '.join(mod_strs) if mod_strs else '(none)'}")
 
     if cfg.get("flash_port"):   print(f"  Flash    : {cfg['flash_port']}")
@@ -1078,6 +1242,8 @@ def _apply_cli(cfg, args):
         cfg["modules"]["flasher"] = True
     if args.lora_kernel:
         cfg["lora_kernel"] = args.lora_kernel
+    if args.ui_kernel:
+        cfg["ui_kernel"] = args.ui_kernel
     if args.tdeck_plus:
         cfg["tdeck_plus"] = True
     if args.cyd_variant:
@@ -1098,8 +1264,12 @@ def main():
     p.add_argument("--target",      choices=list(TARGETS.keys()),
                    metavar="heltec|cyd_s028r|cyd_s024c|cyd|cyd_boot|tdeck|jc3248w535|waveshare169")
     p.add_argument("--build",       action="store_true")
-    p.add_argument("--flash",       metavar="PORT", default="")
-    p.add_argument("--monitor",     metavar="PORT", default="")
+    p.add_argument("--flash",       metavar="PORT|auto", default="",
+                   help="Flash to port. Use 'auto' to detect automatically.")
+    p.add_argument("--monitor",     metavar="PORT|auto", default="",
+                   help="Open serial monitor. Use 'auto' to detect automatically.")
+    p.add_argument("--scan",        action="store_true",
+                   help="Scan for connected serial devices and exit")
     p.add_argument("--clean",       action="store_true")
     p.add_argument("--mini",        action="store_true")
     p.add_argument("--no-bt",       action="store_true", dest="no_bt")
@@ -1109,6 +1279,7 @@ def main():
     p.add_argument("--mtp",         action="store_true")
     p.add_argument("--flasher",     action="store_true")
     p.add_argument("--lora-kernel", dest="lora_kernel", choices=list(LORA_KERNELS.keys()))
+    p.add_argument("--ui-kernel",   dest="ui_kernel",   choices=list(UI_KERNELS.keys()))
     p.add_argument("--tdeck-plus",  action="store_true", dest="tdeck_plus")
     p.add_argument("--cyd-variant", dest="cyd_variant", choices=["s028r", "s024c"],
                    help="CYD display variant: s028r=original/XPT2046, s024c=newer/CST816S")
@@ -1122,8 +1293,21 @@ def main():
 
     cfg = load_cfg()
 
+    if args.scan:
+        ports = _scan_serial_ports()
+        if not ports:
+            print("  No serial devices found.")
+        else:
+            print(f"\n  {C_CYN}Detected serial ports:{C_RST}")
+            for dev, desc in ports:
+                tag = f"  {C_GRY}{desc}{C_RST}" if desc else ""
+                print(f"  {dev}{tag}")
+        print()
+        return
+
     direct = (args.build or bool(args.flash) or bool(args.monitor)
-              or args.configure or args.full_build or bool(args.full_flash))
+              or args.configure or args.full_build or bool(args.full_flash)
+              or args.scan)
     if direct:
         _apply_cli(cfg, args)
         if args.configure:

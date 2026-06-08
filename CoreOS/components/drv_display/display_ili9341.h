@@ -3,17 +3,19 @@
 
 #include <stdint.h>
 
-// CYD ESP32-2432S028R (original) and S024C (newer) variants
+// ESP32-2432S028R and S024C share the same HSPI display bus.
+// S024C: RST is tied to board reset (no dedicated GPIO), BL=27, CTP_INT=21 (separate).
+// S028R: RST=4 (dedicated GPIO).
 #ifdef CYD_VARIANT_S024C
 #  define CYD_TFT_BL   27
-#  define CYD_TFT_MOSI 23
-#  define CYD_TFT_MISO 19
-#  define CYD_TFT_SCK  18
-#  define CYD_TFT_CS   5
+#  define CYD_TFT_MOSI 13
+#  define CYD_TFT_MISO 12
+#  define CYD_TFT_SCK  14
+#  define CYD_TFT_CS   15
 #  define CYD_TFT_DC   2
-#  define CYD_TFT_RST  4
+#  define CYD_TFT_RST  (-1)
 #else
-// ESP32-2432S028R (v0.4.0/v0.5.0 original)
+// ESP32-2432S028R
 #  define CYD_TFT_BL   21
 #  define CYD_TFT_MOSI 13
 #  define CYD_TFT_MISO 12

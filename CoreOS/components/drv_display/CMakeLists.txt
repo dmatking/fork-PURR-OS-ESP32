@@ -21,3 +21,13 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES     driver esp_lcd esp_timer esp_driver_ledc lib_tftespi
 )
+
+# Propagate CYD_VARIANT_S024C into drv_display and lib_tftespi.
+# main/CMakeLists.txt sets this in PURR_DEFS but that only reaches main's consumers,
+# not its dependencies. We re-apply it here so User_Setup.h and display_ili9341.h
+# both compile with the correct pin assignments.
+if(CYD_DISPLAY_VARIANT STREQUAL "s024c" OR TARGET_DEVICE STREQUAL "cyd_s024c")
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC CYD_VARIANT_S024C=1)
+    idf_component_get_property(tftespi_lib lib_tftespi COMPONENT_LIB)
+    target_compile_definitions(${tftespi_lib} PUBLIC CYD_VARIANT_S024C=1)
+endif()

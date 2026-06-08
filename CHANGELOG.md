@@ -2,6 +2,27 @@
 
 ---
 
+## [0.9.1] — 2026-06-07 — KITT 0.5.1 — MiniWin WCE shell: touch fix, clickable start menu
+
+### MiniWin HAL touch fix
+- `hal_touch.cpp` — `mw_hal_touch_get_point()` now calls `mw_hal_touch_get_state()` internally to poll fresh CST816S data before returning coordinates, matching the reference HAL pattern. Previously the static `s_ev` cache was never refreshed during normal MiniWin operation (MiniWin calls `get_point` directly, never `get_state`), so touch was silently ignored.
+
+### Windows CE shell (`purr_app.cpp`)
+- Replaced multi-window taskbar approach with a single full-screen window (`MW_WINDOW_FLAG_IS_VISIBLE | MW_WINDOW_FLAG_TOUCH_FOCUS_AND_EVENT`) — all UI drawn in one paint callback, eliminating window focus and z-order issues
+- `mw_paint_all()` called at end of `mw_user_init()` to clear calibration screen artifact on first boot
+- Start button renders sunken (`draw_sunken`) while start menu is open, raised otherwise
+- Start menu items now functional: 60ms press highlight (navy/white), then action fires via 3-tick timer
+  - "About PURR OS" opens a centered about dialog showing version, device, free RAM; tap anywhere to close
+  - "Shut Down..." calls `esp_restart()`
+  - "Programs" / "Settings" close the menu (stubs for future use)
+- Added `about_open` overlay state drawn directly in the shell paint function
+- `MW_WINDOW_FLAG_TOUCH_FOCUS_AND_EVENT` added to all interactive windows (required for non-focused windows to receive touch events)
+
+### SDK / version
+- Version bumped to 0.9.1 / KITT 0.5.1 across `CMakeLists.txt`, `purr_version.h`, `sdk_core.py`, and about dialog string
+
+---
+
 ## [0.9.0] — 2026-06-07 — KITT 0.5.0 — Arduino removed, pure IDF, SD recovery environment
 
 ### Arduino dependency removed (lib_arduino dropped)

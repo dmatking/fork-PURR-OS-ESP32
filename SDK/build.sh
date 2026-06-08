@@ -24,6 +24,7 @@ SETUP=0
 FLASH_PORT=""
 MONITOR_PORT=""
 LORA_KERNEL="sx1262"
+UI_KERNEL="none"
 MOD_BT=1
 MOD_MTP=0
 MOD_FLASHER=0
@@ -93,8 +94,8 @@ get_chip() {
 
 apply_target_defaults() {
     case "$TARGET" in
-        heltec|tdeck) MOD_LORA=1 ;;
-        cyd)          MOD_LORA=0 ;;
+        heltec|tdeck) MOD_LORA=1; UI_KERNEL="none"    ;;
+        cyd)          MOD_LORA=0; UI_KERNEL="miniwin"  ;;
     esac
 }
 
@@ -107,6 +108,7 @@ load_config() {
             TARGET)      TARGET="$val"      ;;
             MINI)        MINI="$val"        ;;
             LORA_KERNEL) LORA_KERNEL="$val" ;;
+            UI_KERNEL)   UI_KERNEL="$val"   ;;
             MOD_BT)      MOD_BT="$val"      ;;
             MOD_MTP)     MOD_MTP="$val"     ;;
             MOD_FLASHER) MOD_FLASHER="$val" ;;
@@ -123,6 +125,7 @@ save_config() {
 TARGET=$TARGET
 MINI=$MINI
 LORA_KERNEL=$LORA_KERNEL
+UI_KERNEL=$UI_KERNEL
 MOD_BT=$MOD_BT
 MOD_MTP=$MOD_MTP
 MOD_FLASHER=$MOD_FLASHER
@@ -322,6 +325,7 @@ while [[ $# -gt 0 ]]; do
         --flash)        FLASH_PORT="$2"; shift 2 ;;
         --monitor)      MONITOR_PORT="$2"; shift 2 ;;
         --lora-kernel)  LORA_KERNEL="$2"; shift 2 ;;
+        --ui-kernel)    UI_KERNEL="$2";   shift 2 ;;
         --no-bt)        MOD_BT=0;       shift ;;
         --with-mtp)     MOD_MTP=1;      shift ;;
         --with-flasher) MOD_FLASHER=1;  shift ;;
@@ -389,6 +393,7 @@ CMAKE_FLAGS=(
     -DPURR_ENABLE_FLASHER="$MOD_FLASHER"
     -DPURR_ENABLE_LORA="$MOD_LORA"
     -DPURR_ENABLE_MESH="$MOD_MESH"
+    -DPURR_UI_KERNEL="$UI_KERNEL"
 )
 
 pinfo "set-target $CHIP"

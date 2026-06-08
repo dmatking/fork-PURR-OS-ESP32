@@ -1,40 +1,22 @@
 #include "purr_idf_compat.h"
 #include "kitt.h"
 #include "device_config.h"
+#ifdef PURR_HAS_SHELL
+#include "drv_shell.h"
+#endif
 #ifdef PURR_HAS_LUA
 #include "modules/lua_runtime.h"
 #endif
-#ifdef PURR_HAS_LVGL
-#include "modules/purr_wm.h"
-#endif
-
-#ifdef PURR_HAS_LVGL
-#include <lvgl.h>
-#include "modules/touch_cst816s.h"
+#ifdef PURR_HAS_MINIWIN
+#include "miniwin.h"
 #endif
 
 KITT kitt;
 
 extern void system_start();
 
-#ifdef PURR_HAS_LVGL
-// LVGL touch input callback — reads CST816S and feeds into LVGL
-static void lvgl_touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
-    (void)drv;
-    cst_touch_event_t ev;
-    touch_cst816s_get_event(&ev);
-    data->point.x = ev.x;
-    data->point.y = ev.y;
-    data->state   = ev.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
-}
-#endif
-
 void setup() {
     Serial.begin(115200);
-
-#ifdef PURR_HAS_LVGL
-    lv_init();
-#endif
 
     if (!kitt.init("/system/kernel/device.json")) {
         Serial.println("[KITT] FATAL: init failed");
@@ -42,21 +24,15 @@ void setup() {
         while (true) delay(1000);
     }
 
-#ifdef PURR_HAS_LVGL
-    // Register touch input device with LVGL
-    static lv_indev_drv_t indev_drv;
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.type    = LV_INDEV_TYPE_POINTER;
-    indev_drv.read_cb = lvgl_touch_read_cb;
-    lv_indev_drv_register(&indev_drv);
-    Serial.println("[main] LVGL touch input registered");
-#endif
-
 #ifdef PURR_HAS_LUA
     lua_runtime_init();
 #endif
-#ifdef PURR_HAS_LVGL
-    purr_wm_init();
+#ifdef PURR_HAS_MINIWIN
+    mw_init();
+#endif
+
+#ifdef PURR_HAS_SHELL
+    purr_shell_start();
 #endif
 
     system_start();
@@ -64,9 +40,9 @@ void setup() {
 
 void loop() {
     kitt.update();
-#ifdef PURR_HAS_LVGL
-    lv_timer_handler();
-    delay(5);
+#ifdef PURR_HAS_MINIWIN
+    mw_process_message();
+    delay(MW_TICK_PERIOD_MS);
 #else
     delay(10);
 #endif
