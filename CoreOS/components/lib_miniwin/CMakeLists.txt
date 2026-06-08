@@ -33,7 +33,7 @@ else()
     set(PURR_MW_DEVICE "generic")
 endif()
 
-set(PURR_MW_HAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/devices/${PURR_MW_DEVICE}")
+set(PURR_MW_HAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../devices/${PURR_MW_DEVICE}")
 message(STATUS "lib_miniwin: device=${PURR_MW_DEVICE}  hal=${PURR_MW_HAL_DIR}")
 
 # ── Core platform-independent WM sources ──────────────────────────────────────

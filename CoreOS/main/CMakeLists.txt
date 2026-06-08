@@ -243,7 +243,7 @@ if(PURR_UI_KERNEL STREQUAL "miniwin")
     endif()
     target_include_directories(${COMPONENT_LIB} PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../components/lib_miniwin/MiniWin"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../components/lib_miniwin/devices/${_mw_dev}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../devices/${_mw_dev}"
     )
 endif()
 if(TARGET_DEVICE STREQUAL "cyd_boot")
