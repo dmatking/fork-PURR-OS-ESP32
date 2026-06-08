@@ -18,6 +18,12 @@
 - Added `about_open` overlay state drawn directly in the shell paint function
 - `MW_WINDOW_FLAG_TOUCH_FOCUS_AND_EVENT` added to all interactive windows (required for non-focused windows to receive touch events)
 
+### Arduino-ESP32 restored for display and radio support
+- `lib_arduino/CMakeLists.txt` rewritten as a zero-source passthrough to the official `espressif__arduino-esp32` managed component — any component that `REQUIRES lib_arduino` now gets the full Arduino API without a hand-rolled shim
+- Hand-written shim files (`system/Arduino.h`, `Arduino.cpp`, `Print.h`, `SPI.h`, `String.h`) deleted; superseded by the real Arduino-ESP32 stack
+- `purr_idf_compat.h` reduced to `#include <Arduino.h>` + compatibility stubs for `ledcSetup`/`ledcAttachPin` (removed in Arduino-ESP32 3.x); all existing `#include "purr_idf_compat.h"` sites continue to compile unchanged
+- Consumers that required this: `lib_tftespi` (TFT_eSPI display driver), `lib_radiolib` (LoRa), `drv_lora`, `drv_hid` (USB HID), and `lib_miniwin` transitively
+
 ### SDK / version
 - Version bumped to 0.9.1 / KITT 0.5.1 across `CMakeLists.txt`, `purr_version.h`, `sdk_core.py`, and about dialog string
 

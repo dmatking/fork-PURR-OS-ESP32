@@ -51,6 +51,8 @@ Full release history is in **[CHANGELOG.md](CHANGELOG.md)** at the repository ro
 
 ### Release Notes: v0.9.1 / KITT v0.5.1
 
+- **Arduino-ESP32 restored:** `lib_arduino` is now a passthrough to `espressif__arduino-esp32` managed component; hand-written shim deleted. Required by TFT_eSPI, RadioLib, LoRa, USB HID, and MiniWin display drivers
+- `purr_idf_compat.h` simplified to `#include <Arduino.h>` — all existing include sites unchanged
 - MiniWin HAL touch fix: `mw_hal_touch_get_point()` now polls fresh CST816S data — touch was silently ignored in all previous builds
 - Windows CE shell: single full-screen window eliminates focus/z-order issues
 - Start button renders sunken while menu is open; raised otherwise
