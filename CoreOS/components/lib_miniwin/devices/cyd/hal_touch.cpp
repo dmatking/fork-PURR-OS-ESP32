@@ -1,5 +1,3 @@
-#ifdef PURR_CYD
-
 #include "hal/hal_touch.h"
 #include "display_ili9341.h"   // for CYD_TFT_WIDTH / CYD_TFT_HEIGHT
 #include "touch_cst816s.h"
@@ -30,4 +28,3 @@ bool mw_hal_touch_get_point(uint16_t *x, uint16_t *y) {
 }
 
 } // extern "C"
-#endif // PURR_CYD

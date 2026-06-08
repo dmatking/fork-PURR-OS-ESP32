@@ -1,5 +1,3 @@
-#ifdef PURR_CYD
-
 #include "hal/hal_lcd.h"
 #include "display_ili9341.h"
 
@@ -21,14 +19,12 @@ int16_t mw_hal_lcd_get_display_width(void)  { return CYD_TFT_WIDTH;  }
 int16_t mw_hal_lcd_get_display_height(void) { return CYD_TFT_HEIGHT; }
 
 void mw_hal_lcd_pixel(int16_t x, int16_t y, mw_hal_lcd_colour_t colour) {
-    // Single pixel — still use push_block for consistent SPI path
     display_ili9341_push_block(x, y, 1, 1, to_rgb565(colour));
 }
 
 void mw_hal_lcd_filled_rectangle(int16_t start_x, int16_t start_y,
                                   int16_t width, int16_t height,
                                   mw_hal_lcd_colour_t colour) {
-    // push_block = startWrite+setAddrWindow+pushBlock+endWrite (proven LVGL path)
     display_ili9341_push_block(start_x, start_y, width, height, to_rgb565(colour));
 }
 
@@ -43,13 +39,11 @@ void mw_hal_lcd_monochrome_bitmap_clip(int16_t image_start_x, int16_t image_star
     uint16_t bg565 = to_rgb565(bg_colour);
     uint16_t stride = (bitmap_width + 7) / 8;
 
-    // Build a row buffer and send each visible row as one SPI burst
     static uint16_t row_buf[320];
     for (int16_t row = 0; row < (int16_t)bitmap_height; row++) {
         int16_t sy = image_start_y + row;
         if (sy < clip_start_y || sy >= clip_start_y + clip_height) continue;
 
-        // Compute clipped x range
         int16_t x0 = (image_start_x >= clip_start_x) ? 0 : (clip_start_x - image_start_x);
         int16_t x1 = (int16_t)bitmap_width;
         if (image_start_x + x1 > clip_start_x + clip_width)
@@ -91,4 +85,3 @@ void mw_hal_lcd_colour_bitmap_clip(int16_t image_start_x, int16_t image_start_y,
 }
 
 } // extern "C"
-#endif // PURR_CYD

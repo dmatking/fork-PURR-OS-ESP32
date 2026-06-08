@@ -1,7 +1,4 @@
-#ifdef PURR_CYD
-
-// MiniWin non-volatile storage — stores touch calibration data in NVS.
-// Key: "mw_cal" under namespace "miniwin".
+// MiniWin non-volatile storage — NVS-backed calibration data.
 
 #include "hal/hal_non_vol.h"
 #include "nvs_flash.h"
@@ -13,9 +10,7 @@ extern "C" {
 static const char* NVS_NS  = "miniwin";
 static const char* NVS_KEY = "mw_cal";
 
-void mw_hal_non_vol_init(void) {
-    // NVS is initialised by PURR OS before MiniWin starts — nothing extra needed here
-}
+void mw_hal_non_vol_init(void) {}
 
 void mw_hal_non_vol_load(uint8_t *data, uint16_t size) {
     nvs_handle_t h;
@@ -34,4 +29,3 @@ void mw_hal_non_vol_save(uint8_t *data, uint16_t size) {
 }
 
 } // extern "C"
-#endif // PURR_CYD

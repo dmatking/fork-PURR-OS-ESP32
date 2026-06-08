@@ -326,7 +326,7 @@ UI_KERNELS = {
 }
 
 UI_KERNEL_DESCS = {
-    "miniwin": "MiniWin embedded WM — direct ILI9341 + touch HAL (CYD targets)",
+    "miniwin": "MiniWin embedded WM — device HAL in devices/<target>/ (all targets except heltec)",
     "none":    "no UI framework — headless / raw display only",
 }
 
@@ -401,10 +401,12 @@ def _sanitize_cfg(cfg):
     # mesh requires lora — strip if lora was just disabled
     if not cfg["modules"].get("lora"):
         cfg["modules"]["mesh"] = False
-    # ui_kernel: fixed targets and non-CYD targets always use "none"
-    if TARGETS.get(target, {}).get("fixed") or target not in ("cyd", "cyd_s028r", "cyd_s024c"):
+    # ui_kernel: heltec is OLED-only with no touch — MiniWin not supported there
+    if target == "heltec":
         cfg["ui_kernel"] = "none"
-    # If ui_kernel not yet set, apply target default
+    elif TARGETS.get(target, {}).get("fixed"):
+        # fixed targets keep their current ui_kernel (no wizard override)
+        pass
     elif "ui_kernel" not in cfg or cfg["ui_kernel"] not in UI_KERNELS:
         cfg["ui_kernel"] = TARGETS.get(target, {}).get("default_ui", "none")
 

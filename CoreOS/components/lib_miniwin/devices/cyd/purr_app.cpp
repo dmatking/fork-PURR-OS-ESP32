@@ -1,4 +1,3 @@
-#ifdef PURR_CYD
 #include "miniwin.h"
 #include "miniwin_utilities.h"
 #include "gl/gl.h"
@@ -44,10 +43,8 @@
 
 // ── State ─────────────────────────────────────────────────────────────────────
 static mw_handle_t shell_handle;
-static bool smenu_open         = false;
-static int  smenu_pressed      = -1;   // item currently highlighted, -1 = none
-static bool smenu_act_pending  = false; // fire action on next timer tick
-static bool about_open         = false;
+static bool smenu_open = false;
+static bool about_open = false;
 
 static const char *smenu_labels[SMENU_ITEMS] = {
     "Programs",
@@ -162,15 +159,6 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
                 mw_gl_set_border(MW_GL_BORDER_OFF);
                 mw_gl_hline(d, SMENU_X + 4, SMENU_X + SMENU_W - 4,
                             iy + SMENU_ITEM_H / 2);
-            } else if (i == smenu_pressed) {
-                // Pressed highlight
-                mw_gl_set_solid_fill_colour(WCE_SEL_BG);
-                mw_gl_set_fill(MW_GL_FILL);
-                mw_gl_set_border(MW_GL_BORDER_OFF);
-                mw_gl_rectangle(d, SMENU_X + 1, iy, SMENU_W - 2, SMENU_ITEM_H);
-                mw_gl_set_fg_colour(WCE_SEL_TXT);
-                mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-                mw_gl_string(d, SMENU_X + 8, iy + 4, smenu_labels[i]);
             } else {
                 mw_gl_set_fg_colour(WCE_MENU_TXT);
                 mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
@@ -236,25 +224,9 @@ static void smenu_fire_action(int item)
 // ── Message ───────────────────────────────────────────────────────────────────
 static void shell_message(const mw_message_t *msg)
 {
-    if (msg->message_id == MW_WINDOW_CREATED_MESSAGE) {
+    if (msg->message_id == MW_WINDOW_CREATED_MESSAGE ||
+        msg->message_id == MW_TIMER_MESSAGE) {
         mw_paint_window_client(shell_handle);
-        mw_set_timer(MW_TICKS_PER_SECOND, shell_handle, MW_WINDOW_MESSAGE);
-        return;
-    }
-
-    if (msg->message_id == MW_TIMER_MESSAGE) {
-        if (smenu_act_pending) {
-            // Short press-highlight timer fired — commit the action
-            int act = smenu_pressed;
-            smenu_pressed     = -1;
-            smenu_act_pending = false;
-            smenu_open        = false;
-            smenu_fire_action(act);
-            mw_paint_window_client(shell_handle);
-        } else {
-            // 1-second RAM refresh
-            mw_paint_window_client(shell_handle);
-        }
         mw_set_timer(MW_TICKS_PER_SECOND, shell_handle, MW_WINDOW_MESSAGE);
         return;
     }
@@ -278,15 +250,14 @@ static void shell_message(const mw_message_t *msg)
             int item = (ty - SMENU_Y - 2) / SMENU_ITEM_H;
             if (item >= 0 && item < SMENU_ITEMS &&
                 smenu_labels[item][0] != '-') {
-                // Highlight for 3 ticks (~60ms) then fire action
-                smenu_pressed     = item;
-                smenu_act_pending = true;
-                mw_paint_window_client(shell_handle);
-                mw_set_timer(3, shell_handle, MW_WINDOW_MESSAGE);
-                return;
+                smenu_open = false;
+                smenu_fire_action(item);
+            } else {
+                smenu_open = false;
             }
+        } else {
+            smenu_open = false;
         }
-        smenu_open = false;
         mw_paint_window_client(shell_handle);
         return;
     }
@@ -331,4 +302,3 @@ void mw_user_root_message_function(const mw_message_t *message)
 }
 
 } // extern "C"
-#endif

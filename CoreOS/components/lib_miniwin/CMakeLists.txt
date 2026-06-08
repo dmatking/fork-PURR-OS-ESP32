@@ -1,10 +1,13 @@
 # MiniWin window manager — PURR OS IDF component wrapper
-# Only active for CYD targets (ILI9341 + CST816S). All other targets compile empty.
+#
+# Device HAL lives in devices/<folder>/. Each folder provides:
+#   hal_lcd.cpp  hal_touch.cpp  hal_delay.cpp  hal_timer.cpp
+#   hal_non_vol.cpp  miniwin_config.h  purr_app.cpp
 #
 # To activate:
 #   Fork https://github.com/miniwinwm/miniwinwm and clone your fork here so that
 #   MiniWin/miniwin.c appears at CoreOS/components/lib_miniwin/MiniWin/miniwin.c
-#   The PURR_CYD HAL in MiniWin/hal/PURR_CYD/ is checked in alongside the fork.
+#   The device HAL in devices/<target>/ is checked in alongside the fork.
 
 if(NOT PURR_UI_KERNEL STREQUAL "miniwin")
     idf_component_register()
@@ -12,48 +15,57 @@ if(NOT PURR_UI_KERNEL STREQUAL "miniwin")
 endif()
 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/miniwin.c")
-    message(WARNING "miniwinwm: MiniWin source not found — clone your fork into CoreOS/components/miniwinwm/")
+    message(WARNING "miniwinwm: MiniWin source not found — clone your fork into CoreOS/components/lib_miniwin/")
     idf_component_register()
     return()
 endif()
 
-# Core platform-independent WM sources
+# ── Map TARGET_DEVICE → devices/<folder> ──────────────────────────────────────
+if(TARGET_DEVICE MATCHES "^cyd")
+    set(PURR_MW_DEVICE "cyd")
+elseif(TARGET_DEVICE STREQUAL "tdeck")
+    set(PURR_MW_DEVICE "generic")
+elseif(TARGET_DEVICE STREQUAL "jc3248w535")
+    set(PURR_MW_DEVICE "generic")
+elseif(TARGET_DEVICE STREQUAL "waveshare169")
+    set(PURR_MW_DEVICE "generic")
+else()
+    set(PURR_MW_DEVICE "generic")
+endif()
+
+set(PURR_MW_HAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/devices/${PURR_MW_DEVICE}")
+message(STATUS "lib_miniwin: device=${PURR_MW_DEVICE}  hal=${PURR_MW_HAL_DIR}")
+
+# ── Core platform-independent WM sources ──────────────────────────────────────
 file(GLOB_RECURSE MINIWIN_CORE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/*.c")
-# Strip platform-specific HAL subdirectories — only PURR_CYD is used.
-# hal/hal.c (the common HAL dispatcher that defines mw_hal_init) lives directly
-# in hal/ and must be kept; only files in named subdirs (hal/Windows/, hal/Linux/,
-# hal/STM32F4/, etc.) are excluded.
+# Strip upstream platform HAL subdirs — only files directly in hal/ (hal.c etc.) are kept
 list(FILTER MINIWIN_CORE_SRCS EXCLUDE REGEX ".*/hal/[^/]+/.+\\.c$")
-# File chooser dialog requires a user-supplied app.h and is not used in PURR OS
+# File chooser dialog requires a user-supplied app.h — not used in PURR OS
 list(FILTER MINIWIN_CORE_SRCS EXCLUDE REGEX ".*/dialog_file_chooser\\.c$")
-# Truetype font DATA files (not the mcufont renderer) — excluded to save flash;
-# PURR OS uses bitmap fonts only (MW_GL_FONT_9 … MW_GL_FONT_24)
+# Truetype font data files — excluded to save flash; PURR OS uses bitmap fonts only
 list(FILTER MINIWIN_CORE_SRCS EXCLUDE REGEX ".*/fonts/truetype/[^/]+\\.c$")
 
-# PURR CYD HAL — C++ to bridge into Arduino/IDF display and touch drivers
+# ── Device HAL sources ────────────────────────────────────────────────────────
 set(MINIWIN_HAL_SRCS
-    "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/hal_lcd.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/hal_touch.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/hal_timer.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/hal_delay.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/hal_non_vol.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD/purr_app.cpp"
+    "${PURR_MW_HAL_DIR}/hal_lcd.cpp"
+    "${PURR_MW_HAL_DIR}/hal_touch.cpp"
+    "${PURR_MW_HAL_DIR}/hal_timer.cpp"
+    "${PURR_MW_HAL_DIR}/hal_delay.cpp"
+    "${PURR_MW_HAL_DIR}/hal_non_vol.cpp"
+    "${PURR_MW_HAL_DIR}/purr_app.cpp"
 )
 
 idf_component_register(
     SRCS         ${MINIWIN_CORE_SRCS} ${MINIWIN_HAL_SRCS}
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal"
-                 "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal/PURR_CYD"
+                 "${PURR_MW_HAL_DIR}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/gl/fonts/truetype/mcufont"
     REQUIRES     nvs_flash
                  esp_timer
                  esp_lcd
                  driver
 )
-
-# Tell MiniWin HAL files which platform they're compiling for
-target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_CYD=1)
 
 # IDF 5.3.x does not propagate include dirs through managed-component REQUIRES chains.
 # Arduino.h transitively includes headers from many IDF components. Glob every
@@ -71,5 +83,3 @@ target_include_directories(${COMPONENT_LIB} PRIVATE
     "${idf_path}/components/driver/deprecated"
     "${idf_path}/components/driver/touch_sensor/esp32/include"
 )
-
-message(STATUS "lib_miniwin: PURR_CYD HAL registered (ILI9341 + CST816S)")

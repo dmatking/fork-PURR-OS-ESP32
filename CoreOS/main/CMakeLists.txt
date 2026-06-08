@@ -181,17 +181,26 @@ elseif(TARGET_DEVICE STREQUAL "tdeck")
         list(APPEND REQUIRES drv_gps)
         message(STATUS "T-Deck Plus: GPS driver included.")
     endif()
+    if(PURR_UI_KERNEL STREQUAL "miniwin")
+        list(APPEND REQUIRES lib_miniwin)
+    endif()
     message(WARNING "T-Deck: placeholder build -- ST7789 driver and BB6 shell not yet wired.")
 
 # ── Device-specific: JC3248W535 ───────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "jc3248w535")
     list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer)
+    if(PURR_UI_KERNEL STREQUAL "miniwin")
+        list(APPEND REQUIRES lib_miniwin)
+    endif()
     set(BUILD_MINI 1 CACHE STRING "" FORCE)
-    message(STATUS "jc3248w535: ✓ Bootloader boots confirmed. UI shell pending.")
+    message(STATUS "jc3248w535: Bootloader boots confirmed. UI shell pending.")
 
 # ── Device-specific: Waveshare 1.69" ─────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "waveshare169")
     list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer)
+    if(PURR_UI_KERNEL STREQUAL "miniwin")
+        list(APPEND REQUIRES lib_miniwin)
+    endif()
     set(BUILD_MINI 1 CACHE STRING "" FORCE)
     message(WARNING "waveshare169: WIP target — ST7789 + CST816S, no shell yet.")
 
@@ -227,9 +236,14 @@ idf_component_register(
 # ── IDF include propagation workarounds ───────────────────────────────────────
 # IDF 5.3 does not propagate include dirs through REQUIRES chains.
 if(PURR_UI_KERNEL STREQUAL "miniwin")
+    if(TARGET_DEVICE MATCHES "^cyd")
+        set(_mw_dev "cyd")
+    else()
+        set(_mw_dev "generic")
+    endif()
     target_include_directories(${COMPONENT_LIB} PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../components/lib_miniwin/MiniWin"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../components/lib_miniwin/MiniWin/hal/PURR_CYD"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../components/lib_miniwin/devices/${_mw_dev}"
     )
 endif()
 if(TARGET_DEVICE STREQUAL "cyd_boot")
@@ -245,9 +259,6 @@ if(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND PURR_DEFS PURR_DISPLAY_SSD1306=1)
 elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c" OR TARGET_DEVICE STREQUAL "cyd")
     list(APPEND PURR_DEFS PURR_DISPLAY_ILI9341=1 PURR_HAS_PARTITION_MGR=1)
-    if(PURR_UI_KERNEL STREQUAL "miniwin")
-        list(APPEND PURR_DEFS PURR_HAS_MINIWIN=1)
-    endif()
     if(CYD_DISPLAY_VARIANT STREQUAL "s024c" OR TARGET_DEVICE STREQUAL "cyd_s024c")
         list(APPEND PURR_DEFS PURR_HAS_TOUCH_CST816S=1 CYD_VARIANT_S024C=1)
     else()
@@ -267,6 +278,11 @@ elseif(TARGET_DEVICE STREQUAL "jc3248w535")
     list(APPEND PURR_DEFS PURR_DISPLAY_ST7796=1 PURR_HAS_TOUCH_GT911=1 PURR_HAS_PARTITION_MGR=1 PURR_TARGET_WIP=1)
 elseif(TARGET_DEVICE STREQUAL "waveshare169")
     list(APPEND PURR_DEFS PURR_DISPLAY_ST7789=1 PURR_HAS_TOUCH_CST816S=1 PURR_HAS_PARTITION_MGR=1 PURR_TARGET_WIP=1)
+endif()
+
+# MiniWin available on all targets that have a display and are not heltec
+if(PURR_UI_KERNEL STREQUAL "miniwin" AND NOT TARGET_DEVICE STREQUAL "heltec")
+    list(APPEND PURR_DEFS PURR_HAS_MINIWIN=1)
 endif()
 
 if(PURR_ENABLE_BT)

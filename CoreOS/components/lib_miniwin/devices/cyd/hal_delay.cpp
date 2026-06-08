@@ -1,5 +1,3 @@
-#ifdef PURR_CYD
-
 #include "hal/hal_delay.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -18,4 +16,3 @@ void mw_hal_delay_us(uint32_t us) {
 }
 
 } // extern "C"
-#endif // PURR_CYD
