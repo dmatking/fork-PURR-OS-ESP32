@@ -1,0 +1,123 @@
+-- paint.paw — Simple drawing app
+-- Drag to draw, tap colors, shake to clear.
+
+local W = win.width()
+local H = win.height()
+
+-- Canvas area
+local CANVAS_Y = 20
+local CANVAS_H = H - 60
+
+-- Palette
+local PALETTE = {
+    {col=0xFF0000, x=4,   y=H-32},  -- red
+    {col=0xFF7700, x=28,  y=H-32},  -- orange
+    {col=0xFFFF00, x=52,  y=H-32},  -- yellow
+    {col=0x00FF00, x=76,  y=H-32},  -- green
+    {col=0x0088FF, x=100, y=H-32},  -- blue
+    {col=0xFF00FF, x=124, y=H-32},  -- magenta
+    {col=0xFFFFFF, x=148, y=H-32},  -- white
+    {col=0x000000, x=172, y=H-32},  -- black
+}
+
+-- Brush
+local BRUSH_SIZE = 2
+
+-- Canvas: store drawn rectangles
+local strokes = {}
+local current_color = PALETTE[5].col  -- start with blue
+local last_x = nil
+local last_y = nil
+
+local function draw_palette()
+    for _, p in ipairs(PALETTE) do
+        local sz = 16
+        if p.col == current_color then
+            -- Highlight current
+            win.rect(p.x - 2, p.y - 2, sz + 4, sz + 4, 0xFFFFFF)
+        end
+        win.rect(p.x, p.y, sz, sz, p.col)
+    end
+end
+
+local function draw_canvas()
+    -- Background
+    win.rect(0, CANVAS_Y, W, CANVAS_H, 0x1A1A1A)
+
+    -- Draw all strokes
+    for _, stroke in ipairs(strokes) do
+        for _, dot in ipairs(stroke) do
+            win.rect(dot.x, dot.y, BRUSH_SIZE, BRUSH_SIZE, dot.col)
+        end
+    end
+end
+
+local function draw()
+    win.clear()
+    win.rect(0, 0, W, H, 0x0C0C0C)
+
+    -- Title
+    win.label("PAINT  (drag=draw, tap=color, [C]lear)", 4, 4, 0x00FF44)
+
+    -- Canvas
+    draw_canvas()
+
+    -- Palette
+    win.label("Colors:", 4, H - 48, 0xFFFFFF)
+    draw_palette()
+
+    -- Clear button
+    win.button("Clear", W - 58, H - 32, 54, 20)
+end
+
+draw()
+
+while true do
+    local t = win.wait_touch(50)
+
+    if t then
+        -- Check Clear button
+        if t.x >= W - 58 and t.x < W - 4 and t.y >= H - 32 and t.y < H - 12 then
+            strokes = {}
+            draw()
+        elseif t.y >= H - 48 and t.y < H - 12 then
+            -- Palette area: pick color
+            for _, p in ipairs(PALETTE) do
+                if t.x >= p.x and t.x < p.x + 16 and
+                   t.y >= p.y and t.y < p.y + 16 then
+                    current_color = p.col
+                    break
+                end
+            end
+            draw()
+        elseif t.y >= CANVAS_Y and t.y < CANVAS_Y + CANVAS_H then
+            -- Canvas: draw
+            if not last_x or not last_y then
+                -- Start new stroke
+                strokes[#strokes+1] = {{x=t.x, y=t.y, col=current_color}}
+            else
+                -- Interpolate from last to current for smooth line
+                local current = strokes[#strokes]
+                local dx = t.x - last_x
+                local dy = t.y - last_y
+                local dist = math.sqrt(dx*dx + dy*dy)
+                if dist > 0 then
+                    local steps = math.ceil(dist)
+                    for step = 1, steps do
+                        local frac = step / steps
+                        local px = math.floor(last_x + dx * frac)
+                        local py = math.floor(last_y + dy * frac)
+                        current[#current+1] = {x=px, y=py, col=current_color}
+                    end
+                end
+            end
+            last_x = t.x
+            last_y = t.y
+            draw()
+        end
+    else
+        -- No touch: reset last position for new stroke
+        last_x = nil
+        last_y = nil
+    end
+end

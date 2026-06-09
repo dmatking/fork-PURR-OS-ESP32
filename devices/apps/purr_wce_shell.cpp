@@ -1,7 +1,10 @@
-// WCE shell — cyd_s028r
-// Single full-screen shell window. App windows launched via purr_catalog[].
-// Compiled only when PURR_THEME_BLACKBERRY is not set (shell_blackberry.cpp takes over).
-#ifndef PURR_THEME_BLACKBERRY
+// purr_wce_shell.cpp — PURR OS WCE shell (shared implementation)
+// Included by each device's purr_app.cpp as a textual include.
+// Fixes vs original per-device copies:
+//   - Taskbar buttons: click focused app = minimize (toggle); click minimized/unfocused = focus
+//   - Pitch cap removed: taskbar buttons fill available width evenly regardless of count
+//   - mw_paint_all() after app launch so new windows appear immediately
+//   - APP_WIN_FLAGS no longer has FIXED_SIZE, so maximize button works
 
 #include "miniwin.h"
 #include "miniwin_utilities.h"
@@ -26,7 +29,7 @@
 #define SMENU_SEP_H 8
 #define SMENU_X     0
 
-// Top-level menu: "Programs >" + separator + "Restart"
+// Top-level start menu height: "Programs >" + separator + "Restart"
 #define SMENU_TL_H  (2 * SMENU_IH + SMENU_SEP_H + 4)
 
 #define WCE_DESKTOP 0x008080
@@ -40,6 +43,8 @@
 static mw_handle_t shell_handle;
 static bool smenu_open   = false;
 static int  smenu_folder = -1;  // -1 = top level, 0 = programs
+
+// ── Drawing helpers ────────────────────────────────────────────────────────────
 
 static void draw_raised(const mw_gl_draw_info_t *d,
                         int16_t x, int16_t y, int16_t w, int16_t h,
@@ -84,14 +89,18 @@ static void draw_smenu_box(const mw_gl_draw_info_t *d,
     mw_gl_set_font(MW_GL_FONT_9);
 }
 
+// ── Shell paint ────────────────────────────────────────────────────────────────
+
 static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
 {
     (void)handle;
 
+    // Desktop background
     mw_gl_set_fill(MW_GL_FILL); mw_gl_set_border(MW_GL_BORDER_OFF);
     mw_gl_set_solid_fill_colour(WCE_DESKTOP);
     mw_gl_rectangle(d, 0, 0, SCR_W, TASKBAR_Y);
 
+    // Taskbar background
     mw_gl_set_solid_fill_colour(WCE_BAR);
     mw_gl_rectangle(d, 0, TASKBAR_Y, SCR_W, TASKBAR_H);
     mw_gl_set_fg_colour(WCE_HI);
@@ -99,6 +108,7 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
     mw_gl_set_fg_colour(WCE_DARK);
     mw_gl_hline(d, 0, SCR_W - 1, SCR_H - 1);
 
+    // Start button
     if (smenu_open) draw_sunken(d, START_X, START_Y, START_W, START_H, WCE_BAR);
     else            draw_raised(d, START_X, START_Y, START_W, START_H, WCE_BAR);
     mw_gl_set_fg_colour(WCE_TXT);
@@ -106,24 +116,26 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
     mw_gl_set_font(MW_GL_FONT_9);
     mw_gl_string(d, START_X + 6, START_Y + 5, "Meow!");
 
+    // Divider after start button
     mw_gl_set_fg_colour(WCE_SHD);
     mw_gl_vline(d, START_X + START_W + 2, TASKBAR_Y + 2, SCR_H - 3);
     mw_gl_set_fg_colour(WCE_HI);
     mw_gl_vline(d, START_X + START_W + 3, TASKBAR_Y + 2, SCR_H - 3);
 
-    // Taskbar app buttons
+    // Taskbar app buttons — pitch fills available space evenly (no 82px cap)
     {
         int16_t area_x = (int16_t)(START_X + START_W + 6);
         int16_t area_w = (int16_t)((SCR_W - 52) - area_x);
         int n = taskbar_entry_count;
         if (n > 0 && area_w >= 22) {
             int16_t pitch = (int16_t)(area_w / n);
-            int16_t bw = (int16_t)(pitch - 2);
+            int16_t bw    = (int16_t)(pitch - 2);
             mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
             mw_gl_set_font(MW_GL_FONT_9);
             for (int i = 0; i < n; i++) {
-                int16_t bx = (int16_t)(area_x + i * pitch);
+                int16_t bx  = (int16_t)(area_x + i * pitch);
                 mw_handle_t eh = taskbar_entries[i].handle;
+                // Show sunken if window is focused AND not minimised
                 bool focused = (eh == taskbar_focused_handle) &&
                                !(mw_get_window_flags(eh) & MW_WINDOW_FLAG_IS_MINIMISED);
                 if (focused) draw_sunken(d, bx, START_Y, bw, START_H, WCE_BAR);
@@ -135,6 +147,7 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
         }
     }
 
+    // RAM clock (right side)
     char ram[10];
     snprintf(ram, sizeof(ram), "%ukB",
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024));
@@ -147,8 +160,8 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
 
     if (!smenu_open) return;
 
+    // Start menu — top level
     if (smenu_folder < 0) {
-        // Top-level: "Programs >" + separator + "Restart"
         int16_t smy = (int16_t)(TASKBAR_Y - SMENU_TL_H);
         draw_smenu_box(d, smy, SMENU_TL_H);
         mw_gl_string(d, SMENU_X + 8, smy + 2 + 4, "Programs >");
@@ -159,7 +172,7 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
         mw_gl_string(d, SMENU_X + 8,
                      (int16_t)(smy + 2 + SMENU_IH + SMENU_SEP_H + 4), "Restart");
     } else {
-        // Programs submenu: "< Back" + catalog entries
+        // Programs submenu
         int16_t smh = (int16_t)((purr_catalog_count + 1) * SMENU_IH + 4);
         int16_t smy = (int16_t)(TASKBAR_Y - smh);
         draw_smenu_box(d, smy, smh);
@@ -170,6 +183,8 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
         }
     }
 }
+
+// ── Shell message ──────────────────────────────────────────────────────────────
 
 static void shell_message(const mw_message_t *msg)
 {
@@ -184,38 +199,50 @@ static void shell_message(const mw_message_t *msg)
     int16_t tx = (int16_t)(msg->message_data >> 16);
     int16_t ty = (int16_t)(msg->message_data & 0xFFFF);
 
+    // ── Start menu handling ────────────────────────────────────────────────────
     if (smenu_open) {
         if (smenu_folder < 0) {
+            // Top-level menu bounds check
             int16_t smy = (int16_t)(TASKBAR_Y - SMENU_TL_H);
             if (tx >= SMENU_X && tx < SMENU_X + SMENU_W &&
-                ty >= smy && ty < smy + SMENU_TL_H) {
+                ty >= smy      && ty < smy + SMENU_TL_H) {
                 int rel_y = ty - smy - 2;
                 if (rel_y >= 0 && rel_y < SMENU_IH) {
-                    smenu_folder = 0;  // open Programs submenu
-                } else if (rel_y >= SMENU_IH + SMENU_SEP_H) {
+                    smenu_folder = 0;   // open Programs submenu
+                } else if (rel_y >= SMENU_IH + SMENU_SEP_H &&
+                           rel_y < SMENU_TL_H) {
                     smenu_open   = false;
                     smenu_folder = -1;
+                    mw_paint_window_client(shell_handle);
                     esp_restart();
+                    return;
                 }
+                // else: tap on separator — ignore
             } else {
+                // Tap outside menu — close
                 smenu_open   = false;
                 smenu_folder = -1;
             }
         } else {
+            // Programs submenu
             int16_t smh = (int16_t)((purr_catalog_count + 1) * SMENU_IH + 4);
             int16_t smy = (int16_t)(TASKBAR_Y - smh);
             if (tx >= SMENU_X && tx < SMENU_X + SMENU_W &&
-                ty >= smy && ty < smy + smh) {
-                int item = (ty - smy - 2) / SMENU_IH;
-                if (item == 0) {
-                    smenu_folder = -1;  // back to top
+                ty >= smy      && ty < smy + smh) {
+                int rel_y = ty - smy - 2;
+                int item  = (rel_y >= 0) ? (rel_y / SMENU_IH) : 0;
+                if (item <= 0) {
+                    smenu_folder = -1;  // "< Back"
                 } else {
                     int idx = item - 1;
                     smenu_open   = false;
                     smenu_folder = -1;
-                    if (idx >= 0 && idx < purr_catalog_count)
+                    mw_paint_window_client(shell_handle);
+                    if (idx >= 0 && idx < purr_catalog_count) {
                         purr_catalog[idx].launch();
-                        mw_paint_all();
+                        mw_paint_all();  // show new window immediately
+                    }
+                    return;
                 }
             } else {
                 smenu_open   = false;
@@ -226,13 +253,14 @@ static void shell_message(const mw_message_t *msg)
         return;
     }
 
+    // ── Start button ──────────────────────────────────────────────────────────
     if (ty >= TASKBAR_Y && tx >= START_X && tx < START_X + START_W) {
         smenu_open = true;
         mw_paint_window_client(shell_handle);
         return;
     }
 
-    // Taskbar app button tap
+    // ── Taskbar app buttons ───────────────────────────────────────────────────
     {
         int n = taskbar_entry_count;
         int16_t area_x = (int16_t)(START_X + START_W + 6);
@@ -243,13 +271,17 @@ static void shell_message(const mw_message_t *msg)
             int idx = (tx - area_x) / pitch;
             if (idx >= 0 && idx < n) {
                 mw_handle_t h = taskbar_entries[idx].handle;
-                bool is_min     = (mw_get_window_flags(h) & MW_WINDOW_FLAG_IS_MINIMISED) != 0;
-                bool is_focused = (h == taskbar_focused_handle) && !is_min;
+                uint32_t flags   = mw_get_window_flags(h);
+                bool is_minimised = (flags & MW_WINDOW_FLAG_IS_MINIMISED) != 0;
+                bool is_focused   = (h == taskbar_focused_handle) && !is_minimised;
+
                 if (is_focused) {
+                    // Already active: minimize it (toggle off)
                     mw_set_window_minimised(h, true);
                     taskbar_set_focus(MW_INVALID_HANDLE);
                 } else {
-                    if (is_min) mw_set_window_minimised(h, false);
+                    // Not visible / not focused: restore and bring to front
+                    if (is_minimised) mw_set_window_minimised(h, false);
                     taskbar_set_focus(h);
                     mw_bring_window_to_front(h);
                 }
@@ -258,6 +290,8 @@ static void shell_message(const mw_message_t *msg)
         }
     }
 }
+
+// ── MiniWin HAL entry points ──────────────────────────────────────────────────
 
 extern "C" {
 
@@ -283,5 +317,3 @@ void mw_user_root_message_function(const mw_message_t *message)
 }
 
 } // extern "C"
-
-#endif // PURR_THEME_BLACKBERRY

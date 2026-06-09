@@ -116,7 +116,6 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
         int n = taskbar_entry_count;
         if (n > 0 && area_w >= 22) {
             int16_t pitch = (int16_t)(area_w / n);
-            if (pitch > 82) pitch = 82;
             int16_t bw = (int16_t)(pitch - 2);
             mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
             mw_gl_set_font(MW_GL_FONT_9);
@@ -214,6 +213,7 @@ static void shell_message(const mw_message_t *msg)
                     smenu_folder = -1;
                     if (idx >= 0 && idx < purr_catalog_count)
                         purr_catalog[idx].launch();
+                        mw_paint_all();
                 }
             } else {
                 smenu_open   = false;
@@ -238,14 +238,19 @@ static void shell_message(const mw_message_t *msg)
         if (n > 0 && ty >= TASKBAR_Y && area_w >= 22 &&
             tx >= area_x && tx < (int16_t)(area_x + area_w)) {
             int16_t pitch = (int16_t)(area_w / n);
-            if (pitch > 82) pitch = 82;
             int idx = (tx - area_x) / pitch;
             if (idx >= 0 && idx < n) {
                 mw_handle_t h = taskbar_entries[idx].handle;
-                if (mw_get_window_flags(h) & MW_WINDOW_FLAG_IS_MINIMISED)
-                    mw_set_window_minimised(h, false);
-                taskbar_set_focus(h);
-                mw_bring_window_to_front(h);
+                bool is_min     = (mw_get_window_flags(h) & MW_WINDOW_FLAG_IS_MINIMISED) != 0;
+                bool is_focused = (h == taskbar_focused_handle) && !is_min;
+                if (is_focused) {
+                    mw_set_window_minimised(h, true);
+                    taskbar_set_focus(MW_INVALID_HANDLE);
+                } else {
+                    if (is_min) mw_set_window_minimised(h, false);
+                    taskbar_set_focus(h);
+                    mw_bring_window_to_front(h);
+                }
                 mw_paint_all();
             }
         }
