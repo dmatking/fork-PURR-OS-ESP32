@@ -218,7 +218,7 @@ TARGETS = {
         "chip":         "esp32s3",
         "desc":         "LilyGo T-Deck",
         "spec":         "ESP32-S3  16MB  ST7789  trackball — no touch (WIP)",
-        "shells":       ["smol"],
+        "shells":       ["kitten_ui"],
         "default_lora": True,
         "default_ui":   "none",
         "fixed":        False,
@@ -227,7 +227,7 @@ TARGETS = {
         "chip":         "esp32s3",
         "desc":         "LilyGo T-Deck Plus",
         "spec":         "ESP32-S3  ST7789 320x240  GT911 cap touch  SPI3 MOSI=41 SCK=40  I2C SDA=18 SCL=8",
-        "shells":       ["smol"],
+        "shells":       ["kitten_ui"],
         "default_lora": True,
         "default_ui":   "miniwin",
         "fixed":        False,
@@ -380,14 +380,14 @@ UI_THEME_DESCS = {
 }
 
 SHELL_DESCS = {
-    "smol": "Smol — minimal OLED shell",
+    "kitten_ui": "KittenUI — text-mode shell for small displays (OLED)",
     "none": "Headless — no UI shell compiled",
 }
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DEFAULT_CFG = {
     "target":       "heltec",
-    "shell":        "smol",
+    "shell":        "kitten_ui",
     "lora_kernel":  "sx1262",
     "ui_kernel":    "none",
     "flash_port":   "",

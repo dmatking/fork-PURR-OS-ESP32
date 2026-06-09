@@ -117,8 +117,8 @@ endif()
 
 # ── Device-specific: Heltec ───────────────────────────────────────────────────
 if(TARGET_DEVICE STREQUAL "heltec")
-    list(APPEND SRCS "../apps/smol/smol.cpp")
-    list(APPEND INCLUDE_DIRS "../apps/smol")
+    list(APPEND SRCS "../apps/kitten_ui/kitten_ui.cpp")
+    list(APPEND INCLUDE_DIRS "../apps/kitten_ui")
 
 # ── Device-specific: CYD variants ────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c")
@@ -180,8 +180,8 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
 # ── Device-specific: T-Deck ───────────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "tdeck")
     set(BUILD_TDECK_PLUS 0 CACHE STRING "T-Deck variant: 0=original, 1=Plus (GPS)")
-    list(APPEND SRCS "../apps/smol/smol.cpp")
-    list(APPEND INCLUDE_DIRS "../apps/smol")
+    list(APPEND SRCS "../apps/kitten_ui/kitten_ui.cpp")
+    list(APPEND INCLUDE_DIRS "../apps/kitten_ui")
     if(BUILD_TDECK_PLUS)
         list(APPEND REQUIRES drv_gps)
         message(STATUS "T-Deck Plus: GPS driver included.")
@@ -193,8 +193,8 @@ elseif(TARGET_DEVICE STREQUAL "tdeck")
 
 # ── Device-specific: T-Deck Plus (touch screen, GT911) ───────────────────────
 elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
-    list(APPEND SRCS "../apps/smol/smol.cpp")
-    list(APPEND INCLUDE_DIRS "../apps/smol")
+    list(APPEND SRCS "../apps/kitten_ui/kitten_ui.cpp")
+    list(APPEND INCLUDE_DIRS "../apps/kitten_ui")
     if(PURR_UI_KERNEL STREQUAL "miniwin")
         list(APPEND REQUIRES lib_miniwin)
     endif()

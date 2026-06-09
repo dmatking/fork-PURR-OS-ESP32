@@ -2,7 +2,7 @@
 
 #include "../kernel/kitt.h"
 #ifdef PURR_DISPLAY_SSD1306
-#  include "../../apps/smol/smol.h"
+#  include "../../apps/kitten_ui/kitten_ui.h"
 #endif
 #ifdef PURR_HAS_BOOTLOADER
 #  include "../kernel/modules/purr_bootloader.h"
@@ -158,14 +158,14 @@ static void system_task(void*) {
 
     // ── Launch shell ─────────────────────────────────────────────────────────
     if (kitt.display_width() <= 128) {
-        Serial.println("[sys] launching smol (OLED shell)");
+        ESP_LOGI("sys", "launching KittenUI (OLED shell)");
 #ifdef PURR_DISPLAY_SSD1306
-        smol_start();
+        kitten_ui_start();
 #endif
     } else {
         // TEMP: shell registration disabled pending linker fix
         // TODO: restore shell initialization once linker symbol issue is resolved
-        Serial.println("[sys] shells: TEMP disabled (linker symbol debug pending)");
+        ESP_LOGI("sys", "shells: TEMP disabled (linker symbol debug pending)");
         /* DISABLED PENDING LINKER DEBUG
 #ifdef PURR_HAS_BLACKBERRY_UI
         Serial.println("[sys] registering BlackberryUI shell");
