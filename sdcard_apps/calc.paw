@@ -1,0 +1,203 @@
+-- calc.paw — Calculator
+-- Standard 4-function + percent, backspace, clear.
+-- Display shows current input / result with history line above.
+
+local W = win.width()
+local H = win.height()
+
+-- Layout
+local DISP_H  = 52    -- display area height
+local BTN_ROWS = 5
+local BTN_COLS = 4
+local PAD      = 3
+local BW = math.floor((W - PAD*(BTN_COLS+1)) / BTN_COLS)
+local BH = math.floor((H - DISP_H - PAD*(BTN_ROWS+1)) / BTN_ROWS)
+local GRID_Y = DISP_H + PAD
+
+-- Colors
+local C_BG      = 0x1A1A2E
+local C_DISP    = 0x16213E
+local C_RESULT  = 0xE0E0E0
+local C_HIST    = 0x667788
+local C_NUM     = 0x2A2A4A
+local C_OP      = 0x1A4A6A
+local C_OP_ACT  = 0x0070AA
+local C_EQ      = 0xCC4400
+local C_CLR     = 0x4A1A1A
+local C_BTN_HI  = 0xFFFFFF
+local C_BTN_SHD = 0x111122
+
+-- Button grid: label, type (num/op/eq/fn), color override
+local KEYS = {
+    {"C",   "clr", C_CLR},  {"±",  "fn",  C_OP},  {"%",  "fn",  C_OP},  {"÷",  "op",  C_OP},
+    {"7",   "num", C_NUM},  {"8",  "num", C_NUM},  {"9",  "num", C_NUM},  {"×",  "op",  C_OP},
+    {"4",   "num", C_NUM},  {"5",  "num", C_NUM},  {"6",  "num", C_NUM},  {"−",  "op",  C_OP},
+    {"1",   "num", C_NUM},  {"2",  "num", C_NUM},  {"3",  "num", C_NUM},  {"+",  "op",  C_OP},
+    {"⌫",   "fn",  C_OP},   {"0",  "num", C_NUM},  {".",  "num", C_NUM},  {"=",  "eq",  C_EQ},
+}
+
+-- State
+local display    = "0"
+local history    = ""
+local operand    = nil
+local operator   = nil
+local just_eq    = false
+local active_op  = nil
+
+local function btn_rect(row, col)
+    local x = PAD + (col-1) * (BW + PAD)
+    local y = GRID_Y + PAD + (row-1) * (BH + PAD)
+    return x, y, BW, BH
+end
+
+local function draw_btn(row, col, label, bg, pressed)
+    local x, y, w, h = btn_rect(row, col)
+    win.rect(x, y, w, h, bg)
+    if pressed then
+        win.rect(x, y, w, 1, C_BTN_SHD)
+        win.rect(x, y, 1, h, C_BTN_SHD)
+        win.rect(x, y+h-1, w, 1, C_BTN_HI)
+        win.rect(x+w-1, y, 1, h, C_BTN_HI)
+    else
+        win.rect(x, y, w, 1, C_BTN_HI)
+        win.rect(x, y, 1, h, C_BTN_HI)
+        win.rect(x, y+h-1, w, 1, C_BTN_SHD)
+        win.rect(x+w-1, y, 1, h, C_BTN_SHD)
+    end
+    local lx = x + math.floor((w - #label*6) / 2)
+    local ly = y + math.floor((h - 8) / 2)
+    win.label(label, lx, ly, C_BTN_HI)
+end
+
+local function draw()
+    win.clear()
+    win.rect(0, 0, W, H, C_BG)
+
+    -- Display
+    win.rect(0, 0, W, DISP_H, C_DISP)
+    win.label(history, 4, 6, C_HIST)
+    -- Right-align result
+    local disp_x = W - #display * 8 - 6
+    if disp_x < 4 then disp_x = 4 end
+    win.label(display, disp_x, DISP_H - 20, C_RESULT)
+
+    -- Buttons
+    for i, k in ipairs(KEYS) do
+        local row = math.ceil(i / BTN_COLS)
+        local col = ((i-1) % BTN_COLS) + 1
+        local bg  = k[3]
+        local pressed = (k[1] == active_op)
+        draw_btn(row, col, k[1], bg, pressed)
+    end
+end
+
+local function safe_num(s)
+    return tonumber(s) or 0
+end
+
+local function fmt(n)
+    if n == math.floor(n) and math.abs(n) < 1e12 then
+        return string.format("%d", n)
+    end
+    local s = string.format("%.8g", n)
+    return s
+end
+
+local function press(label)
+    if label == "C" then
+        display   = "0"
+        history   = ""
+        operand   = nil
+        operator  = nil
+        just_eq   = false
+        active_op = nil
+
+    elseif label == "⌫" then
+        if #display > 1 then
+            display = display:sub(1, -2)
+        else
+            display = "0"
+        end
+
+    elseif label == "±" then
+        local n = safe_num(display)
+        display = fmt(-n)
+
+    elseif label == "%" then
+        local n = safe_num(display)
+        display = fmt(n / 100)
+
+    elseif label == "=" then
+        if operator and operand then
+            local a = operand
+            local b = safe_num(display)
+            history = fmt(a) .. " " .. operator .. " " .. fmt(b) .. " ="
+            local res
+            if operator == "+"  then res = a + b
+            elseif operator == "−" then res = a - b
+            elseif operator == "×" then res = a * b
+            elseif operator == "÷" then res = (b ~= 0) and (a / b) or "ERR"
+            end
+            display   = type(res) == "number" and fmt(res) or tostring(res)
+            operand   = nil
+            operator  = nil
+            just_eq   = true
+            active_op = nil
+        end
+
+    elseif label == "+" or label == "−" or label == "×" or label == "÷" then
+        if operator and operand and not just_eq then
+            -- Chain: complete previous op first
+            local a = operand
+            local b = safe_num(display)
+            local res
+            if operator == "+"  then res = a + b
+            elseif operator == "−" then res = a - b
+            elseif operator == "×" then res = a * b
+            elseif operator == "÷" then res = (b ~= 0) and (a / b) or 0
+            end
+            display = fmt(res)
+            operand = res
+        else
+            operand = safe_num(display)
+        end
+        operator  = label
+        active_op = label
+        just_eq   = false
+
+    elseif label == "." then
+        if just_eq then display = "0" just_eq = false end
+        if not display:find("%.") then
+            display = display .. "."
+        end
+
+    else  -- digit
+        if display == "0" or just_eq then
+            display = label
+            just_eq = false
+        else
+            if #display < 12 then
+                display = display .. label
+            end
+        end
+    end
+end
+
+-- Init
+draw()
+
+while true do
+    local t = win.wait_touch(500)
+    if t then
+        for i, k in ipairs(KEYS) do
+            local row = math.ceil(i / BTN_COLS)
+            local col = ((i-1) % BTN_COLS) + 1
+            local x, y, w, h = btn_rect(row, col)
+            if t.x >= x and t.x < x+w and t.y >= y and t.y < y+h then
+                press(k[1])
+                break
+            end
+        end
+        draw()
+    end
+end

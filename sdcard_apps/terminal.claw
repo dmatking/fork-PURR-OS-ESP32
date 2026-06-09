@@ -1,0 +1,177 @@
+-- terminal.claw — PURR OS kernel terminal  [system / .claw]
+-- Shows live system stats and a scrollable log of KITT events.
+-- Tap a stat row to drill into it. Tap the header to force a refresh.
+
+local W = win.width()
+local H = win.height()
+
+local C_BG     = 0x0C0C0C
+local C_HDR    = 0x1A1A1A
+local C_BORDER = 0x003300
+local C_GREEN  = 0x00FF44
+local C_YELLOW = 0xFFCC00
+local C_RED    = 0xFF3333
+local C_CYAN   = 0x00CCFF
+local C_DIM    = 0x446644
+local C_WHITE  = 0xDDDDDD
+local C_SEL    = 0x002200
+
+local LINE_H = 12
+local ROWS   = math.floor((H - 28) / LINE_H)
+
+-- Log ring buffer
+local LOG_MAX = 64
+local log_buf  = {}
+local log_head = 1
+
+local function log_push(line)
+    log_buf[log_head] = line
+    log_head = (log_head % LOG_MAX) + 1
+end
+
+local function log_lines()
+    local out = {}
+    local start = log_head
+    for i = 0, #log_buf - 1 do
+        local idx = ((start - 1 + i) % LOG_MAX) + 1
+        if log_buf[idx] then out[#out+1] = log_buf[idx] end
+    end
+    return out
+end
+
+-- Screens: "main" | "wifi" | "mem" | "sd"
+local screen   = "main"
+local scroll   = 0
+local tick     = 0
+local last_ram = 0
+
+local function ram_bar(free_kb, total_kb, bw)
+    local used = total_kb - free_kb
+    local w = math.floor(used * bw / total_kb)
+    local col = C_GREEN
+    if used / total_kb > 0.85 then col = C_RED
+    elseif used / total_kb > 0.65 then col = C_YELLOW end
+    return w, col
+end
+
+local function draw_main()
+    win.clear()
+    win.rect(0, 0, W, H, C_BG)
+    win.rect(0, 0, W, 1, C_BORDER)
+    win.rect(0, H-1, W, 1, C_BORDER)
+
+    -- Header
+    win.rect(0, 0, W, 18, C_HDR)
+    win.label("PURR TERMINAL", 4, 4, C_GREEN)
+    win.label(string.format("t+%ds", math.floor(kitt.time_ms()/1000)), W-52, 4, C_DIM)
+
+    local y = 22
+
+    -- RAM row
+    local free_kb = math.floor(kitt.free_ram() / 1024)
+    local total_kb = 320  -- ESP32-S3 ~320 KB internal
+    local bw = W - 100
+    local used_w, ram_col = ram_bar(free_kb, total_kb, bw)
+    win.label("RAM:", 4, y, C_CYAN)
+    win.rect(36, y, bw, LINE_H-2, 0x111111)
+    win.rect(36, y, used_w, LINE_H-2, ram_col)
+    win.label(string.format("%d/%dKB", total_kb-free_kb, total_kb), W-58, y, C_WHITE)
+    y = y + LINE_H + 2
+
+    -- WiFi row
+    local wifi_txt = kitt.wifi_connected() and "connected" or "offline"
+    local wifi_col = kitt.wifi_connected() and C_GREEN or C_DIM
+    win.label("WiFi:", 4, y, C_CYAN)
+    win.label(wifi_txt, 40, y, wifi_col)
+    y = y + LINE_H + 2
+
+    -- SD row
+    local sd_txt = kitt.sd_available() and "mounted" or "not mounted"
+    local sd_col = kitt.sd_available() and C_GREEN or C_DIM
+    win.label("SD:  ", 4, y, C_CYAN)
+    win.label(sd_txt, 40, y, sd_col)
+    y = y + LINE_H + 2
+
+    -- Uptime
+    local s = math.floor(kitt.time_ms() / 1000)
+    local up = string.format("%02d:%02d:%02d", math.floor(s/3600)%24, math.floor(s/60)%60, s%60)
+    win.label("Up:  ", 4, y, C_CYAN)
+    win.label(up, 40, y, C_WHITE)
+    y = y + LINE_H + 4
+
+    -- Divider
+    win.rect(0, y, W, 1, C_BORDER)
+    y = y + 4
+
+    -- Log
+    win.label("-- SYSTEM LOG --", 4, y, C_DIM)
+    y = y + LINE_H
+
+    local lines = log_lines()
+    local start = math.max(1, #lines - (ROWS - 8) + 1 + scroll)
+    for i = start, #lines do
+        if y + LINE_H > H - 4 then break end
+        local ln = lines[i]
+        local col = C_DIM
+        if ln:find("%[ERR%]") or ln:find("fail") then col = C_RED
+        elseif ln:find("%[OK%]")  or ln:find("ready") then col = C_GREEN
+        elseif ln:find("%[WARN%]") then col = C_YELLOW
+        end
+        win.label(ln:sub(1, 38), 4, y, col)
+        y = y + LINE_H
+    end
+end
+
+-- Seed log with boot info
+log_push(string.format("[OK]  KITT boot  t+%ds", math.floor(kitt.time_ms()/1000)))
+log_push(string.format("[OK]  RAM free: %dKB", math.floor(kitt.free_ram()/1024)))
+log_push(string.format("[OK]  WiFi: %s", kitt.wifi_connected() and "up" or "down"))
+log_push(string.format("[OK]  SD: %s", kitt.sd_available() and "mounted" or "absent"))
+
+draw_main()
+
+local last_refresh = kitt.time_ms()
+local REFRESH_MS   = 2000
+
+while true do
+    local t = win.wait_touch(500)
+    local now = kitt.time_ms()
+
+    if t then
+        if t.y < 18 then
+            -- Header tap: force log entry + refresh
+            local free_kb = math.floor(kitt.free_ram() / 1024)
+            log_push(string.format("[OK]  poll  RAM:%dKB  t+%ds", free_kb, math.floor(now/1000)))
+            last_refresh = now
+        elseif t.y > H - 20 then
+            scroll = math.max(0, scroll - 1)
+        end
+    end
+
+    -- Auto-refresh
+    if now - last_refresh >= REFRESH_MS then
+        last_refresh = now
+        tick = tick + 1
+        local free_kb = math.floor(kitt.free_ram() / 1024)
+
+        -- Warn on RAM drop
+        if last_ram > 0 and last_ram - free_kb > 8 then
+            log_push(string.format("[WARN] RAM drop: %dKB -> %dKB", last_ram, free_kb))
+        end
+        last_ram = free_kb
+
+        -- Periodic heartbeat every 10 ticks
+        if tick % 5 == 0 then
+            log_push(string.format("[OK]  hb  RAM:%dKB  t+%ds", free_kb, math.floor(now/1000)))
+        end
+
+        -- WiFi state change detection
+        if tick % 3 == 0 then
+            local wifi_str = kitt.wifi_connected() and "up" or "down"
+            log_push(string.format("[OK]  wifi:%s  sd:%s", wifi_str,
+                     kitt.sd_available() and "ok" or "--"))
+        end
+    end
+
+    draw_main()
+end

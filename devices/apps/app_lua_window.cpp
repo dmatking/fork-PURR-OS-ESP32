@@ -48,7 +48,7 @@
 
 static const char *TAG = "lua_win";
 
-#define MAX_WIDGETS  48
+#define MAX_WIDGETS  128
 #define LUA_WIN_REG  "purr_win_ptr"
 
 // ── Widget types ──────────────────────────────────────────────────────────────
