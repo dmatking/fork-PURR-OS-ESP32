@@ -83,13 +83,13 @@ void pm_init() {
         .sclk_io_num = PM_SD_SCLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = 4096,
+        .max_transfer_sz = 512,   // one sector at a time; saves ~3.5KB DMA buffer
     };
     spi_bus_initialize((spi_host_device_t)host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
 
     esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
         .format_if_mount_failed = false,
-        .max_files = 8,
+        .max_files = 4,
         .allocation_unit_size = 16 * 1024,
     };
 
