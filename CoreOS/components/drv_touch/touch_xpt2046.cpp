@@ -1,5 +1,4 @@
 #include "touch_xpt2046.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"

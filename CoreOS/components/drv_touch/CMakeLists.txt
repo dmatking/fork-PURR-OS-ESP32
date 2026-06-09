@@ -22,7 +22,7 @@ endif()
 idf_component_register(
     SRCS         ${SRCS}
     INCLUDE_DIRS "."
-    REQUIRES     driver esp_timer
+    REQUIRES     driver
 )
 
 idf_component_get_property(gpio_lib   esp_driver_gpio COMPONENT_LIB)
