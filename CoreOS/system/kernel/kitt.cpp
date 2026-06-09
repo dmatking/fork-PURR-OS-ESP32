@@ -103,7 +103,7 @@ static uint32_t last_battery_refresh = 0;
 static uint32_t last_ram_check_ms   = 0;
 
 // RAM panic thresholds
-#define RAM_LOW_KB       30   // PURR_PANIC_BLUE — warn, OS still running
+#define RAM_LOW_KB       50   // PURR_PANIC_BLUE — warn, OS still running
 #define RAM_CRITICAL_KB   8   // PURR_PANIC_RED  — reboot imminent
 
 // Callbacks
