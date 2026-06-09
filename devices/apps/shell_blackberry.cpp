@@ -61,7 +61,7 @@ extern KITT kitt;
 #define GRID_CELL_H 44
 
 // ── State ─────────────────────────────────────────────────────────────────────
-typedef enum { BB_HOME, BB_DRAWER } bb_state_t;
+typedef enum { BB_HOME, BB_DRAWER, BB_TASKS } bb_state_t;
 
 static mw_handle_t  shell_handle;
 static bb_state_t   bb_state = BB_HOME;
@@ -284,7 +284,7 @@ static void paint_wallpaper(const mw_gl_draw_info_t *d)
 
 static void paint_tabs(const mw_gl_draw_info_t *d)
 {
-    static const char *const TABS[TAB_COUNT] = { "Recent", "All", "System" };
+    static const char *const TABS[TAB_COUNT] = { "Tasks", "All", "System" };
     int16_t tw = (int16_t)(SCR_W / TAB_COUNT);
 
     bb_fill(d, 0, TAB_Y, SCR_W, TAB_H, BB_BLACK);
@@ -336,6 +336,49 @@ static void paint_dock(const mw_gl_draw_info_t *d)
         int16_t lx = (int16_t)(bx + (bw - (int16_t)(strlen(LABELS[i]) * 6)) / 2);
         int16_t ly = (int16_t)(by + (bh - 9) / 2);
         bb_text(d, lx, ly, LABELS[i], BB_GREEN_HI);
+    }
+}
+
+#define TASK_ROW_H  20
+
+static void paint_tasks(const mw_gl_draw_info_t *d)
+{
+    bb_fill(d, 0, CONTENT_Y, SCR_W, CONTENT_H + TAB_H, BB_BLACK);
+
+    bb_text(d, 4, (int16_t)(CONTENT_Y + 2), "[ running tasks ]", BB_GREEN_MID);
+    mw_gl_set_fg_colour(BB_SEP);
+    mw_gl_hline(d, 0, (int16_t)(SCR_W - 1), (int16_t)(CONTENT_Y + 14));
+
+    if (taskbar_entry_count == 0) {
+        bb_text(d, 8, (int16_t)(CONTENT_Y + 24), "No running apps", BB_GREEN_DIM);
+        return;
+    }
+
+    int16_t ry = (int16_t)(CONTENT_Y + 18);
+    for (int i = 0; i < taskbar_entry_count && ry < (DOCK_Y - TASK_ROW_H); i++) {
+        bool focused = (taskbar_entries[i].handle == taskbar_focused_handle);
+
+        // Row background for focused item
+        if (focused)
+            bb_fill(d, 0, ry, SCR_W, TASK_ROW_H, BB_PANEL);
+
+        // Bullet
+        mw_hal_lcd_colour_t bullet_col = focused ? BB_GREEN_HI : BB_GREEN_MID;
+        bb_text(d, 4, (int16_t)(ry + 5), focused ? ">" : "-", bullet_col);
+
+        // App name
+        bb_text(d, 16, (int16_t)(ry + 5), taskbar_entries[i].name,
+                focused ? BB_GREEN_HI : BB_GREEN);
+
+        // Focused badge
+        if (focused)
+            bb_text(d, (int16_t)(SCR_W - 44), (int16_t)(ry + 5), "[focus]", BB_GREEN_DIM);
+
+        // Row separator
+        mw_gl_set_fg_colour(BB_SEP);
+        mw_gl_hline(d, 0, (int16_t)(SCR_W - 1), (int16_t)(ry + TASK_ROW_H - 1));
+
+        ry += TASK_ROW_H;
     }
 }
 
@@ -394,8 +437,9 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
     paint_status(d);
     paint_timebar(d);
     paint_notif(d);
-    if (bb_state == BB_DRAWER) paint_drawer(d);
-    else                       paint_wallpaper(d);
+    if (bb_state == BB_DRAWER)      paint_drawer(d);
+    else if (bb_state == BB_TASKS)  paint_tasks(d);
+    else                            paint_wallpaper(d);
     paint_tabs(d);
     paint_dock(d);
 }
@@ -439,14 +483,42 @@ static void shell_message(const mw_message_t *msg)
     // Tabs
     if (ty >= TAB_Y) {
         int tab = tx / (SCR_W / TAB_COUNT);
-        if (tab >= 0 && tab < TAB_COUNT) bb_tab = tab;
+        if (tab >= 0 && tab < TAB_COUNT) {
+            bb_tab = tab;
+            if (tab == 0) {
+                // Tasks tab — toggle tasks view
+                bb_state = (bb_state == BB_TASKS) ? BB_HOME : BB_TASKS;
+            } else {
+                // Other tabs open the app drawer
+                if (bb_state != BB_DRAWER) {
+                    bb_state = BB_DRAWER;
+                    bb_scan_apps();
+                }
+            }
+        }
         mw_paint_window_client(shell_handle);
         return;
     }
 
     // Content area
     if (ty >= CONTENT_Y && ty < TAB_Y) {
-        if (bb_state == BB_DRAWER) {
+        if (bb_state == BB_TASKS) {
+            // Tap close bar
+            if (ty < CONTENT_Y + 16) {
+                bb_state = BB_HOME;
+                mw_paint_window_client(shell_handle);
+                return;
+            }
+            // Tap a task row
+            int16_t grid_y0 = (int16_t)(CONTENT_Y + 18);
+            int idx = (ty - grid_y0) / TASK_ROW_H;
+            if (idx >= 0 && idx < taskbar_entry_count) {
+                bb_state = BB_HOME;
+                mw_paint_window_client(shell_handle);
+                mw_bring_window_to_front(taskbar_entries[idx].handle);
+                mw_paint_all();
+            }
+        } else if (bb_state == BB_DRAWER) {
             // Tap close bar
             if (ty < CONTENT_Y + 16) {
                 bb_state = BB_HOME;
