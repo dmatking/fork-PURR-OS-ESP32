@@ -1,3 +1,17 @@
+set(_shell_requires
+    driver
+    esp_timer
+    nvs_flash
+    app_update
+    drv_display
+    drv_touch
+    lib_miniwin
+    drv_wifi
+)
+if(PURR_ENABLE_BT)
+    list(APPEND _shell_requires drv_bt)
+endif()
+
 idf_component_register(
     SRCS
         "drv_shell.c"
@@ -5,16 +19,14 @@ idf_component_register(
         "shell_cmds_display.cpp"
         "shell_cmds_sys.c"
         "shell_cmds_miniwin.cpp"
+        "shell_cmds_conman.cpp"
     INCLUDE_DIRS "."
-    REQUIRES
-        driver
-        esp_timer
-        nvs_flash
-        app_update
-        drv_display
-        drv_touch
-        lib_miniwin
+    REQUIRES ${_shell_requires}
 )
+
+if(PURR_ENABLE_BT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE SHELL_HAS_BT=1)
+endif()
 
 # IDF 5.x does not propagate symbols from REQUIRES into the final link for
 # components that are static libs — force-link drv_display explicitly.

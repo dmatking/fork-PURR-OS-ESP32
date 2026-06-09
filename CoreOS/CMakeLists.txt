@@ -9,5 +9,5 @@ set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../Shells")
 set(PURR_UI_KERNEL "none" CACHE STRING "UI framework: miniwin | none")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-set(PROJECT_VER "0.9.1")
+set(PROJECT_VER "0.9.2")
 project(purr_os_core)

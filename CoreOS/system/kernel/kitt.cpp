@@ -1,5 +1,6 @@
 #include "kitt.h"
 #include "device_config.h"
+#include "purr_panic.h"
 #include "purr_version.h"
 #include <ArduinoJson.h>
 #ifdef PURR_DISPLAY_SSD1306
@@ -49,6 +50,9 @@
 #endif
 #ifdef PURR_HAS_FLASHER
 #  include "modules/flasher.h"
+#endif
+#ifdef PURR_HAS_PARTITION_MGR
+#  include "modules/partition_manager.h"
 #endif
 #ifdef PURR_HAS_MICROPYTHON
 #  include "../micropython/mpython_runtime.h"
@@ -288,6 +292,14 @@ bool KITT::init(const char* device_json_path) {
     if (cfg.bt) {
         bt_manager_init();
         log("KITT", "bt OK");
+    }
+#endif
+
+    // Step 10.5: SD card
+#ifdef PURR_HAS_PARTITION_MGR
+    if (cfg.sd) {
+        pm_init();
+        log("KITT", pm_sd_available() ? "SD OK" : "SD: no card");
     }
 #endif
 
@@ -661,6 +673,14 @@ bool KITT::get_touch_event(touch_event_t* out) {
 void KITT::set_reserved_combo_callback(void (*cb)()) {
     reserved_combo_cb = cb;
 }
+
+// ── SD card ───────────────────────────────────────────────────────────────────
+
+#ifdef PURR_HAS_PARTITION_MGR
+bool KITT::sd_available() { return cfg.sd && pm_sd_available(); }
+#else
+bool KITT::sd_available() { return false; }
+#endif
 
 // ── WiFi ─────────────────────────────────────────────────────────────────────
 

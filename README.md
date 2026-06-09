@@ -1,4 +1,4 @@
-# PURR OS — v0.9.1
+# PURR OS — v0.9.2
 
 > **MEGA DISCLAIMER:** This project is very much vibe-coded. It has gone from 0 to "Jesus Christ" at an alarming rate. It is fully open-source and humans are actively encouraged to help. Please.
 
@@ -42,22 +42,24 @@ For more details, see **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 
 | Component | Version | Release Date |
 |-----------|---------|--------------|
-| PURR OS   | v0.9.1  | 2026-06-07   |
-| KITT      | v0.5.1  | 2026-06-07   |
+| PURR OS   | v0.9.2  | 2026-06-08   |
+| KITT      | v0.5.3  | 2026-06-08   |
 
 Version strings are defined in [CoreOS/system/kernel/purr_version.h](CoreOS/system/kernel/purr_version.h) and automatically embedded into the firmware image via `esp_app_desc_t` — visible in the bootloader's slot card and on the homescreen.
 
 Full release history is in **[CHANGELOG.md](CHANGELOG.md)** at the repository root.
 
-### Release Notes: v0.9.1 / KITT v0.5.1
+### Release Notes: v0.9.2 / KITT v0.5.3
 
-- **Arduino-ESP32 restored:** `lib_arduino` is now a passthrough to `espressif__arduino-esp32` managed component; hand-written shim deleted. Required by TFT_eSPI, RadioLib, LoRa, USB HID, and MiniWin display drivers
-- `purr_idf_compat.h` simplified to `#include <Arduino.h>` — all existing include sites unchanged
-- MiniWin HAL touch fix: `mw_hal_touch_get_point()` now polls fresh CST816S data — touch was silently ignored in all previous builds
-- Windows CE shell: single full-screen window eliminates focus/z-order issues
-- Start button renders sunken while menu is open; raised otherwise
-- Start menu items are now interactive: press highlight (60ms), "About" dialog, "Shut Down" reboots
-- `mw_paint_all()` on init clears calibration screen artifact
+- **SD card wired into KITT** — `sd_available()` API, device JSON `"sd"` field, `pm_init()` called at boot step 10.5
+- **conman shell commands** — `wifi-status/scan/connect/disconnect/forget` and `bt-status/scan/devices/pair/unpair` added to `drv_shell`
+- **WCE shell rewrite** — dynamic two-level start menu driven by `purr_catalog[]`; taskbar app buttons; RAM clock; applied to all device targets
+- **File Explorer** (`app_files`) — dual-tab SD/SPIFFS browser with directory navigation and scroll strip
+- **App Launcher** (`app_launcher`) — scans `/sdcard/apps/` for `.paws` (userland) and `.claw` (admin) Lua scripts; red text for admin apps
+- **Lua window host** (`app_lua_window`) — interface defined and stubbed; `luaconf.h` `LUA_32BITS` corrected 0→1 (root cause of all previous Lua build failures)
+- **Kernel panic handler** (`purr_panic`) — blue/red screen with ring buffer dump and `display_ili9341_*` panic display
+- **Partition table** — `factory` slot bumped to 1.0625 MB to fit full OS binary; `ota_0` adjusted accordingly
+- **Multi-device HALs** — `cyd_s028r`, `jc3248`, `tdeck_plus`, `waveshare` device folders added at project root
 
 ### Release Notes: v0.9.0 / KITT v0.5.0
 
@@ -100,9 +102,9 @@ The architecture splits across two flash partitions: a **PURR Kernel** in the fa
 0x1000   IDF second-stage bootloader   ~27 KB   (immutable, flashed by esptool)
 0x8000   Partition table                2 KB
 0xe000   OTA data                       8 KB    (tracks active boot slot)
-0x10000  factory   — PURR Kernel        1 MB    (OTA-immune, chainloads ota_0)
-0x110000 ota_0     — PURR Userland      1.5 MB  (OTA-updatable)
-0x290000 ota_1     — spare slot         1 MB    (third-party firmware / testing)
+0x10000  factory   — PURR Kernel        1.0625 MB  (OTA-immune, chainloads ota_0)
+0x120000 ota_0     — PURR Userland      1.4375 MB  (OTA-updatable)
+0x290000 ota_1     — spare slot         1 MB       (third-party firmware / testing)
 0x390000 spiffs    — filesystem         448 KB  (device config, app data, logs)
 ```
 

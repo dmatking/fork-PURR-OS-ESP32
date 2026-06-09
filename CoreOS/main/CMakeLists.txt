@@ -38,6 +38,7 @@ message(STATUS "PURR OS  target=${TARGET_DEVICE}  ui=${PURR_UI_KERNEL}  mini=${B
 set(SRCS
     "../system/kernel/main.cpp"
     "../system/kernel/kitt.cpp"
+    "../system/kernel/purr_panic.cpp"
     "../system/kernel/device_config.cpp"
     "../system/kernel/idf_compat.c"
     "../system/kernel/modules/power_manager.cpp"
@@ -58,6 +59,8 @@ set(REQUIRES
     esp_wifi
     nvs_flash
     spiffs
+    fatfs
+    sdmmc
     esp_adc
     app_update
     esp_timer
@@ -122,10 +125,10 @@ elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c")
     endif()
 
     list(APPEND SRCS
-        "../system/kernel/modules/partition_manager_stubs.cpp"
+        "../system/kernel/modules/partition_manager.cpp"
         "../system/kernel/modules/ui_stubs.cpp"
     )
-    list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer nvs_flash sdmmc)
+    list(APPEND REQUIRES esp_partition esp_lcd esp_timer nvs_flash)
     if(PURR_UI_KERNEL STREQUAL "miniwin")
         list(APPEND REQUIRES lib_miniwin)
     endif()
@@ -133,10 +136,10 @@ elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c")
 # ── Device-specific: CYD full OS ─────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "cyd")
     list(APPEND SRCS
-        "../system/kernel/modules/partition_manager_stubs.cpp"
+        "../system/kernel/modules/partition_manager.cpp"
         "../system/kernel/modules/ui_stubs.cpp"
     )
-    list(APPEND REQUIRES fatfs esp_partition esp_lcd esp_timer nvs_flash sdmmc)
+    list(APPEND REQUIRES esp_partition esp_lcd esp_timer nvs_flash)
     if(PURR_UI_KERNEL STREQUAL "miniwin")
         list(APPEND REQUIRES lib_miniwin)
     endif()
@@ -164,8 +167,6 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
         esp_lcd
         lib_tftespi
         driver
-        fatfs
-        sdmmc
         drv_display
         drv_touch
     )

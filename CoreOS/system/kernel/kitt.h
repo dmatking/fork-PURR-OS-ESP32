@@ -124,6 +124,9 @@ public:
     void     lora_reclaim();
     bool     lora_yielded();
 
+    // ── SD card ──────────────────────────────────────────────────────────────
+    bool sd_available();
+
     // ── Power ────────────────────────────────────────────────────────────────
     int  battery_percent();
     int  battery_voltage_mv();

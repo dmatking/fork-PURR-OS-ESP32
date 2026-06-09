@@ -35,6 +35,9 @@ void lua_module_touch_register();
 // Register all system.* functions (only if !restricted)
 void lua_module_system_register(bool restricted);
 
+// Register all win.* functions for MiniWin window scripting
+void lua_module_window_register();
+
 #ifdef __cplusplus
 }
 #endif

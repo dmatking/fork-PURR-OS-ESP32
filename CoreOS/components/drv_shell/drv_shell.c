@@ -40,6 +40,20 @@ void cmd_mw_rect  (int argc, char **argv);
 void cmd_mw_init  (int argc, char **argv);
 void cmd_mw_touch (int argc, char **argv);
 
+// Declared in shell_cmds_conman.cpp
+void cmd_wifi_status    (int argc, char **argv);
+void cmd_wifi_scan      (int argc, char **argv);
+void cmd_wifi_connect   (int argc, char **argv);
+void cmd_wifi_disconnect(int argc, char **argv);
+void cmd_wifi_forget    (int argc, char **argv);
+#ifdef SHELL_HAS_BT
+void cmd_bt_status  (int argc, char **argv);
+void cmd_bt_scan    (int argc, char **argv);
+void cmd_bt_devices (int argc, char **argv);
+void cmd_bt_pair    (int argc, char **argv);
+void cmd_bt_unpair  (int argc, char **argv);
+#endif
+
 static const shell_cmd_t s_cmds[] = {
     { "gpio-get",      "gpio-get <pin>              Read GPIO level",                    cmd_gpio_get      },
     { "gpio-set",      "gpio-set <pin> <0|1>        Drive GPIO high or low",             cmd_gpio_set      },
@@ -54,11 +68,23 @@ static const shell_cmd_t s_cmds[] = {
     { "heap",          "heap                        Show heap usage",                    cmd_sys_heap      },
     { "nvs-erase",     "nvs-erase                   Erase NVS partition",               cmd_sys_nvs_erase },
     { "reboot",        "reboot                      Restart the ESP32",                 cmd_sys_reboot    },
-    { "mw-paint",     "mw-paint                    Queue MiniWin full repaint",              cmd_mw_paint  },
-    { "mw-tick",      "mw-tick [N]                 Process N messages (default 200)",        cmd_mw_tick   },
-    { "mw-rect",      "mw-rect x y w h 0xRRGGBB    Draw rect via HAL directly",             cmd_mw_rect   },
-    { "mw-init",      "mw-init                     Re-run mw_init()",                        cmd_mw_init   },
-    { "mw-touch",     "mw-touch [N]                Poll touch N ticks (20ms, default 150)",  cmd_mw_touch  },
+    { "mw-paint",          "mw-paint                    Queue MiniWin full repaint",              cmd_mw_paint       },
+    { "mw-tick",           "mw-tick [N]                 Process N messages (default 200)",        cmd_mw_tick        },
+    { "mw-rect",           "mw-rect x y w h 0xRRGGBB    Draw rect via HAL directly",             cmd_mw_rect        },
+    { "mw-init",           "mw-init                     Re-run mw_init()",                        cmd_mw_init        },
+    { "mw-touch",          "mw-touch [N]                Poll touch N ticks (20ms, default 150)",  cmd_mw_touch       },
+    { "wifi-status",       "wifi-status                 Show WiFi state and SSID",                cmd_wifi_status    },
+    { "wifi-scan",         "wifi-scan                   Scan for nearby networks",                cmd_wifi_scan      },
+    { "wifi-connect",      "wifi-connect <ssid> [pass]  Connect to a network",                   cmd_wifi_connect   },
+    { "wifi-disconnect",   "wifi-disconnect             Disconnect from current network",         cmd_wifi_disconnect},
+    { "wifi-forget",       "wifi-forget <ssid>          Remove saved credentials",               cmd_wifi_forget    },
+#ifdef SHELL_HAS_BT
+    { "bt-status",         "bt-status                   Show BT state and paired count",          cmd_bt_status      },
+    { "bt-scan",           "bt-scan [ms]                Discover nearby devices (default 8s)",    cmd_bt_scan        },
+    { "bt-devices",        "bt-devices                  List paired devices",                     cmd_bt_devices     },
+    { "bt-pair",           "bt-pair <idx>               Pair a discovered device",                cmd_bt_pair        },
+    { "bt-unpair",         "bt-unpair <idx>             Unpair a paired device",                  cmd_bt_unpair      },
+#endif
 };
 static const int s_ncmds = sizeof(s_cmds) / sizeof(s_cmds[0]);
 

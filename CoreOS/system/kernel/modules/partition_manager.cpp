@@ -6,7 +6,7 @@
 #include "nvs.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
-#include "esp_vfs_fat.h"
+#include <esp_vfs_fat.h>
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
 #include "esp_log.h"

@@ -57,16 +57,23 @@ set(MINIWIN_HAL_SRCS
     "${PURR_MW_HAL_DIR}/purr_app.cpp"
 )
 
+# ── Shared cross-UI app windows ───────────────────────────────────────────────
+set(PURR_MW_APPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../devices/apps")
+file(GLOB PURR_MW_APP_SRCS "${PURR_MW_APPS_DIR}/*.cpp")
+
 idf_component_register(
-    SRCS         ${MINIWIN_CORE_SRCS} ${MINIWIN_HAL_SRCS}
+    SRCS         ${MINIWIN_CORE_SRCS} ${MINIWIN_HAL_SRCS} ${PURR_MW_APP_SRCS}
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal"
                  "${PURR_MW_HAL_DIR}"
+                 "${PURR_MW_APPS_DIR}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/gl/fonts/truetype/mcufont"
     REQUIRES     nvs_flash
                  esp_timer
                  esp_lcd
+                 log
                  driver
+                 lib_lua
 )
 
 # IDF 5.3.x does not propagate include dirs through managed-component REQUIRES chains.
@@ -81,6 +88,7 @@ target_include_directories(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel"
     "${CMAKE_CURRENT_SOURCE_DIR}/../drv_display"
     "${CMAKE_CURRENT_SOURCE_DIR}/../drv_touch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../lib_lua/src"
     ${IDF_ALL_COMPONENT_INCLUDES}
     "${idf_path}/components/driver/deprecated"
     "${idf_path}/components/driver/touch_sensor/esp32/include"

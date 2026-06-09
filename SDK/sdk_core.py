@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PURR OS SDK v0.9.1 — interactive build / flash / monitor tool.
+"""PURR OS SDK v0.9.2 — interactive build / flash / monitor tool.
 Invoked by SDK.ps1 (or directly: python sdk_core.py [flags]).
 """
 
@@ -1040,7 +1040,7 @@ def show_banner(cfg):
 
     div()
     wip_tag = f"  {C_YLW}[WIP]{C_RST}" if "WIP" in t.get("spec", "") else ""
-    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.9.1{C_RST}  {C_GRY}KITT v0.5.1{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
+    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.9.2{C_RST}  {C_GRY}KITT v0.5.1{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
 
     mini = (not mods.get("micropython", True)) or t["fixed"]
     print(f"  Variant  : {'mini — no MicroPython' if mini else 'full — with MicroPython'}")

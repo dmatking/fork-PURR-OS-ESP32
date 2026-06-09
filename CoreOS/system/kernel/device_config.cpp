@@ -61,6 +61,8 @@ bool device_config_load(const char* path, device_config_t* out) {
     out->ram_kb   = doc["ram_kb"]   | (uint16_t)(esp_get_free_heap_size() / 1024);
     out->psram_mb = doc["psram_mb"] | 0;
 
+    out->sd = doc["sd"] | false;
+
     out->wifi = false; out->bt = false; out->lora = false;
     JsonArray radios = doc["radios"];
     if (radios) {

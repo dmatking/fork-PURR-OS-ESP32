@@ -2,6 +2,102 @@
 
 ---
 
+## [0.9.2] — 2026-06-08 — KITT 0.5.3 — SD card, conman shell, file explorer, app launcher, WCE shell rewrite
+
+### SD card integration (KITT)
+- `device_config.h/cpp` — added `sd` field to `device_config_t`; parsed from device JSON
+- `devices/cyd.json` — `"sd": true`
+- `main/CMakeLists.txt` — `cyd`, `cyd_s024c`, `cyd_s028r` targets now compile `partition_manager.cpp` (real SD via SPI) instead of stubs
+- `kitt.cpp` — Step 10.5: calls `pm_init()` and logs SD status when `cfg.sd` is true
+- `kitt.h` — `sd_available()` exposed; returns `cfg.sd && pm_sd_available()`
+
+### conman shell commands (`drv_shell`)
+- `shell_cmds_conman.cpp` — new source file: WiFi commands (`wifi-status`, `wifi-scan`, `wifi-connect`, `wifi-disconnect`, `wifi-forget`) always compiled; BT commands (`bt-status`, `bt-scan`, `bt-devices`, `bt-pair`, `bt-unpair`) guarded by `SHELL_HAS_BT`
+- `drv_shell/CMakeLists.txt` — restructured with `_shell_requires` list; adds `drv_bt` and `SHELL_HAS_BT=1` when `PURR_ENABLE_BT`; adds `drv_wifi` unconditionally
+- `drv_shell.c` — extern declarations and `s_cmds[]` entries wired for all conman commands
+
+### WCE shell rewrite (`devices/cyd/purr_app.cpp` and variants)
+- Rewritten as clean WCE-style shell using `purr_app_catalog[]` and `purr_taskbar`
+- Two-level start menu: top level shows "Programs >" + separator + "Restart"; Programs submenu lists all catalog entries dynamically
+- Taskbar app buttons render between Start and RAM clock; tap focuses/unminimises window
+- RAM clock (`heap_caps_get_free_size`) in sunken box at right of taskbar
+- `smenu_folder` state tracks top-level vs Programs submenu — no hardcoded item list
+- Same rewrite applied to `cyd_s028r`, `generic`, `jc3248`, `tdeck_plus`, `waveshare` purr_app.cpp
+
+### Shared app infrastructure (`devices/apps/`)
+- `purr_taskbar.h/cpp` — `taskbar_register`, `taskbar_unregister`, `taskbar_set_focus`; max 8 entries; `taskbar_focused_handle` tracks active window
+- `purr_app_catalog.h/cpp` — 6-entry catalog: About, Settings, Files, Apps, MagiDOS, MagicMac; `purr_catalog_count` exposed as `const int`
+- `purr_log.h/cpp` — ESP log ring buffer (12 lines × 40 chars); `purr_log_hook_install()` intercepts `esp_log_set_vprintf`
+
+### File Explorer app (`app_files`)
+- Dual-tab SD / SPIFFS browser with directory navigation
+- `scan_dir()` uses `opendir`/`readdir`/`stat` with `DT_UNKNOWN` fallback
+- Tap `[..]` to go up, tap `[dirname/]` to enter; path clamped to VFS root
+- 16 px scroll strip on right: upper half scrolls up, lower half scrolls down
+- Path and file buffers sized to 512 bytes to satisfy `-Werror=format-truncation`
+
+### App Launcher (`app_launcher`)
+- Scans `/sdcard/apps/` for `.paws` (userland Lua) and `.claw` (admin Lua) files
+- Admin apps rendered in red; userland apps in normal text colour
+- Tap to launch via `app_lua_window_create(path, is_admin)`; refocuses if already running
+- `app_entry_t.path` is 512 bytes
+
+### Lua window host (`app_lua_window`) — stubbed
+- `app_lua_window.h/cpp` — interface defined: `create`, `free`, `paint`, `on_message`, `is_running`, `get_error`
+- Currently stubbed ("Lua support not yet enabled") pending full Lua integration
+- `luaconf.h` — `LUA_32BITS` corrected from 0 → 1 (ESP32 Xtensa does not support `long long`); this was the root cause of all previous Lua compilation failures
+
+### Kernel panic handler (`purr_panic`)
+- `purr_panic.h` — stop codes: `DEADBEEF`, `APP_CRASH`, `CATFAIL`, `MEM_FULL`, `WATCHDOG`, `HAL_FAIL`; levels: `PURR_PANIC_BLUE` (recoverable) / `PURR_PANIC_RED` (halt)
+- `purr_panic.cpp` — console dump of ring buffer; display panic screen via `display_ili9341_*` API (not TFT_eSPI) on `PURR_DISPLAY_ILI9341` targets; ring buffer extern guarded by `PURR_HAS_MINIWIN`
+
+### Settings app
+- SD status line added below uptime: "SD: ready" / "SD: not mounted"
+
+### Partition table (`partitions_cyd.csv`)
+- `factory` bumped from `0x100000` → `0x110000` (1.0625 MB) to accommodate full OS binary size check
+- `ota_0` adjusted from `0x110000` start to `0x120000`; size reduced from `0x180000` → `0x170000` (1.4375 MB, ~490 KB headroom)
+- `ota_1` and `spiffs` unchanged
+
+### Version
+- `purr_version.h` — `KITT_VERSION` 0.5.1 → 0.5.3
+- `CoreOS/CMakeLists.txt` — `PROJECT_VER` → 0.9.2
+
+---
+
+## [0.9.2-alpha] — 2026-06-08 — KITT 0.5.1 — devices/ folder, multi-device MiniWin HAL
+
+### devices/ folder at project root
+- Moved all MiniWin device HAL code out of `CoreOS/components/lib_miniwin/MiniWin/hal/PURR_CYD/` and into a top-level `devices/` folder alongside `CoreOS/`, `SDK/`, and `Builder/`
+- Each device subfolder provides the full MiniWin HAL surface: `hal_lcd.cpp`, `hal_touch.cpp`, `hal_delay.cpp`, `hal_timer.cpp`, `hal_non_vol.cpp`, `miniwin_config.h`, `purr_app.cpp`
+- `#ifdef PURR_CYD` compile guards removed from all HAL files — device selection is now structural (CMake includes the correct folder at configure time)
+- `devices/generic/` — no-op LCD stub and always-UP touch stub; delay/timer/non_vol are reusable FreeRTOS/NVS implementations for any ESP-IDF target
+- `lib_miniwin/CMakeLists.txt` maps `TARGET_DEVICE` to the appropriate `devices/<folder>` at configure time; `main/CMakeLists.txt` include paths updated to match
+
+### New device HALs
+- **`devices/cyd_s028r/`** — CYD ESP32-2432S028R: ILI9341 320x240 (same LCD HAL as S024C) + XPT2046 resistive touch; `get_point` scales raw screen coords to MiniWin 0-4095 range; calibration screen on first boot via NVS check
+- **`devices/jc3248/`** — JC3248W535: ST7796 480x320 + GT911 I2C (SDA=19 SCL=20 INT=18); uses existing shared JC3248-targeted drivers; `miniwin_config.h` bumped to 20 windows / 40 controls for the larger display
+- **`devices/waveshare/`** — Waveshare 1.69" ESP32-S3: ST7789 240x280 portrait + CST816S inline (SDA=6 SCL=7 INT=9 RST=8; verify against board revision before flashing); touch HAL embeds I2C init directly since pins differ from CYD S024C
+- **`devices/tdeck_plus/`** — LilyGO T-Deck Plus: ST7789 320x240 landscape + GT911 I2C; both LCD and touch HALs are fully self-contained (embedded esp_lcd and i2c_master init, no shared driver dependency); GPIO10 held HIGH for peripheral power enable before SPI bus init; display SPI3 MOSI=41 SCK=40 MISO=38 CS=12 DC=11 BL=42; touch SDA=18 SCL=8 INT=16 RST=17
+
+### drv_display: push_block / push_colors added to ST7789 and ST7796
+- `display_st7789_push_block` / `display_st7789_push_colors` added to enable MiniWin font and bitmap rendering on ST7789 targets
+- `display_st7796_push_block` / `display_st7796_push_colors` added for ST7796 targets
+- `push_colors` performs big-endian byte-swap per pixel as required by `esp_lcd_panel_draw_bitmap`
+
+### MiniWin enabled for all targets except heltec
+- `lib_miniwin/CMakeLists.txt` removed `PURR_CYD=1` compile definition — no longer needed
+- `main/CMakeLists.txt`: `PURR_HAS_MINIWIN` and `lib_miniwin` REQUIRES now active for any non-heltec target when `PURR_UI_KERNEL=miniwin`
+- SDK `_sanitize_cfg`: `ui_kernel` forced to `"none"` only for heltec (OLED, no touch); all other targets may select miniwin
+
+### SDK
+- `tdeck_plus` added as first-class target: chip=esp32s3, `default_ui=miniwin`, LoRa enabled
+- `jc3248w535` and `waveshare169` unfixed, `default_ui` set to `miniwin`
+- Per-target build dirs added for `cyd_s028r`, `cyd_s024c`, `tdeck_plus`
+- Version bumped to 0.9.2 / KITT 0.5.1
+
+---
+
 ## [0.9.1] — 2026-06-07 — KITT 0.5.1 — MiniWin WCE shell: touch fix, clickable start menu
 
 ### MiniWin HAL touch fix

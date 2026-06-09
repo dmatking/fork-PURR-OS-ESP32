@@ -122,7 +122,7 @@
 /*
 @@ LUA_32BITS enables Lua with 32-bit integers and 32-bit floats.
 */
-#define LUA_32BITS	0
+#define LUA_32BITS	1
 
 
 /*
@@ -205,17 +205,14 @@
 #define LUA_LDIR	"!\\lua\\"
 #define LUA_CDIR	"!\\"
 #define LUA_SHRDIR	"!\\..\\share\\lua\\" LUA_VDIR "\\"
-
-#if !defined(LUA_PATH_DEFAULT)
 #define LUA_PATH_DEFAULT  \
 		LUA_LDIR"?.lua;"  LUA_LDIR"?\\init.lua;" \
 		LUA_CDIR"?.lua;"  LUA_CDIR"?\\init.lua;" \
 		LUA_SHRDIR"?.lua;" LUA_SHRDIR"?\\init.lua;" \
 		".\\?.lua;" ".\\?\\init.lua"
-#endif
 
 #if !defined(LUA_CPATH_DEFAULT)
-#define LUA_CPATH_DEFAULT \
+#define LUA_CPATH_DEFAULT  \
 		LUA_CDIR"?.dll;" \
 		LUA_CDIR"..\\lib\\lua\\" LUA_VDIR "\\?.dll;" \
 		LUA_CDIR"loadall.dll;" ".\\?.dll"
@@ -223,25 +220,22 @@
 
 #else			/* }{ */
 
-#define LUA_ROOT	"/usr/local/"
-#define LUA_LDIR	LUA_ROOT "share/lua/" LUA_VDIR "/"
-#define LUA_CDIR	LUA_ROOT "lib/lua/" LUA_VDIR "/"
+/* PURR OS VFS Paths */
+#define LUA_ROOT	"/spiffs/"
+#define LUA_LDIR	LUA_ROOT "lua/"
+#define LUA_USER_LDIR "/sdcard/apps/"
 
-#if !defined(LUA_PATH_DEFAULT)
 #define LUA_PATH_DEFAULT  \
 		LUA_LDIR"?.lua;"  LUA_LDIR"?/init.lua;" \
-		LUA_CDIR"?.lua;"  LUA_CDIR"?/init.lua;" \
-		"./?.lua;" "./?/init.lua"
-#endif
+		LUA_USER_LDIR"?.lua;" LUA_USER_LDIR"?.meow/main.lua;" \
+		"./?.lua"
 
 #if !defined(LUA_CPATH_DEFAULT)
 #define LUA_CPATH_DEFAULT \
-		LUA_CDIR"?.so;" LUA_CDIR"loadall.so;" "./?.so"
+		LUA_LDIR"?.so;" "./?.so"
 #endif
 
 #endif			/* } */
-
-
 /*
 @@ LUA_DIRSEP is the directory separator (for submodules).
 ** CHANGE it if your machine does not use "/" as the directory separator
@@ -790,4 +784,3 @@
 
 
 #endif
-
