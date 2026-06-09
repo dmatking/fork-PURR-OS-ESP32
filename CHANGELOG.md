@@ -2,6 +2,25 @@
 
 ---
 
+## [0.9.6+magidos] — 2026-06-09 — MagiDOS 8086 emulator complete, KITT 0.6.1
+
+### MagiDOS — Full-featured 8086 DOS Emulator
+- `magidos/` — Complete 8086 emulator with INT 0xE0 PURR kernel bridge
+- **8086tiny CPU core** — Vendored from github.com/adriancable/8086tiny; full 8086 instruction set, 640KB conventional memory
+- **MZ EXE loader** — Parse headers, apply relocations, set up segments; supports real DOS executables
+- **COM file support** — Flat binary loader at 0x0100:0x0100
+- **CGA text rendering** — 80×25 characters, 16-color palette, CP437 8×8 font (96 glyphs)
+- **MiniWin integration** — Runs in WCE shell as draggable/minimizable window; file picker for SD card .COM/.EXE
+- **INT 0xE0 bridge** — DOS programs call PURR kernel: WiFi status, LoRa send/recv, Bluetooth, notifications
+- **Example programs** — hello.c, hello.asm, purr_demo.c with full OpenWatcom build guide
+- **Build flag** — `idf.py -DPURR_ENABLE_MAGIDOS=1 build` to include MagiDOS
+
+### KITT version bump
+- KITT 0.6.0 → **0.6.1** (minor updates from prior work)
+- PURR OS 0.9.5 → **0.9.6** (full version bump for MagiDOS release)
+
+---
+
 ## [0.9.6] — 2026-06-09 — LilyGo T-Embed CC1101 support, CC1101 radio driver, rotary encoder, Meshtastic plan
 
 ### New device: LilyGo T-Embed CC1101
