@@ -1,10 +1,17 @@
 #include "purr_dos_ipc.h"
 #include "esp_log.h"
-#include "lora_manager.h"
-#include "wifi_manager.h"
-#include "bt_manager.h"
 #include <string.h>
 #include <stdlib.h>
+
+#ifdef PURR_HAS_LORA
+#include "lora_manager.h"
+#endif
+#ifdef PURR_HAS_WIFI
+#include "wifi_manager.h"
+#endif
+#ifdef PURR_HAS_BT
+#include "bt_manager.h"
+#endif
 
 static const char *TAG = "purr_dos_ipc";
 
@@ -34,6 +41,7 @@ static inline void mem_write_buf(uint8_t *mem, uint16_t seg, uint16_t off,
 // (Wire to actual 8086tiny regs struct in drv_8086.c once vendored.)
 // ---------------------------------------------------------------------------
 
+#ifdef PURR_HAS_LORA
 static void _lora_send(uint8_t *mem, uint16_t ds, uint16_t si, uint16_t cx)
 {
     uint8_t *payload = mem + seg_off(ds, si);
@@ -48,7 +56,9 @@ static uint16_t _lora_recv(uint8_t *mem, uint16_t es, uint16_t di, uint16_t cx)
     s_lora.pending = false;
     return n;
 }
+#endif  // PURR_HAS_LORA
 
+#ifdef PURR_HAS_WIFI
 static void _wifi_status(uint8_t *mem, uint16_t es, uint16_t di)
 {
     wifi_status_t st = wifi_manager_get_status();
@@ -71,12 +81,15 @@ static void _wifi_connect(uint8_t *mem, uint16_t ds, uint16_t si)
     const char *pass = ssid + strlen(ssid) + 1;
     wifi_manager_connect(ssid, pass);
 }
+#endif  // PURR_HAS_WIFI
 
+#ifdef PURR_HAS_BT
 static void _bt_list(uint8_t *mem, uint16_t es, uint16_t di, uint16_t cx)
 {
     char *buf = (char *)(mem + seg_off(es, di));
     bt_manager_list_json(buf, cx);
 }
+#endif  // PURR_HAS_BT
 
 static void _notify_post(uint8_t *mem, uint16_t ds, uint16_t si)
 {
@@ -132,12 +145,18 @@ void purr_dos_ipc_dispatch(uint8_t *mem)
     uint16_t cx = regs16[1];        // CX
 
     switch ((purr_dos_cmd_t)ah) {
+#ifdef PURR_HAS_LORA
         case DOS_IPC_LORA_SEND:     _lora_send(mem, ds, si, cx);        break;
         case DOS_IPC_LORA_RECV:     _lora_recv(mem, es, di, cx);        break;
+#endif
+#ifdef PURR_HAS_WIFI
         case DOS_IPC_WIFI_STATUS:   _wifi_status(mem, es, di);          break;
         case DOS_IPC_WIFI_SCAN:     _wifi_scan(mem, es, di, cx);        break;
         case DOS_IPC_WIFI_CONNECT:  _wifi_connect(mem, ds, si);         break;
+#endif
+#ifdef PURR_HAS_BT
         case DOS_IPC_BT_LIST:       _bt_list(mem, es, di, cx);          break;
+#endif
         case DOS_IPC_NOTIFY_POST:   _notify_post(mem, ds, si);          break;
         case DOS_IPC_NOTIFY_POLL:   _notify_poll(mem, es, di);          break;
         default:

@@ -10,6 +10,7 @@
 
 #include "purr_app_catalog.h"
 #include "purr_taskbar.h"
+#include "hal_input.h"
 
 #define SCR_W       mw_hal_lcd_get_display_width()
 #define SCR_H       mw_hal_lcd_get_display_height()
@@ -173,6 +174,19 @@ static void shell_message(const mw_message_t *msg)
 {
     if (msg->message_id == MW_WINDOW_CREATED_MESSAGE ||
         msg->message_id == MW_TIMER_MESSAGE) {
+        hal_input_tick();
+
+        // Synthesize a touch-down event if the trackball click was pressed
+        if (hal_input_click_pending()) {
+            int16_t cx, cy;
+            hal_input_get_cursor(&cx, &cy);
+            uint32_t td = ((uint32_t)(uint16_t)cx << 16) | (uint16_t)cy;
+            mw_post_message(MW_TOUCH_DOWN_MESSAGE,
+                            MW_INVALID_HANDLE, shell_handle,
+                            td, NULL,
+                            MW_MESSAGE_RECIPIENT_TYPE_WINDOW);
+        }
+
         mw_paint_all();
         mw_set_timer(MW_TICKS_PER_SECOND, shell_handle, MW_WINDOW_MESSAGE);
         return;
@@ -262,6 +276,8 @@ extern "C" {
 
 void mw_user_init(void)
 {
+    hal_input_init();
+
     mw_util_rect_t r;
     mw_util_set_rect(&r, 0, 0, SCR_W, SCR_H);
     shell_handle = mw_add_window(&r, "",
@@ -273,7 +289,7 @@ void mw_user_init(void)
 
 void mw_user_root_paint_function(const mw_gl_draw_info_t *draw_info)
 {
-    (void)draw_info;
+    hal_input_draw_cursor(draw_info);
 }
 
 void mw_user_root_message_function(const mw_message_t *message)

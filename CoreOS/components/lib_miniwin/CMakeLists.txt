@@ -56,6 +56,10 @@ set(MINIWIN_HAL_SRCS
     "${PURR_MW_HAL_DIR}/hal_non_vol.cpp"
     "${PURR_MW_HAL_DIR}/purr_app.cpp"
 )
+# T-Deck Plus has an extra input HAL (keyboard + trackball)
+if(EXISTS "${PURR_MW_HAL_DIR}/hal_input.cpp")
+    list(APPEND MINIWIN_HAL_SRCS "${PURR_MW_HAL_DIR}/hal_input.cpp")
+endif()
 
 # ── Shared cross-UI app windows ───────────────────────────────────────────────
 set(PURR_MW_APPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../devices/apps")

@@ -149,7 +149,7 @@ static void _message(const mw_message_t *msg)
         // Emulator task will self-delete when done
         break;
 
-    case MW_PAINT_WINDOW_CLIENT_MESSAGE:
+    case MW_WINDOW_CLIENT_PAINT_MESSAGE:
         // Refresh paint if VRAM changed
         if (s_vram_dirty) {
             mw_paint_window_client(msg->recipient_handle);
@@ -159,7 +159,7 @@ static void _message(const mw_message_t *msg)
     case MW_TOUCH_DOWN_MESSAGE: {
         // Simple touch handling: map Y coordinate to DOS keys
         int16_t ty = (int16_t)(msg->message_data & 0xFFFF);
-        int win_h = mw_util_get_rect(msg->recipient_handle).height;
+        int win_h = mw_get_window_client_rect(msg->recipient_handle).height;
         if (ty > win_h / 2)
             drv_8086_key(0x00, 0x50);  // down arrow
         else

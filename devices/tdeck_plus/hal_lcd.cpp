@@ -59,7 +59,8 @@ static inline uint16_t to_rgb565(mw_hal_lcd_colour_t c) {
 extern "C" {
 
 void mw_hal_lcd_init(void) {
-    if (s_ready) return; s_ready = true;
+    if (s_ready) return;
+    s_ready = true;
 
     // Power enable — must be HIGH before driving SPI peripherals
     gpio_set_direction((gpio_num_t)LCD_PWR_EN, GPIO_MODE_OUTPUT);
@@ -72,9 +73,9 @@ void mw_hal_lcd_init(void) {
     spi_bus_initialize(LCD_HOST, &bus, SPI_DMA_CH_AUTO);
 
     esp_lcd_panel_io_spi_config_t io_cfg = { .cs_gpio_num = LCD_CS, .dc_gpio_num = LCD_DC,
-                                              .spi_clock_hz = LCD_CLK_HZ,
-                                              .lcd_cmd_bits = 8, .lcd_param_bits = 8,
-                                              .trans_queue_depth = 10 };
+                                              .pclk_hz = LCD_CLK_HZ,
+                                              .trans_queue_depth = 10,
+                                              .lcd_cmd_bits = 8, .lcd_param_bits = 8 };
     esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &s_io);
 
     esp_lcd_panel_dev_config_t panel_cfg = { .reset_gpio_num = LCD_RST,
