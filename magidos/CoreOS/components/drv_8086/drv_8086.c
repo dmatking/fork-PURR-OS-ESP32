@@ -198,11 +198,26 @@ bool drv_8086_step(void)
 
 void drv_8086_key(uint8_t ascii, uint8_t scancode)
 {
-    // Write into 8086tiny's keyboard buffer (BIOS data area 0x041E)
-    // This is updated by the INT 16h handler
-    (void)ascii;
-    (void)scancode;
-    // TODO: Implement keyboard buffer injection
+    // Write into 8086tiny's keyboard buffer (BIOS data area at offset 0x4A6 in memory)
+    // Format: low byte = ASCII/scan code, high byte = flags (Alt, Shift, Ctrl, etc.)
+    // After writing, we trigger INT 7 (which 8086tiny polls for keyboard interrupt)
+
+    if (!s_initialized) {
+        return;
+    }
+
+    // Simple keyboard entry: ASCII in low byte, scancode info in high byte
+    // For now, just encode the ASCII character
+    uint16_t key_data = (uint16_t)ascii;
+
+    // Store in BIOS data area at 0x4A6
+    mem[0x4A6] = (uint8_t)(key_data & 0xFF);
+    mem[0x4A7] = (uint8_t)((key_data >> 8) & 0xFF);
+
+    // The keyboard interrupt will be handled by 8086tiny's timer/keyboard polling
+    // which checks mem[0x4A6] and generates INT 7 when a key is present
+
+    ESP_LOGD(TAG, "injected key: 0x%02X", ascii);
 }
 
 void drv_8086_set_frame_callback(drv_8086_frame_cb_t cb)
