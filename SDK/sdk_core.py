@@ -972,9 +972,9 @@ def do_flash(cfg, port=None):
     build_dir  = _build_dir(cfg)
     spiffs_img = os.path.join(build_dir, "spiffs.bin")
 
-    # CYD variants flash OS to ota_0 (0x120000); all others use factory slot (0x10000)
+    # All CYD variants flash OS directly to factory (0x10000); spiffs at 0x390000
     _cyd_targets = ("cyd", "cyd_s024c", "cyd_s028r")
-    app_offset    = "0x120000" if target in _cyd_targets else "0x10000"
+    app_offset    = "0x10000"
     spiffs_offset = "0x390000" if target in (*_cyd_targets, "cyd_boot") else "0x3b0000"
 
     cmd = [
@@ -1019,92 +1019,14 @@ def do_monitor(cfg, port=None):
 # ── Full build + full flash (CYD: factory + ota_0 together) ──────────────────
 
 def do_full_build(cfg, clean=False):
-    """Build cyd_boot (factory) then cyd/cyd_s024c/cyd_s028r (OS) back-to-back."""
-    _cyd_os_targets = ("cyd", "cyd_s024c", "cyd_s028r")
-    if cfg["target"] not in (*_cyd_os_targets, "cyd_boot"):
-        warn("Full Build is only meaningful for CYD targets — running single build instead")
-        do_build(cfg, clean=clean)
-        return
-
-    boot_cfg = dict(cfg)
-    boot_cfg["target"]  = "cyd_boot"
-    boot_cfg["modules"] = dict(DEFAULT_CFG["modules"])
-
-    os_cfg = dict(cfg)
-    # If target is cyd_boot (run directly), build cyd_s024c as the OS image
-    if os_cfg["target"] == "cyd_boot":
-        os_cfg["target"] = "cyd_s024c"
-
-    print(f"\n{C_YLW}{'━'*44}{C_RST}")
-    info("Full Build step 1/2 — PURR Kernel (factory, OTA-immune)")
-    print(f"{C_YLW}{'━'*44}{C_RST}\n")
-    do_build(boot_cfg, clean=clean)
-
-    print(f"\n{C_YLW}{'━'*44}{C_RST}")
-    info("Full Build step 2/2 — PURR userland (ota_0)")
-    print(f"{C_YLW}{'━'*44}{C_RST}\n")
-    do_build(os_cfg, clean=clean)
-
-    info("Full Build complete — PURR Kernel + userland ready to flash")
+    """Alias for do_build — OS goes directly to factory, no separate bootloader needed."""
+    do_build(cfg, clean=clean)
 
 
 def do_full_flash(cfg, port=None):
-    """Flash factory + ota_0 + SPIFFS in one esptool call."""
-    port = port or cfg.get("flash_port", "")
-    baud = cfg.get("flash_baud", 460800)
-
-    if not port or port == "auto":
-        port = _pick_port("Flash port", saved=cfg.get("flash_port", ""))
-        if not port:
-            err("No flash port specified. Connect your CYD and try again.")
-        cfg["flash_port"] = port
-        save_cfg(cfg)
-
-    # Determine OS target: use the configured target (cyd_s024c, cyd_s028r, or cyd)
-    _cyd_os_targets = ("cyd", "cyd_s024c", "cyd_s028r")
-    os_target  = cfg["target"] if cfg["target"] in _cyd_os_targets else "cyd_s024c"
-    boot_dir   = os.path.join(COREOS_DIR, _BUILD_DIRS["cyd_boot"])
-    os_dir     = os.path.join(COREOS_DIR, _BUILD_DIRS[os_target])
-    spiffs_img = os.path.join(os_dir, "spiffs.bin")
-
-    missing = []
-    for path, label in [
-        (os.path.join(boot_dir, "bootloader", "bootloader.bin"),         "cyd_boot/bootloader.bin"),
-        (os.path.join(boot_dir, "partition_table", "partition-table.bin"),"cyd_boot/partition-table.bin"),
-        (os.path.join(boot_dir, "ota_data_initial.bin"),                  "cyd_boot/ota_data_initial.bin"),
-        (os.path.join(boot_dir, "purr_os_core.bin"),                      "cyd_boot/purr_os_core.bin"),
-        (os.path.join(os_dir,   "purr_os_core.bin"),                      f"{os_target}/purr_os_core.bin"),
-    ]:
-        if not os.path.exists(path):
-            missing.append(label)
-    if missing:
-        err("Missing build artifacts — run Full Build first:\n  " + "\n  ".join(missing))
-
-    cmd = [
-        sys.executable, "-m", "esptool",
-        "--chip",   "esp32",
-        "--port",   port,
-        "-b",       str(baud),
-        "--before", "default_reset",
-        "--after",  "hard_reset",
-        "write_flash",
-        "--flash_mode", "dio",
-        "--flash_size", "detect",
-        "--flash_freq", "40m",
-        "0x1000",   os.path.join(boot_dir, "bootloader", "bootloader.bin"),
-        "0x8000",   os.path.join(boot_dir, "partition_table", "partition-table.bin"),
-        "0xe000",   os.path.join(boot_dir, "ota_data_initial.bin"),
-        "0x10000",  os.path.join(boot_dir, "purr_os_core.bin"),   # factory
-        "0x120000", os.path.join(os_dir,   "purr_os_core.bin"),   # ota_0
-    ]
-    if os.path.exists(spiffs_img):
-        cmd += ["0x390000", spiffs_img]
-        info("including SPIFFS at 0x390000")
-
-    info(f"full flash → {port}  (factory 0x10000 + ota_0 0x120000 + SPIFFS 0x390000)")
-    rc = run_live(cmd)
-    if rc != 0:
-        err(f"Full flash failed (exit {rc})")
+    """Full flash: partition table + bootloader + OS + SPIFFS in one esptool call.
+    OS goes directly to factory (0x10000) — no separate cyd_boot binary needed."""
+    do_flash(cfg, port=port)
 
 
 # ── Banner ────────────────────────────────────────────────────────────────────
