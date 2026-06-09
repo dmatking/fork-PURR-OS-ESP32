@@ -194,6 +194,7 @@ static void system_task(void*) {
         kitt.memory_get_stats(&mem);
         Serial.printf("[sys] RAM %lu/%lu KB free\n", mem.free_ram_kb, mem.total_ram_kb);
     }
+#endif  // PURR_DISPLAY_SSD1306 || PURR_FORCE_KITTEN_UI
 #endif  // PURR_IS_BOOTLOADER_IMG
 }
 

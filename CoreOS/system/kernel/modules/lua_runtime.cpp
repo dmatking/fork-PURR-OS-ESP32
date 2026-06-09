@@ -3,8 +3,12 @@
 
 #include "lua_runtime.h"
 #include "../kitt.h"
+#ifdef PURR_DISPLAY_ILI9341
 #include "display_ili9341.h"
+#endif
+#ifdef PURR_HAS_CST816S_TOUCH
 #include "touch_cst816s.h"
+#endif
 #include "../purr_idf_compat.h"
 #include <lua.hpp>
 #include <stdio.h>
@@ -22,6 +26,7 @@ static bool is_initialized = false;
 
 // ── Display Module ───────────────────────────────────────────────────────────
 
+#ifdef PURR_DISPLAY_ILI9341
 static int lua_display_fill_rect(lua_State* L) {
     int x = luaL_checkinteger(L, 1);
     int y = luaL_checkinteger(L, 2);
@@ -60,12 +65,14 @@ static int lua_display_text(lua_State* L) {
     display_ili9341_draw_string(x, y, text, (uint16_t)fg, (uint16_t)bg, (uint8_t)sz);
     return 0;
 }
+#endif  // PURR_DISPLAY_ILI9341
 
 void lua_module_display_register() {
     if (!L) return;
 
     lua_newtable(L);  // display table
 
+#ifdef PURR_DISPLAY_ILI9341
     lua_pushcfunction(L, lua_display_fill_rect);
     lua_setfield(L, -2, "fill_rect");
 
@@ -77,6 +84,7 @@ void lua_module_display_register() {
 
     lua_pushcfunction(L, lua_display_text);
     lua_setfield(L, -2, "text");
+#endif
 
     lua_setglobal(L, "display");
 }
@@ -149,6 +157,7 @@ void lua_module_sd_register() {
 
 // ── Touch Module ──────────────────────────────────────────────────────────────
 
+#ifdef PURR_HAS_CST816S_TOUCH
 static int lua_touch_get_event(lua_State* L) {
     cst_touch_event_t ev;
     if (!touch_cst816s_get_event(&ev)) {
@@ -168,14 +177,17 @@ static int lua_touch_get_event(lua_State* L) {
 
     return 1;
 }
+#endif
 
 void lua_module_touch_register() {
     if (!L) return;
 
     lua_newtable(L);  // touch table
 
+#ifdef PURR_HAS_CST816S_TOUCH
     lua_pushcfunction(L, lua_touch_get_event);
     lua_setfield(L, -2, "get_event");
+#endif
 
     lua_setglobal(L, "touch");
 }

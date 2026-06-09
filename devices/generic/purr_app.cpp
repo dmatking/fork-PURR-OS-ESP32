@@ -173,7 +173,7 @@ static void shell_message(const mw_message_t *msg)
 {
     if (msg->message_id == MW_WINDOW_CREATED_MESSAGE ||
         msg->message_id == MW_TIMER_MESSAGE) {
-        mw_paint_window_client(shell_handle);
+        mw_paint_all();
         mw_set_timer(MW_TICKS_PER_SECOND, shell_handle, MW_WINDOW_MESSAGE);
         return;
     }

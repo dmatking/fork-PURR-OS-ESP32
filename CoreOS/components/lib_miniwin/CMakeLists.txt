@@ -102,6 +102,13 @@ set(_mw_include_extra "")
 if(PURR_ENABLE_LUA)
     list(APPEND _mw_include_extra "${CMAKE_CURRENT_SOURCE_DIR}/../lib_lua/src")
 endif()
+if(PURR_ENABLE_MAGIDOS)
+    list(APPEND _mw_include_extra
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../magidos/CoreOS/components/drv_8086"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../magidos/CoreOS/components/lib_purr_dos_ipc"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../magidos/purr_wm_app/magidos"
+    )
+endif()
 target_include_directories(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel"
     "${CMAKE_CURRENT_SOURCE_DIR}/../drv_display"

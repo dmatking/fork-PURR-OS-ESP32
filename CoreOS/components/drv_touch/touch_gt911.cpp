@@ -35,8 +35,8 @@ static bool _read_regs(uint16_t reg, uint8_t* buf, uint8_t len) {
 void touch_gt911_init() {
     i2c_master_bus_config_t bus_cfg = {};
     bus_cfg.i2c_port = I2C_NUM_0;
-    bus_cfg.sda_io_num = GT911_SDA;
-    bus_cfg.scl_io_num = GT911_SCL;
+    bus_cfg.sda_io_num = (gpio_num_t)GT911_SDA;
+    bus_cfg.scl_io_num = (gpio_num_t)GT911_SCL;
     bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
     bus_cfg.glitch_ignore_cnt = 7;
 

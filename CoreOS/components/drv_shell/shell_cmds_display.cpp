@@ -1,4 +1,6 @@
+#ifdef PURR_DISPLAY_ILI9341
 #include "display_ili9341.h"
+#endif
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,9 +13,13 @@ extern "C" {
 void cmd_display_init(int argc, char **argv)
 {
     (void)argc; (void)argv;
+#ifdef PURR_DISPLAY_ILI9341
     printf("Running display_ili9341_init()...\n");
     display_ili9341_init();
     printf("Done.\n");
+#else
+    printf("display-init: not supported on this target\n");
+#endif
 }
 
 void cmd_display_reset(int argc, char **argv)
@@ -49,8 +55,12 @@ void cmd_display_color(int argc, char **argv)
     }
     uint16_t color = (uint16_t)strtoul(argv[1], NULL, 0);
     printf("Filling display 0x%04X...\n", color);
+#ifdef PURR_DISPLAY_ILI9341
     display_ili9341_fill_rect(0, 0, 320, 240, color);
     printf("Done.\n");
+#else
+    printf("display-color: not supported on this target\n");
+#endif
 }
 
 void cmd_display_text(int argc, char **argv)
@@ -64,16 +74,24 @@ void cmd_display_text(int argc, char **argv)
         if (i > 2) strncat(buf, " ", sizeof(buf) - strlen(buf) - 1);
         strncat(buf, argv[i], sizeof(buf) - strlen(buf) - 1);
     }
+#ifdef PURR_DISPLAY_ILI9341
     display_ili9341_text((uint8_t)row, buf);
     printf("Row %d: %s\n", row, buf);
+#else
+    printf("display-text: not supported on this target\n");
+#endif
 }
 
 void cmd_display_bl(int argc, char **argv)
 {
     if (argc < 2) { printf("usage: display-bl <0-255>\n"); return; }
     uint8_t level = (uint8_t)atoi(argv[1]);
+#ifdef PURR_DISPLAY_ILI9341
     display_ili9341_set_brightness(level);
     printf("Backlight -> %d\n", level);
+#else
+    printf("display-bl: not supported on this target\n");
+#endif
 }
 
 } // extern "C"

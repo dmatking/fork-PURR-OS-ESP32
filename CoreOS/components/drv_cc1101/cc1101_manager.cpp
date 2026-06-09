@@ -44,7 +44,7 @@ void cc1101_manager_init(float freq_mhz, float bitrate_kbps, float freq_dev_khz,
         return;
     }
 
-    s_radio->setGdo0Action(rx_isr);
+    s_radio->setGdo0Action(rx_isr, RISING);
     s_radio->startReceive();
     s_enabled = true;
     ESP_LOGI(TAG, "OK %.2f MHz %.1f kbps %d dBm", freq_mhz, bitrate_kbps, power_dbm);
@@ -94,7 +94,8 @@ bool cc1101_manager_send(const uint8_t* data, size_t len) {
 }
 
 bool cc1101_manager_busy() {
-    return s_enabled && s_radio && !s_radio->isChannelFree(s_freq_mhz, -85);
+    // CC1101 in RadioLib doesn't expose isChannelFree; use RSSI as a proxy
+    return s_enabled && s_radio && s_radio->getRSSI() > -85.0f;
 }
 
 bool cc1101_manager_data_available() {
