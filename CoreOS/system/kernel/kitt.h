@@ -65,7 +65,7 @@ public:
     void wifi_enable();
     void wifi_disable();
     bool wifi_enabled();
-    void wifi_scan_start();
+    bool wifi_scan_start();
     bool wifi_scan_done();
     int  wifi_scan_count();
     void wifi_scan_get_ssid(int index, char* buf, size_t len);

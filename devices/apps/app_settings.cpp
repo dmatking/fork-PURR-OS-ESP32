@@ -1,5 +1,6 @@
 #include "app_settings.h"
 #include "miniwin.h"
+#include "esp_wifi.h"
 #include "miniwin_utilities.h"
 #include "gl/gl.h"
 #include "kitt.h"
@@ -15,12 +16,15 @@
 extern KITT kitt;
 
 typedef enum { TAB_SYS, TAB_WIFI, TAB_LORA, TAB_LOG, TAB_COUNT } tab_t;
-typedef enum { WSCAN_IDLE, WSCAN_SCANNING, WSCAN_RESULTS } wscan_t;
+typedef enum { WSCAN_IDLE, WSCAN_SCANNING, WSCAN_RESULTS, WSCAN_FAILED } wscan_t;
 
-static mw_handle_t s_handle    = MW_INVALID_HANDLE;
-static tab_t       s_tab       = TAB_SYS;
-static wscan_t     s_wifi      = WSCAN_IDLE;
-static uint8_t     s_wanim     = 0;
+static mw_handle_t s_handle      = MW_INVALID_HANDLE;
+static tab_t       s_tab         = TAB_SYS;
+static wscan_t     s_wifi        = WSCAN_IDLE;
+static uint8_t     s_wanim       = 0;
+static uint8_t     s_wscan_ticks = 0;   // timeout counter while scanning
+
+#define WSCAN_TIMEOUT_TICKS  20  // 20 × 500ms = 10s
 
 #define WIN_W   240
 #define WIN_H   198
@@ -111,6 +115,9 @@ static void paint_wifi(const mw_gl_draw_info_t *d, int16_t y0)
 
     if (s_wifi == WSCAN_SCANNING) {
         mw_gl_string(d, 4, y0, scan_anim[s_wanim % 3]);
+        mw_gl_set_fg_colour(WCE_SHD);
+        mw_gl_string(d, 4, (int16_t)(y0 + 14), "(tap to cancel)");
+        mw_gl_set_fg_colour(WCE_TXT);
         return;
     }
 
@@ -143,6 +150,12 @@ static void paint_wifi(const mw_gl_draw_info_t *d, int16_t y0)
                      kitt.wifi_scan_get_secured(i) ? "*" : " ");
             mw_gl_string(d, 4, (int16_t)(y0 + 44 + i * 13), buf);
         }
+        mw_gl_set_fg_colour(WCE_SHD);
+        mw_gl_string(d, 4, (int16_t)(y0 + 44 + 7 * 13), "Tap to rescan");
+        mw_gl_set_fg_colour(WCE_TXT);
+    } else if (s_wifi == WSCAN_FAILED) {
+        mw_gl_string(d, 4, (int16_t)(y0 + 32), "Scan failed / timed out");
+        mw_gl_string(d, 4, (int16_t)(y0 + 46), "Tap to retry");
     } else {
         mw_gl_string(d, 4, (int16_t)(y0 + 32), "Tap to scan");
     }
@@ -227,10 +240,22 @@ static void message(const mw_message_t *msg)
     case MW_TIMER_MESSAGE:
         if (s_wifi == WSCAN_SCANNING) {
             s_wanim++;
-            if (kitt.wifi_scan_done()) s_wifi = WSCAN_RESULTS;
+            s_wscan_ticks++;
+            if (kitt.wifi_scan_done()) {
+                s_wifi = WSCAN_RESULTS;
+            } else if (s_wscan_ticks >= WSCAN_TIMEOUT_TICKS) {
+                s_wifi = WSCAN_FAILED;
+                esp_wifi_scan_stop();
+            }
         }
         mw_paint_window_client(msg->recipient_handle);
-        mw_set_timer(MW_TICKS_PER_SECOND, msg->recipient_handle, MW_WINDOW_MESSAGE);
+        // Poll faster while scanning so results appear promptly
+        {
+            uint32_t interval = (s_wifi == WSCAN_SCANNING)
+                                ? (MW_TICKS_PER_SECOND / 2)
+                                : MW_TICKS_PER_SECOND;
+            mw_set_timer(interval, msg->recipient_handle, MW_WINDOW_MESSAGE);
+        }
         break;
 
     case MW_TOUCH_DOWN_MESSAGE: {
@@ -238,12 +263,27 @@ static void message(const mw_message_t *msg)
         int16_t cy = (int16_t)(msg->message_data & 0xFFFF);
         if (cy >= 0 && cy < TAB_H) {
             int new_tab = cx / TAB_W;
-            if (new_tab >= 0 && new_tab < TAB_COUNT)
+            if (new_tab >= 0 && new_tab < TAB_COUNT) {
+                tab_t prev = s_tab;
                 s_tab = (tab_t)new_tab;
+                // Auto-start scan when switching to WiFi tab
+                if (s_tab == TAB_WIFI && prev != TAB_WIFI &&
+                    s_wifi == WSCAN_IDLE && kitt.wifi_enabled()) {
+                    s_wifi        = WSCAN_SCANNING;
+                    s_wanim       = 0;
+                    s_wscan_ticks = 0;
+                    kitt.wifi_scan_start();
+                }
+            }
         } else if (s_tab == TAB_WIFI && cy >= TAB_H) {
-            if (s_wifi != WSCAN_SCANNING && kitt.wifi_enabled()) {
-                s_wifi  = WSCAN_SCANNING;
-                s_wanim = 0;
+            if (s_wifi == WSCAN_SCANNING) {
+                // Tap to cancel scan
+                esp_wifi_scan_stop();
+                s_wifi = WSCAN_IDLE;
+            } else if (s_wifi != WSCAN_SCANNING && kitt.wifi_enabled()) {
+                s_wifi        = WSCAN_SCANNING;
+                s_wanim       = 0;
+                s_wscan_ticks = 0;
                 kitt.wifi_scan_start();
             }
         }
@@ -253,8 +293,10 @@ static void message(const mw_message_t *msg)
 
     case MW_WINDOW_REMOVED_MESSAGE:
         taskbar_unregister(s_handle);
-        s_handle = MW_INVALID_HANDLE;
-        s_wifi   = WSCAN_IDLE;
+        s_handle      = MW_INVALID_HANDLE;
+        s_wifi        = WSCAN_IDLE;
+        s_wscan_ticks = 0;
+        esp_wifi_scan_stop();
         break;
 
     default:

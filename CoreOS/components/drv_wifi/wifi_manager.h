@@ -10,7 +10,7 @@ void wifi_manager_deinit();
 bool wifi_manager_enabled();
 void wifi_manager_enable();
 void wifi_manager_disable();
-void wifi_manager_scan_start();
+bool wifi_manager_scan_start();
 bool wifi_manager_scan_done();
 int  wifi_manager_scan_count();
 void wifi_manager_scan_get_ssid(int index, char* buf, size_t len);

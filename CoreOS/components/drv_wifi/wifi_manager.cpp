@@ -94,12 +94,18 @@ bool wifi_manager_enabled()  { return wifi_on && !wifi_yielded; }
 void wifi_manager_enable()   { esp_wifi_start(); wifi_on = true; }
 void wifi_manager_disable()  { esp_wifi_stop();  wifi_on = false; }
 
-void wifi_manager_scan_start() {
-    if (!wifi_on || wifi_yielded) return;
+bool wifi_manager_scan_start() {
+    if (!wifi_on || wifi_yielded) return false;
     scan_complete = false;
     scan_results  = 0;
     wifi_scan_config_t scan_cfg = {};
-    esp_wifi_scan_start(&scan_cfg, false);
+    esp_err_t err = esp_wifi_scan_start(&scan_cfg, false);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "scan_start failed: %s", esp_err_to_name(err));
+        scan_complete = true; // mark done so UI doesn't hang
+        return false;
+    }
+    return true;
 }
 
 bool wifi_manager_scan_done()  { return scan_complete; }

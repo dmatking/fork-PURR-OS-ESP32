@@ -95,8 +95,13 @@ static int gen_buf_tail = 0;
 static KITT::touch_event_t last_touch = {};
 
 // Watchdog heartbeat
-static uint32_t last_heartbeat_ms = 0;
+static uint32_t last_heartbeat_ms   = 0;
 static uint32_t last_battery_refresh = 0;
+static uint32_t last_ram_check_ms   = 0;
+
+// RAM panic thresholds
+#define RAM_LOW_KB       30   // PURR_PANIC_BLUE — warn, OS still running
+#define RAM_CRITICAL_KB   8   // PURR_PANIC_RED  — reboot imminent
 
 // Callbacks
 static void (*tray_cb)(const KITT::tray_state_t*)                                = nullptr;
@@ -500,6 +505,21 @@ void KITT::update() {
             }
         }
     }
+
+    // RAM panic check — every 10s
+    if (now - last_ram_check_ms >= 10000) {
+        last_ram_check_ms = now;
+        uint32_t free_kb = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
+        if (free_kb <= RAM_CRITICAL_KB) {
+            char msg[40];
+            snprintf(msg, sizeof(msg), "Free RAM: %lukB", (unsigned long)free_kb);
+            purr_panic(PURR_STOP_MEM_FULL, PURR_PANIC_RED, msg);
+        } else if (free_kb <= RAM_LOW_KB) {
+            char msg[40];
+            snprintf(msg, sizeof(msg), "Free RAM: %lukB", (unsigned long)free_kb);
+            purr_panic(PURR_STOP_MEM_FULL, PURR_PANIC_BLUE, msg);
+        }
+    }
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────────
@@ -689,7 +709,7 @@ bool KITT::sd_available() { return false; }
 void KITT::wifi_enable()                                    { wifi_manager_enable(); }
 void KITT::wifi_disable()                                   { wifi_manager_disable(); }
 bool KITT::wifi_enabled()                                   { return cfg.wifi && wifi_manager_enabled(); }
-void KITT::wifi_scan_start()                                { wifi_manager_scan_start(); }
+bool KITT::wifi_scan_start()                                { return wifi_manager_scan_start(); }
 bool KITT::wifi_scan_done()                                 { return wifi_manager_scan_done(); }
 int  KITT::wifi_scan_count()                                { return wifi_manager_scan_count(); }
 void KITT::wifi_scan_get_ssid(int i, char* b, size_t l)     { wifi_manager_scan_get_ssid(i, b, l); }
