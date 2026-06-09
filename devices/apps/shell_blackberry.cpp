@@ -68,11 +68,11 @@ static bb_state_t   bb_state = BB_HOME;
 static int          bb_tab   = 1;  // "All" default
 
 // ── App list ──────────────────────────────────────────────────────────────────
-#define MAX_BB_APPS 32
+#define MAX_BB_APPS 16
 
 typedef struct {
     char    name[24];
-    char    path[256];
+    char    path[128];
     bool    is_admin;
     bool    is_builtin;
     uint8_t catalog_idx;
@@ -105,7 +105,7 @@ static void bb_scan_apps(void)
         bool admin = (strcmp(ext, ".claw") == 0);
         if (!admin && strcmp(ext, ".paws") != 0) continue;
         bb_app_t *a = &bb_apps[bb_napp++];
-        snprintf(a->path, sizeof(a->path), "/sdcard/apps/%.242s", ent->d_name);
+        snprintf(a->path, sizeof(a->path), "/sdcard/apps/%.114s", ent->d_name);
         strncpy(a->name, ent->d_name, sizeof(a->name) - 1);
         a->name[sizeof(a->name) - 1] = '\0';
         char *dot = strrchr(a->name, '.');
