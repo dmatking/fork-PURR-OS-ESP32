@@ -221,6 +221,13 @@ else()
     message(FATAL_ERROR "Unknown TARGET_DEVICE='${TARGET_DEVICE}'. Valid: heltec, cyd, cyd_s028r, cyd_s024c, cyd_boot, tdeck, tdeck_plus, jc3248w535, waveshare169")
 endif()
 
+# ── Lua runtime ──────────────────────────────────────────────────────────────
+if(PURR_ENABLE_LUA)
+    list(APPEND SRCS "../system/kernel/modules/lua_runtime.cpp")
+    list(APPEND REQUIRES lib_lua)
+    message(STATUS "Lua runtime: enabled")
+endif()
+
 # ── MicroPython runtime ───────────────────────────────────────────────────────
 if(NOT BUILD_MINI)
     set(_mp_header "${CMAKE_CURRENT_SOURCE_DIR}/../components/micropython/ports/embed/port/micropython_embed.h")

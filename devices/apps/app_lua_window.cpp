@@ -31,7 +31,6 @@
 #include "miniwin.h"
 #include "gl/gl.h"
 #include "purr_apps_common.h"
-#include "partition_manager.h"
 #include "kitt.h"
 #include <lua.hpp>
 #include <stdlib.h>
@@ -298,7 +297,7 @@ static int l_kitt_wifi_connected(lua_State *L)
 
 static int l_kitt_sd_available(lua_State *L)
 {
-    lua_pushboolean(L, pm_sd_available());
+    lua_pushboolean(L, kitt.sd_available());
     return 1;
 }
 
