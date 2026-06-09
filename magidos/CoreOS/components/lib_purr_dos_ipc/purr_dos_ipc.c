@@ -105,18 +105,31 @@ static void _notify_poll(uint8_t *mem, uint16_t es, uint16_t di)
 
 // ---------------------------------------------------------------------------
 // Main dispatch — called by drv_8086 on INT 0xE0
-// Register file pointer type is placeholder until 8086tiny is vendored.
+// Reads AH and register operands from 8086tiny's register file
 // ---------------------------------------------------------------------------
 void purr_dos_ipc_dispatch(uint8_t *mem)
 {
-    // TODO: replace these with actual 8086tiny register file reads once vendored
-    // For now these are stubs that demonstrate the dispatch pattern.
-    uint8_t  ah = 0;    // regs->ah
-    uint16_t ds = 0;    // regs->ds
-    uint16_t si = 0;    // regs->si
-    uint16_t es = 0;    // regs->es
-    uint16_t di = 0;    // regs->di
-    uint16_t cx = 0;    // regs->cx
+    // Access 8086tiny's register file
+    // regs8 and regs16 are declared in 8086tiny.c and exported via drv_8086
+    // The register file layout uses 8086tiny's conventions:
+    // - regs16[0] = AX, regs8[1] = AH
+    // - regs16[11] = DS
+    // - regs16[6] = SI, regs16[7] = DI
+    // - regs16[8] = ES
+    // - regs16[1] = CX
+
+    // Read the command from AH register
+    // AH is the high byte of AX: regs8[1] (8086tiny packs AH at regs8[1])
+    extern unsigned char regs8[];
+    extern unsigned short *regs16;
+
+    uint8_t  ah = regs8[1];         // AH (high byte of AX)
+    uint16_t ax = regs16[0];        // AX
+    uint16_t ds = regs16[11];       // DS
+    uint16_t si = regs16[6];        // SI
+    uint16_t es = regs16[8];        // ES
+    uint16_t di = regs16[7];        // DI
+    uint16_t cx = regs16[1];        // CX
 
     switch ((purr_dos_cmd_t)ah) {
         case DOS_IPC_LORA_SEND:     _lora_send(mem, ds, si, cx);        break;
