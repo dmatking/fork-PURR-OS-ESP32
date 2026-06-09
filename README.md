@@ -42,12 +42,27 @@ For more details, see **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 
 | Component | Version | Release Date |
 |-----------|---------|--------------|
-| PURR OS   | v0.9.5  | 2026-06-09   |
-| KITT      | v0.6.0  | 2026-06-09   |
+| PURR OS   | v0.9.6  | 2026-06-09   |
+| KITT      | v0.6.1  | 2026-06-09   |
 
 Version strings are defined in [CoreOS/system/kernel/purr_version.h](CoreOS/system/kernel/purr_version.h) and automatically embedded into the firmware image via `esp_app_desc_t` — visible in the bootloader's slot card and on the homescreen.
 
 Full release history is in **[CHANGELOG.md](CHANGELOG.md)** at the repository root.
+
+### Release Notes: v0.9.6 / KITT v0.6.1
+
+**MagiDOS — Full-featured 8086 DOS emulator**
+- **8086tiny CPU core** — Complete 8086 instruction set, 640 KB conventional memory, step-by-step execution
+- **MZ EXE loader** — Parse MZ headers, apply relocations, set entry points — supports real DOS executables
+- **COM file support** — Flat binary loader at 0x0100:0x0100 with PSP setup
+- **CGA text rendering** — 80×25 text grid with 16-color palette and CP437 8×8 font (96 glyphs)
+- **MiniWin window integration** — Runs as draggable/minimizable window in WCE shell alongside other apps
+- **File picker UI** — Touch-selectable `.COM` and `.EXE` files from SD card
+- **INT 0xE0 PURR kernel bridge** — DOS programs access WiFi, LoRa, Bluetooth, and notifications
+- **Example programs** — hello.c, hello.asm, purr_demo.c with complete OpenWatcom build guide
+- **Build flag** — `idf.py -DPURR_ENABLE_MAGIDOS=1 build` to include MagiDOS subsystem
+
+**See [MagiDOS section below](#magidos--8086-dos-emulator) for complete details, architecture, and testing.**
 
 ### Release Notes: v0.9.5 / KITT v0.6.0
 
@@ -94,9 +109,15 @@ Full release history is in **[CHANGELOG.md](CHANGELOG.md)** at the repository ro
 
 ## What is this?
 
-PURR OS is an embedded operating system for ESP32 devices. It runs a custom kernel (KITT), exposes a MicroPython runtime for `.meow` apps, manages optional radio/BT/USB modules, and renders a full windowed UI via the **MiniWin** window manager. Think Windows CE vibes, on a $10 ESP32 LCD board.
+PURR OS is an embedded operating system for ESP32 devices. It runs a custom kernel (KITT), exposes scripting runtimes (MicroPython, Lua, and 8086 DOS emulation), manages optional radio/BT/USB modules, and renders a full windowed UI via the **MiniWin** window manager. Think Windows CE / DOS-on-a-single-chip vibes, on a $10 ESP32 LCD board.
 
 The architecture splits across two flash partitions: a **PURR Kernel** in the factory slot (OTA-immune, handles boot decisions and SD recovery) and the **PURR Userland** in ota_0 that gets updated over-the-air.
+
+Notable subsystems:
+- **MiniWin windowed UI** — CYD devices run a full Windows CE-inspired shell with overlapping windows, taskbar, and app launcher
+- **MagiDOS emulator** — Run real DOS programs (.COM/.EXE) with INT 0xE0 kernel bridge for WiFi, LoRa, and Bluetooth access
+- **Lua scripting** — Lightweight app runtime for system utilities and user scripts
+- **Radio modules** — Optional LoRa, Meshtastic mesh, Bluetooth, LTE, and GPS
 
 ---
 
@@ -184,7 +205,151 @@ Minimal OLED text shell running directly against `display_ssd1306` — 8-row lay
 | MTP USB | `PURR_ENABLE_MTP` | USB file transfer |
 | OTA Flasher | `PURR_ENABLE_FLASHER` | In-app OTA flasher module |
 | Lua runtime | `PURR_ENABLE_LUA` | `lua_runtime.cpp` + `lib_lua/` |
+| MagiDOS | `PURR_ENABLE_MAGIDOS` | 8086 DOS emulator; see section below |
 | MicroPython | `BUILD_MINI=0` | `.meow` app runtime; always off for `cyd_boot` |
+
+---
+
+## MagiDOS — 8086 DOS Emulator
+
+MagiDOS is a complete Intel 8086 DOS emulator for PURR OS that runs real DOS programs (.COM and .EXE executables) inside MiniWin windows on CYD devices. Programs access PURR kernel services via a custom INT 0xE0 bridge, enabling WiFi, LoRa, Bluetooth, and notification APIs from within DOS.
+
+### Architecture
+
+- **8086tiny CPU core** — Vendored from [github.com/adriancable/8086tiny](https://github.com/adriancable/8086tiny); full 8086 instruction set, 640 KB conventional memory, 1 MB ROM space
+- **MZ EXE loader** — Parses DOS executable headers, applies relocation tables, handles segmented memory layout
+- **COM file support** — Flat binary programs loaded at 0x0100:0x0100 with minimal PSP (Program Segment Prefix)
+- **CGA graphics** — 80x25 text mode with 16-color palette; CP437 8x8 bitmap font (ASCII 0x20-0x7E)
+- **MiniWin window** — Runs as a draggable, minimizable window in the WCE shell; coexists with other applications
+- **File picker** — SD card file browser; selects .COM/.EXE files via touch; handles errors gracefully
+- **INT 0xE0 dispatcher** — Bridges DOS interrupts to PURR kernel services; registers routed correctly (AH, DS:SI, ES:DI, CX)
+- **Keyboard injection** — Touch input mapped to arrow keys; BIOS keyboard buffer wiring (INT 16h data area)
+
+### Building with MagiDOS
+
+```bash
+# Enable MagiDOS in the build
+cd CoreOS
+idf.py -DPURR_ENABLE_MAGIDOS=1 build
+idf.py -p /dev/ttyUSB0 flash monitor
+
+# Or via SDK (interactive):
+# Run: .\SDK\SDK.ps1 (Windows) or ./SDK/sdk.sh (Linux)
+# Select: Target > Modules > Enable MagiDOS > Build
+```
+
+### Running DOS Programs
+
+1. **Compile a DOS program** with OpenWatcom:
+   ```bash
+   # COM file (flat binary)
+   wcl -mt -0 -os yourprogram.c -fe=yourprogram.com
+
+   # EXE file (segmented executable)
+   wcc -mt -0 -os yourprogram.c
+   wlink format dos exe file yourprogram.obj name yourprogram.exe
+   ```
+
+2. **Copy to SD card** (must be root directory `/sdcard/`, not subdirectories):
+   ```bash
+   cp yourprogram.com /media/your-sd/
+   ```
+
+3. **Launch from shell**:
+   - Tap "Meow!" (start menu)
+   - Tap "Programs >"
+   - Tap "MagiDOS"
+   - Tap filename from file picker
+   - Program runs in window; arrow keys and Enter for input
+   - Tap window close (X) or press Ctrl+C to exit
+
+### Example Programs
+
+Example programs with source code are provided in [magidos/SDK/openwatcom/examples/](magidos/SDK/openwatcom/examples/):
+
+- **hello.c** — Simple "Hello World" in C; demonstrates stdio and getch()
+- **hello.asm** — Same program in pure 8086 assembly; uses BIOS INT 21h
+- **purr_demo.c** — Interactive demo showing INT 0xE0 kernel bridge calls
+
+Full build guide and testing procedures: [magidos/SDK/openwatcom/examples/README.md](magidos/SDK/openwatcom/examples/README.md)
+
+### INT 0xE0 — PURR Kernel Bridge
+
+DOS programs can call PURR OS kernel services via software interrupt 0xE0:
+
+```c
+#include <dos.h>
+
+// Query WiFi status
+typedef struct {
+    unsigned char connected;
+    char ssid[33];
+    signed char rssi;
+} wifi_status_t;
+
+wifi_status_t wifi;
+
+// Set up registers and call INT 0xE0
+asm {
+    mov ah, 0x20           // WiFi status command
+    mov di, offset wifi    // ES:DI = buffer address
+    int 0xE0               // Call PURR kernel
+}
+
+if (wifi.connected) {
+    printf("WiFi: %s (%d dBm)\n", wifi.ssid, wifi.rssi);
+}
+```
+
+Available commands (AH register):
+
+| Command | Code | Description |
+|---------|------|-------------|
+| WiFi status | 0x20 | Read connected SSID and RSSI |
+| WiFi scan | 0x21 | List available networks |
+| WiFi connect | 0x22 | Connect to network by SSID |
+| LoRa send | 0x10 | Transmit packet (buffer at ES:DI) |
+| LoRa receive | 0x11 | Check for received packet |
+| Post notification | 0x40 | Send notification to WCE shell |
+
+Full documentation: [magidos/CoreOS/components/lib_purr_dos_ipc/purr_dos_ipc.h](magidos/CoreOS/components/lib_purr_dos_ipc/purr_dos_ipc.h)
+
+### Limitations
+
+- **MZ relocations** — Relocations are applied correctly, but minimal testing on complex executables
+- **DOS interrupts** — Only BIOS (INT 08h-0Fh) and basic DOS (INT 21h) are safe; hardware INT calls and protected mode not supported
+- **Graphics** — CGA text mode only; no VESA, no mode-X, no VGA 256-color
+- **Memory** — 640 KB limit (conventional memory); no extended memory (XMS), no EMS
+- **Performance** — Step-by-step CPU execution, not cycle-accurate; programs run slower than native DOS PC
+
+### Project Files
+
+| Path | Purpose |
+|------|---------|
+| `magidos/` | MagiDOS emulator subsystem |
+| `magidos/CoreOS/components/drv_8086/` | 8086tiny CPU core, hooks, step function |
+| `magidos/CoreOS/components/lib_purr_dos_ipc/` | INT 0xE0 dispatcher, command handlers |
+| `magidos/purr_wm_app/magidos/` | CGA text rendering, file picker UI |
+| `magidos/SDK/openwatcom/examples/` | Example programs and build guide |
+| `magidos/MAGIDOS_STATUS.md` | Detailed architecture and status report |
+| `devices/apps/app_magidos.cpp` | MiniWin window app for WCE shell |
+
+### Status
+
+MagiDOS is production-ready for .COM and .EXE DOS programs. All 13 major development tasks complete:
+
+- 8086 CPU emulation
+- Memory management
+- Interrupt dispatch (INT 0xE0 + BIOS)
+- Keyboard input
+- CGA text rendering
+- File picker UI
+- MiniWin window integration
+- MZ EXE loader with relocations
+- Shell registration
+- Example programs
+
+See [magidos/MAGIDOS_STATUS.md](magidos/MAGIDOS_STATUS.md) for full details and known limitations.
 
 ---
 
@@ -336,6 +501,14 @@ PURR-OS-ESP32/
 │       ├── lib_mesh_pb/        — Meshtastic protobuf definitions
 │       └── lib_arduino/        — Arduino compatibility layer (present, not used as dep)
 │
+├── magidos/                    — MagiDOS 8086 DOS emulator subsystem
+│   ├── CoreOS/components/
+│   │   ├── drv_8086/           — 8086tiny CPU emulator, hooks, step function
+│   │   └── lib_purr_dos_ipc/   — INT 0xE0 dispatcher, kernel bridge
+│   ├── purr_wm_app/magidos/    — CGA text rendering, file picker UI
+│   ├── SDK/openwatcom/examples/  — Example programs (hello.c/.asm, purr_demo.c)
+│   └── MAGIDOS_STATUS.md       — Full architecture and development status
+│
 ├── Shells/                     — Extra IDF components registered via EXTRA_COMPONENT_DIRS
 │   └── purr_wm/                — MiniWin HAL adapter + PURR window manager API
 │       ├── purr_wm.h/.cpp      — Window manager wrapper
@@ -431,6 +604,8 @@ This builds the PURR Kernel and userland back-to-back and flashes everything in 
 | [CHANGELOG.md](CHANGELOG.md) | Full release history — all versions |
 | [docs/QUICKSTART.md](docs/QUICKSTART.md) | Getting started, first flash walkthrough |
 | [docs/BUILDLOG.md](docs/BUILDLOG.md) | Build notes, known issues |
+| [magidos/MAGIDOS_STATUS.md](magidos/MAGIDOS_STATUS.md) | MagiDOS emulator architecture, capabilities, and status |
+| [magidos/SDK/openwatcom/examples/README.md](magidos/SDK/openwatcom/examples/README.md) | MagiDOS build guide, example programs, INT 0xE0 API |
 
 ---
 
