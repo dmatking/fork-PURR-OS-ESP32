@@ -12,12 +12,17 @@
 
 extern KITT kitt;
 
+typedef enum { TAB_USER, TAB_ADMIN, TAB_COUNT } app_tab_t;
+
 static mw_handle_t s_handle = MW_INVALID_HANDLE;
 static mw_handle_t s_script_win = MW_INVALID_HANDLE;
 static app_lua_window_t *s_script = NULL;
+static app_tab_t s_tab = TAB_USER;
 
 #define WIN_W    240
 #define WIN_H    190
+#define TAB_H    16
+#define TAB_W    (WIN_W / TAB_COUNT)
 #define ENTRY_H  13
 #define MAX_APPS 32
 
@@ -30,6 +35,38 @@ typedef struct {
 static app_entry_t s_apps[MAX_APPS];
 static int s_app_count = 0;
 static int s_scroll = 0;
+static const char *const tab_labels[TAB_COUNT] = { "User", "Admin" };
+
+static void paint_tab_bar(const mw_gl_draw_info_t *d)
+{
+    mw_gl_set_fill(MW_GL_FILL);
+    mw_gl_set_border(MW_GL_BORDER_OFF);
+    mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
+    mw_gl_set_font(MW_GL_FONT_9);
+
+    for (int i = 0; i < TAB_COUNT; i++) {
+        int16_t tx = (int16_t)(i * TAB_W);
+        mw_gl_set_solid_fill_colour(WCE_BAR);
+        mw_gl_rectangle(d, tx, 0, TAB_W, TAB_H);
+        if (i == (int)s_tab) {
+            mw_gl_set_fg_colour(WCE_DARK);
+            mw_gl_hline(d, tx, (int16_t)(tx + TAB_W - 1), 0);
+            mw_gl_vline(d, tx, 0, (int16_t)(TAB_H - 1));
+            mw_gl_set_fg_colour(WCE_HI);
+        } else {
+            mw_gl_set_fg_colour(WCE_HI);
+            mw_gl_hline(d, tx, (int16_t)(tx + TAB_W - 1), 0);
+            mw_gl_vline(d, tx, 0, (int16_t)(TAB_H - 1));
+            mw_gl_set_fg_colour(WCE_DARK);
+        }
+        mw_gl_hline(d, tx, (int16_t)(tx + TAB_W - 1), (int16_t)(TAB_H - 1));
+        mw_gl_vline(d, (int16_t)(tx + TAB_W - 1), 0, (int16_t)(TAB_H - 1));
+        mw_gl_set_fg_colour(WCE_TXT);
+        mw_gl_string(d, (int16_t)(tx + 6), 4, tab_labels[i]);
+    }
+    mw_gl_set_fg_colour(WCE_SHD);
+    mw_gl_hline(d, 0, WIN_W - 1, TAB_H);
+}
 
 static void scan_apps(void)
 {
@@ -49,7 +86,7 @@ static void scan_apps(void)
         bool is_admin = false;
         if (strcmp(ext, ".claw") == 0) {
             is_admin = true;
-        } else if (strcmp(ext, ".paws") == 0) {
+        } else if (strcmp(ext, ".paw") == 0) {
             is_admin = false;
         } else {
             continue;
@@ -59,8 +96,8 @@ static void scan_apps(void)
         snprintf(app->path, sizeof(app->path), "/sdcard/apps/%s", ent->d_name);
         strncpy(app->name, ent->d_name, sizeof(app->name) - 1);
         app->name[sizeof(app->name) - 1] = '\0';
-        if (app->name[strlen(app->name) - (is_admin ? 5 : 5)] == '.')
-            app->name[strlen(app->name) - (is_admin ? 5 : 5)] = '\0';
+        if (app->name[strlen(app->name) - 4] == '.')
+            app->name[strlen(app->name) - 4] = '\0';
         app->is_admin = is_admin;
         s_app_count++;
     }
@@ -114,31 +151,48 @@ static void paint(mw_handle_t h, const mw_gl_draw_info_t *d)
     mw_gl_set_solid_fill_colour(WCE_BAR);
     mw_gl_rectangle(d, 0, 0, cw, ch);
 
+    paint_tab_bar(d);
+
     mw_gl_set_font(MW_GL_FONT_9);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
 
     if (!kitt.sd_available()) {
         mw_gl_set_fg_colour(WCE_SHD);
-        mw_gl_string(d, 4, 10, "SD card not available");
+        mw_gl_string(d, 4, (int16_t)(TAB_H + 10), "SD card not available");
         return;
     }
 
-    if (s_app_count == 0) {
+    int tab_app_count = 0;
+    for (int i = 0; i < s_app_count; i++) {
+        bool is_admin = s_apps[i].is_admin;
+        if ((s_tab == TAB_USER && !is_admin) || (s_tab == TAB_ADMIN && is_admin)) {
+            tab_app_count++;
+        }
+    }
+
+    if (tab_app_count == 0) {
         mw_gl_set_fg_colour(WCE_SHD);
-        mw_gl_string(d, 4, 10, "No apps found");
-        mw_gl_string(d, 4, 26, "Place .paws or .claw");
-        mw_gl_string(d, 4, 40, "files in /sdcard/apps/");
+        mw_gl_string(d, 4, (int16_t)(TAB_H + 10), "No apps in this tab");
+        mw_gl_string(d, 4, (int16_t)(TAB_H + 26), "Place .paw (user) or");
+        mw_gl_string(d, 4, (int16_t)(TAB_H + 40), ".claw (admin) files");
         return;
     }
 
-    int visible = (ch - 2) / ENTRY_H;
-    for (int i = 0; i < visible && s_scroll + i < s_app_count; i++) {
-        int16_t y = (int16_t)(2 + i * ENTRY_H);
-        app_entry_t *app = &s_apps[s_scroll + i];
-        mw_gl_set_fg_colour(app->is_admin ? 0xFF0000u : WCE_TXT);
-        mw_gl_string(d, 4, y, app->name);
-        mw_gl_set_fg_colour(WCE_SHD);
-        mw_gl_hline(d, 0, (int16_t)(cw - 1), (int16_t)(y + ENTRY_H - 1));
+    int visible = (ch - TAB_H - 2) / ENTRY_H;
+    int rendered = 0;
+    for (int i = 0; i < s_app_count; i++) {
+        app_entry_t *app = &s_apps[i];
+        if ((s_tab == TAB_USER && app->is_admin) || (s_tab == TAB_ADMIN && !app->is_admin)) {
+            continue;
+        }
+        if (rendered >= s_scroll && rendered < s_scroll + visible) {
+            int16_t y = (int16_t)(TAB_H + 2 + (rendered - s_scroll) * ENTRY_H);
+            mw_gl_set_fg_colour(app->is_admin ? 0xFF0000u : WCE_TXT);
+            mw_gl_string(d, 4, y, app->name);
+            mw_gl_set_fg_colour(WCE_SHD);
+            mw_gl_hline(d, 0, (int16_t)(cw - 1), (int16_t)(y + ENTRY_H - 1));
+        }
+        rendered++;
     }
 }
 
@@ -152,11 +206,43 @@ static void message(const mw_message_t *msg)
         break;
 
     case MW_TOUCH_DOWN_MESSAGE: {
+        int16_t cx = (int16_t)((msg->message_data >> 16) & 0xFFFF);
+        int16_t cy = (int16_t)(msg->message_data & 0xFFFF);
+
+        // Check if click is in tab bar
+        if (cy < TAB_H) {
+            int tab = cx / TAB_W;
+            if (tab >= 0 && tab < TAB_COUNT) {
+                s_tab = (app_tab_t)tab;
+                s_scroll = 0;
+                mw_paint_window_client(msg->recipient_handle);
+            }
+            break;
+        }
+
         if (s_app_count == 0) break;
 
-        int16_t cy = (int16_t)(msg->message_data & 0xFFFF);
-        int idx = cy / ENTRY_H + s_scroll;
-        if (idx < 0 || idx >= s_app_count) break;
+        // Adjust y to content area below tabs
+        int16_t content_y = (int16_t)(cy - TAB_H);
+
+        // Find which app in the current tab was clicked
+        int rendered = 0;
+        int clicked_idx = -1;
+        for (int i = 0; i < s_app_count; i++) {
+            if ((s_tab == TAB_USER && s_apps[i].is_admin) ||
+                (s_tab == TAB_ADMIN && !s_apps[i].is_admin)) {
+                continue;
+            }
+            if (rendered >= s_scroll && rendered < s_scroll + 20 &&
+                content_y >= rendered - s_scroll * ENTRY_H &&
+                content_y < (rendered - s_scroll + 1) * ENTRY_H) {
+                clicked_idx = i;
+                break;
+            }
+            rendered++;
+        }
+
+        if (clicked_idx < 0) break;
 
         if (s_script_win != MW_INVALID_HANDLE) {
             if (mw_get_window_flags(s_script_win) & MW_WINDOW_FLAG_IS_MINIMISED)
@@ -167,7 +253,7 @@ static void message(const mw_message_t *msg)
             break;
         }
 
-        app_entry_t *app = &s_apps[idx];
+        app_entry_t *app = &s_apps[clicked_idx];
 
         s_script = app_lua_window_create(app->path, app->is_admin);
         if (!s_script || !app_lua_window_is_running(s_script)) {
