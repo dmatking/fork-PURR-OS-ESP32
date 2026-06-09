@@ -2,6 +2,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Kernel Stop Codes */
 #define PURR_STOP_DEADBEEF "DEADBEEF"  /* Memory Corruption */
 #define PURR_STOP_APP_CRASH "APP_CRASH" /* Application Exception */
@@ -22,3 +26,7 @@ typedef enum {
  * @param msg       A short descriptive message
  */
 void purr_panic(const char* stop_code, purr_panic_level_t level, const char* msg);
+
+#ifdef __cplusplus
+}
+#endif

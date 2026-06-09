@@ -1,4 +1,4 @@
-# PURR OS — v0.9.4
+# PURR OS — v0.9.5
 
 > **MEGA DISCLAIMER:** This project is very much vibe-coded. It has gone from 0 to "Jesus Christ" at an alarming rate. It is fully open-source and humans are actively encouraged to help. Please.
 
@@ -42,12 +42,20 @@ For more details, see **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 
 | Component | Version | Release Date |
 |-----------|---------|--------------|
-| PURR OS   | v0.9.4  | 2026-06-08   |
-| KITT      | v0.5.3  | 2026-06-08   |
+| PURR OS   | v0.9.5  | 2026-06-09   |
+| KITT      | v0.6.0  | 2026-06-09   |
 
 Version strings are defined in [CoreOS/system/kernel/purr_version.h](CoreOS/system/kernel/purr_version.h) and automatically embedded into the firmware image via `esp_app_desc_t` — visible in the bootloader's slot card and on the homescreen.
 
 Full release history is in **[CHANGELOG.md](CHANGELOG.md)** at the repository root.
+
+### Release Notes: v0.9.5 / KITT v0.6.0
+
+- **Kernel panic screens** — `purr_panic()` renders full-screen BSOD: blue `:-/` (SYSTEM UNSTABLE, recoverable) and red `:-(' (SYSTEM CRASHED, reboots after 10s via `esp_restart()`); stop codes printed on screen and over serial; wired into KITT boot fail paths
+- **Software font for panic screens** — `display_font5x7.h` shared 5×7 bitmap font (ASCII 32-126) renders via `fill_rect` callbacks; used by ST7789 and ST7796 drivers; ILI9341 uses TFT_eSPI directly
+- **Serial `panic` shell command** — `panic [blue|red] [code] [msg]` triggers panic from UART0 shell; supports custom stop code and message
+- **PSRAM Lua allocator** — `PURR_HAS_PSRAM` flag routes `lua_newstate()` through `heap_caps_realloc(MALLOC_CAP_SPIRAM)` on T-Deck Plus and JC3248W535
+- **`tdeck_plus.defaults`** — SDK defaults file with full SPIRAM/OCT configuration for T-Deck Plus
 
 ### Release Notes: v0.9.4 / KITT v0.5.3
 

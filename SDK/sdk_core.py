@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PURR OS SDK v0.9.4 — interactive build / flash / monitor tool.
+"""PURR OS SDK v0.9.5 — interactive build / flash / monitor tool.
 Invoked by SDK.ps1 (or directly: python sdk_core.py [flags]).
 """
 

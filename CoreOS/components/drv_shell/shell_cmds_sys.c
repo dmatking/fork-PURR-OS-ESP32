@@ -9,6 +9,8 @@
 #include "freertos/task.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include "purr_panic.h"
 
 void cmd_sys_info(int argc, char **argv)
 {
@@ -72,4 +74,26 @@ void cmd_sys_reboot(int argc, char **argv)
     fflush(stdout);
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_restart();
+}
+
+/* panic [blue|red] [STOP_CODE] [message]
+ * Triggers a kernel panic screen. Defaults: blue, CATFAIL, "Manual panic". */
+void cmd_sys_panic(int argc, char **argv)
+{
+    purr_panic_level_t level = PURR_PANIC_BLUE;
+    const char *code = PURR_STOP_CATFAIL;
+    const char *msg  = "Manual panic via shell";
+
+    if (argc >= 2) {
+        if (strcmp(argv[1], "red") == 0)
+            level = PURR_PANIC_RED;
+    }
+    if (argc >= 3) code = argv[2];
+    if (argc >= 4) msg  = argv[3];
+
+    printf("Triggering %s panic: [%s] %s\n",
+           level == PURR_PANIC_RED ? "RED" : "BLUE", code, msg);
+    fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    purr_panic(code, level, msg);
 }

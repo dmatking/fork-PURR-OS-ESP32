@@ -76,7 +76,11 @@ void display_ili9341_draw_hline(int16_t x, int16_t y, int16_t w, uint16_t color)
     tft.drawFastHLine(x, y, w, color);
 }
 void display_ili9341_draw_string(int16_t x, int16_t y, const char* s, uint16_t fg, uint16_t bg, uint8_t size) {
-    (void)x; (void)y; (void)s; (void)fg; (void)bg; (void)size;
+    if (!s) return;
+    tft.setTextColor(fg, bg);
+    tft.setTextSize(size);
+    tft.setCursor(x, y);
+    tft.print(s);
 }
 
 #ifdef PURR_HAS_LVGL

@@ -3,6 +3,7 @@
 
 
 #include "display_st7789.h"
+#include "display_font5x7.h"
 
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
@@ -83,7 +84,9 @@ void display_st7789_clear() {
     display_st7789_fill_rect(0, 0, ST7789_TFT_WIDTH, ST7789_TFT_HEIGHT, _text_bg);
 }
 void display_st7789_text(uint8_t, const char*) {}   // LVGL handles text
-void display_st7789_draw_string(int16_t, int16_t, const char*, uint16_t, uint16_t, uint8_t) {}
+void display_st7789_draw_string(int16_t x, int16_t y, const char* s, uint16_t fg, uint16_t bg, uint8_t size) {
+    display_font5x7_draw_string(x, y, s, fg, bg, size, display_st7789_fill_rect);
+}
 
 void display_st7789_fill_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
     if (!s_panel || w <= 0 || h <= 0) return;

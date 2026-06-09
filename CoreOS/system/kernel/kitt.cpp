@@ -209,13 +209,14 @@ bool KITT::init(const char* device_json_path) {
     };
     if (esp_vfs_spiffs_register(&spiffs_cfg) != ESP_OK) {
         ESP_LOGE("kitt", "ERR 0x01 SPIFFS mount failed");
+        purr_panic(PURR_STOP_HAL_FAIL, PURR_PANIC_BLUE, "SPIFFS mount failed");
         return false;
     }
 
     // Step 3: parse device.json
     if (!device_config_load(device_json_path, &cfg)) {
         Serial.println("[kitt] ERR 0x01 device.json parse failed");
-        emergency_text("PURR OS", "ERR:0x01", "JSON parse fail");
+        purr_panic(PURR_STOP_CATFAIL, PURR_PANIC_BLUE, "device.json parse failed");
         return false;
     }
 
@@ -246,6 +247,7 @@ bool KITT::init(const char* device_json_path) {
 #endif
     } else {
         Serial.println("[kitt] ERR 0x02 unknown display type");
+        purr_panic(PURR_STOP_HAL_FAIL, PURR_PANIC_RED, "Unknown display type");
         return false;
     }
 

@@ -1,6 +1,6 @@
 # PURR OS — Overview
 
-**PURR OS v0.9.4 / KITT v0.5.3**
+**PURR OS v0.9.5 / KITT v0.6.0**
 
 > P.U.R.R. = Portable Unified Runtime & Radio Operating System
 

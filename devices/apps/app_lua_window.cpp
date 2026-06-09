@@ -403,7 +403,15 @@ app_lua_window_t *app_lua_window_create(const char *script_path, bool is_admin)
     w->mutex = xSemaphoreCreateMutex();
     if (!w->mutex) { free(w); return NULL; }
 
+#ifdef PURR_HAS_PSRAM
+    w->L = lua_newstate([](void *ud, void *ptr, size_t osize, size_t nsize) -> void * {
+        (void)ud; (void)osize;
+        if (nsize == 0) { heap_caps_free(ptr); return NULL; }
+        return heap_caps_realloc(ptr, nsize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }, NULL);
+#else
     w->L = luaL_newstate();
+#endif
     if (!w->L) { vSemaphoreDelete(w->mutex); free(w); return NULL; }
 
     luaL_openlibs(w->L);

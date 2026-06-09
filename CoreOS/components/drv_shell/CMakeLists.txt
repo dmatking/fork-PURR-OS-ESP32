@@ -24,6 +24,11 @@ idf_component_register(
     REQUIRES ${_shell_requires}
 )
 
+# Kernel headers (purr_panic.h etc.)
+target_include_directories(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel"
+)
+
 if(PURR_ENABLE_BT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SHELL_HAS_BT=1)
 endif()

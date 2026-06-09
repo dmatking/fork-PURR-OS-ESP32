@@ -1,6 +1,7 @@
 #include "purr_idf_compat.h"
 #include "kitt.h"
 #include "device_config.h"
+#include "purr_panic.h"
 #ifdef PURR_HAS_SHELL
 #include "drv_shell.h"
 #endif
@@ -20,7 +21,7 @@ void setup() {
 
     if (!kitt.init("/system/kernel/device.json")) {
         Serial.println("[KITT] FATAL: init failed");
-        kitt.emergency_text("KITT INIT FAIL", "See serial log", "Hold PWR to recover");
+        purr_panic(PURR_STOP_CATFAIL, PURR_PANIC_RED, "KITT init failed — see serial");
         while (true) delay(1000);
     }
 

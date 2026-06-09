@@ -34,6 +34,7 @@ void cmd_sys_tasks(int argc, char **argv);
 void cmd_sys_heap(int argc, char **argv);
 void cmd_sys_nvs_erase(int argc, char **argv);
 void cmd_sys_reboot(int argc, char **argv);
+void cmd_sys_panic(int argc, char **argv);
 void cmd_mw_paint (int argc, char **argv);
 void cmd_mw_tick  (int argc, char **argv);
 void cmd_mw_rect  (int argc, char **argv);
@@ -68,6 +69,7 @@ static const shell_cmd_t s_cmds[] = {
     { "heap",          "heap                        Show heap usage",                    cmd_sys_heap      },
     { "nvs-erase",     "nvs-erase                   Erase NVS partition",               cmd_sys_nvs_erase },
     { "reboot",        "reboot                      Restart the ESP32",                 cmd_sys_reboot    },
+    { "panic",         "panic [blue|red] [code] [msg]  Trigger kernel panic screen",   cmd_sys_panic     },
     { "mw-paint",          "mw-paint                    Queue MiniWin full repaint",              cmd_mw_paint       },
     { "mw-tick",           "mw-tick [N]                 Process N messages (default 200)",        cmd_mw_tick        },
     { "mw-rect",           "mw-rect x y w h 0xRRGGBB    Draw rect via HAL directly",             cmd_mw_rect        },

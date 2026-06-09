@@ -2,6 +2,37 @@
 
 ---
 
+## [0.9.5] — 2026-06-09 — KITT 0.6.0 — Kernel panic screens, PSRAM Lua allocator, serial panic command
+
+### Kernel panic screens (`CoreOS/system/kernel/purr_panic.cpp`, `purr_panic.h`)
+- Two panic levels: `PURR_PANIC_BLUE` (:-/ system unstable, recoverable) and `PURR_PANIC_RED` (:-( system crashed, reboots)
+- Blue screen: yellow-on-blue, shows `:-/` + `SYSTEM UNSTABLE`, footer "Tap to continue with instability", returns to caller
+- Red screen: yellow-on-red, shows `:-(" + `SYSTEM CRASHED`, footer "Rebooting...", halts 10 seconds then calls `esp_restart()`
+- Stop codes: `PURR_STOP_DEADBEEF`, `PURR_STOP_APP_CRASH`, `PURR_STOP_CATFAIL`, `PURR_STOP_MEM_FULL`, `PURR_STOP_WATCHDOG`, `PURR_STOP_HAL_FAIL`
+- Full serial dump on every panic (stop code, level, reason, optional log ring buffer)
+- Wired into KITT: SPIFFS mount fail → BLUE, device.json parse fail → BLUE, unknown display type → RED
+- Wired into main: KITT init fail → RED
+
+### Panic screens — display support
+- ILI9341 (CYD): uses TFT_eSPI `setTextColor` / `setTextSize` / `print`
+- ST7789 (Waveshare), ST7796 (JC3248W535): new software 5×7 bitmap font (`display_font5x7.h`) renders via `fill_rect` callback
+- `display_font5x7.h` — shared 95-glyph bitmap font (ASCII 32-126), scalable, display-agnostic
+
+### Serial panic command (`CoreOS/components/drv_shell/`)
+- New `panic` shell command: `panic`, `panic red`, `panic red STOP_CODE "message"`
+- `purr_panic.h` wrapped in `extern "C"` guards for C/C++ interop
+- `drv_shell/CMakeLists.txt` — added kernel include path for shell component
+
+### PSRAM Lua allocator (`devices/apps/app_lua_window.cpp`)
+- `#ifdef PURR_HAS_PSRAM`: replaces `luaL_newstate()` with `lua_newstate()` + custom allocator using `heap_caps_realloc(MALLOC_CAP_SPIRAM)`
+- `PURR_HAS_PSRAM` cmake flag wired for `jc3248w535` and `tdeck_plus` targets
+- `SDK/targets/tdeck_plus.defaults` created with full SPIRAM configuration
+
+### Version
+- `purr_version.h` — KITT 0.5.3 → **0.6.0**
+
+---
+
 ## [0.9.4] — 2026-06-08 — KITT 0.5.3 — Blackberry theme, Lua window API, touch fix, conditional modules
 
 ### Blackberry shell theme (`devices/apps/shell_blackberry.cpp`)
