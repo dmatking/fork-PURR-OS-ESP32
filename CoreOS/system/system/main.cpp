@@ -1,7 +1,7 @@
 // Sits between KITT and userland apps. Spawns the appropriate shell at boot.
 
 #include "../kernel/kitt.h"
-#ifdef PURR_DISPLAY_SSD1306
+#if defined(PURR_DISPLAY_SSD1306) || defined(PURR_FORCE_KITTEN_UI)
 #  include "../../apps/kitten_ui/kitten_ui.h"
 #endif
 #ifdef PURR_HAS_BOOTLOADER
@@ -157,14 +157,11 @@ static void system_task(void*) {
 #endif
 
     // ── Launch shell ─────────────────────────────────────────────────────────
-    if (kitt.display_width() <= 128) {
-        ESP_LOGI("sys", "launching KittenUI (OLED shell)");
-#ifdef PURR_DISPLAY_SSD1306
-        kitten_ui_start();
-#endif
-    } else {
-        // TEMP: shell registration disabled pending linker fix
-        // TODO: restore shell initialization once linker symbol issue is resolved
+#if defined(PURR_DISPLAY_SSD1306) || defined(PURR_FORCE_KITTEN_UI)
+    ESP_LOGI("sys", "launching KittenUI");
+    kitten_ui_start();
+#else
+    {
         ESP_LOGI("sys", "shells: TEMP disabled (linker symbol debug pending)");
         /* DISABLED PENDING LINKER DEBUG
 #ifdef PURR_HAS_BLACKBERRY_UI

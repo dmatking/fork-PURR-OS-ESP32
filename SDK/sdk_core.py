@@ -149,15 +149,16 @@ def _idf_py():
 # each other. Switching targets no longer requires a clean.
 
 _BUILD_DIRS = {
-    "heltec":       "build_heltec",
-    "cyd":          "build_cyd",
-    "cyd_s028r":    "build_cyd_s028r",
-    "cyd_s024c":    "build_cyd_s024c",
-    "cyd_boot":     "build_cyd_boot",
-    "tdeck":        "build_tdeck",
-    "tdeck_plus":   "build_tdeck_plus",
-    "jc3248w535":   "build_jc3248w535",
-    "waveshare169": "build_waveshare169",
+    "heltec":          "build_heltec",
+    "tembed_cc1101":   "build_tembed_cc1101",
+    "cyd":             "build_cyd",
+    "cyd_s028r":       "build_cyd_s028r",
+    "cyd_s024c":       "build_cyd_s024c",
+    "cyd_boot":        "build_cyd_boot",
+    "tdeck":           "build_tdeck",
+    "tdeck_plus":      "build_tdeck_plus",
+    "jc3248w535":      "build_jc3248w535",
+    "waveshare169":    "build_waveshare169",
 }
 
 def _build_dir(cfg):
@@ -175,6 +176,15 @@ TARGETS = {
         "spec":         "ESP32-S3  8MB  SSD1306  SX1262 LoRa  KittenUI (auto)",
         "shells":       ["kitten_ui"],
         "default_lora": True,
+        "default_ui":   "none",
+        "fixed":        False,
+    },
+    "tembed_cc1101": {
+        "chip":         "esp32s3",
+        "desc":         "LilyGo T-Embed CC1101",
+        "spec":         "ESP32-S3R8  16MB  8MB PSRAM  ST7789 170x320  CC1101 sub-GHz  rotary encoder  KittenUI (auto)",
+        "shells":       ["kitten_ui"],
+        "default_lora": False,
         "default_ui":   "none",
         "fixed":        False,
     },
@@ -454,8 +464,8 @@ def _sanitize_cfg(cfg):
     # mesh requires lora — strip if lora was just disabled
     if not cfg["modules"].get("lora"):
         cfg["modules"]["mesh"] = False
-    # ui_kernel: heltec is OLED-only with no touch — MiniWin not supported there
-    if target == "heltec":
+    # ui_kernel: encoder-only devices don't support MiniWin touch-driven WM
+    if target in ("heltec", "tembed_cc1101"):
         cfg["ui_kernel"] = "none"
     elif TARGETS.get(target, {}).get("fixed"):
         # fixed targets keep their current ui_kernel (no wizard override)
@@ -1283,7 +1293,7 @@ def main():
         description="PURR OS SDK — build / flash / monitor tool",
     )
     p.add_argument("--target",      choices=list(TARGETS.keys()),
-                   metavar="heltec|cyd_s028r|cyd_s024c|cyd|cyd_boot|tdeck|jc3248w535|waveshare169")
+                   metavar="heltec|tembed_cc1101|cyd_s028r|cyd_s024c|cyd|cyd_boot|tdeck|jc3248w535|waveshare169")
     p.add_argument("--build",       action="store_true")
     p.add_argument("--flash",       metavar="PORT|auto", default="",
                    help="Flash to port. Use 'auto' to detect automatically.")

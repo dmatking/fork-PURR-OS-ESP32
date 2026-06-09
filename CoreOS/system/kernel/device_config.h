@@ -16,6 +16,7 @@ typedef struct {
     bool     wifi;
     bool     bt;
     bool     lora;
+    bool     cc1101;
     bool     sd;
     uint16_t cpu_max_mhz;
     char     lora_region[8];

@@ -15,6 +15,9 @@
 #ifdef PURR_HAS_LORA
 #  include "lora_manager.h"
 #endif
+#ifdef PURR_HAS_CC1101
+#  include "cc1101_manager.h"
+#endif
 #ifdef PURR_HAS_MESH
 #  include "modules/purr_mesh.h"
 #endif
@@ -117,6 +120,12 @@ struct ButtonDef { uint8_t pin; bool last_state; };
 static ButtonDef buttons[MAX_BUTTONS];
 static int button_count = 0;
 
+// Rotary encoder state (PURR_HAS_ENCODER targets)
+#ifdef PURR_HAS_ENCODER
+static int8_t  enc_last_clk   = -1;
+static bool    enc_sw_last    = false;
+#endif
+
 // App / firmware lists
 static constexpr int MAX_APPS     = 32;
 static constexpr int MAX_FIRMWARE = 16;
@@ -180,6 +189,14 @@ static void push_raw_key(uint8_t pin, bool pressed) {
     }
 }
 
+static void push_gen_key(KITT::generic_key_t key, bool pressed) {
+    int next = (gen_buf_head + 1) % GEN_KEY_BUF_SIZE;
+    if (next != gen_buf_tail) {
+        gen_key_buf[gen_buf_head] = {key, pressed};
+        gen_buf_head = next;
+    }
+}
+
 static void poll_gpio_inputs() {
     for (int i = 0; i < button_count; i++) {
         bool state = !digitalRead(buttons[i].pin);  // active-low buttons
@@ -188,6 +205,25 @@ static void poll_gpio_inputs() {
             push_raw_key(buttons[i].pin, state);
         }
     }
+
+#ifdef PURR_HAS_ENCODER
+    // Rotary encoder: poll CLK edge, read DT for direction
+    int8_t clk = (int8_t)digitalRead(PURR_ENCODER_CLK);
+    if (clk != enc_last_clk && clk == 0) {
+        bool dt = (bool)digitalRead(PURR_ENCODER_DT);
+        KITT::generic_key_t dir = dt ? KITT::KEY_UP : KITT::KEY_DOWN;
+        push_gen_key(dir, true);
+        push_gen_key(dir, false);
+    }
+    enc_last_clk = clk;
+
+    // Encoder switch (active-low)
+    bool sw = !digitalRead(PURR_ENCODER_SW);
+    if (sw != enc_sw_last) {
+        enc_sw_last = sw;
+        push_raw_key(PURR_ENCODER_SW, sw);
+    }
+#endif
 }
 
 // ── Reserved combo detection ───────────────────────────────────────────────────
@@ -324,6 +360,18 @@ bool KITT::init(const char* device_json_path) {
     }
 #endif
 
+    // Step 11b: CC1101 sub-GHz radio
+#ifdef PURR_HAS_CC1101
+    if (cfg.cc1101) {
+        cc1101_manager_init(433.92f, 4.8f, 5.0f, 58.0f, 10);
+        if (cc1101_manager_enabled()) {
+            log("KITT", "cc1101 OK");
+        } else {
+            log("KITT", "ERR:0x04 CC1101 init fail");
+        }
+    }
+#endif
+
     // Step 12: Mesh stack (Meshtastic-compatible, requires LoRa)
 #ifdef PURR_HAS_MESH
     if (cfg.lora && lora_manager_enabled()) {
@@ -343,6 +391,16 @@ bool KITT::init(const char* device_json_path) {
     // Step 14: power manager
     power_manager_init(cfg.cpu_max_mhz);
     last_battery_refresh = millis();
+
+    // Step 14b: rotary encoder GPIO init
+#ifdef PURR_HAS_ENCODER
+    pinMode(PURR_ENCODER_CLK, INPUT_PULLUP);
+    pinMode(PURR_ENCODER_DT,  INPUT_PULLUP);
+    pinMode(PURR_ENCODER_SW,  INPUT_PULLUP);
+    enc_last_clk = (int8_t)digitalRead(PURR_ENCODER_CLK);
+    enc_sw_last  = false;
+    log("KITT", "encoder OK");
+#endif
 
     // Register LVGL keypad indev (LVGL targets only)
 #ifdef PURR_HAS_LVGL
@@ -460,6 +518,11 @@ void KITT::update() {
     // BT discovery polling
 #ifdef PURR_HAS_BT
     if (cfg.bt) bt_manager_update();
+#endif
+
+    // CC1101 RX polling
+#ifdef PURR_HAS_CC1101
+    if (cfg.cc1101) cc1101_manager_update();
 #endif
 
     // Pi state polling

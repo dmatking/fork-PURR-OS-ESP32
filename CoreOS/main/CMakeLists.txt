@@ -6,7 +6,7 @@
 # (no user -D flags), then a full second pass with all user flags applied.
 # The STATUS message below will appear twice; the second print is authoritative.
 
-set(TARGET_DEVICE  "heltec" CACHE STRING "Target: heltec | cyd | cyd_s028r | cyd_s024c | cyd_boot | tdeck | tdeck_plus | jc3248w535 | waveshare169")
+set(TARGET_DEVICE  "heltec" CACHE STRING "Target: heltec | tembed_cc1101 | cyd | cyd_s028r | cyd_s024c | cyd_boot | tdeck | tdeck_plus | jc3248w535 | waveshare169")
 set(BUILD_MINI     0        CACHE STRING "1 = strip MicroPython runtime")
 
 # CYD display variant (cyd target only)
@@ -32,6 +32,14 @@ else()
     set(_lora_default 0)
 endif()
 set(PURR_ENABLE_LORA ${_lora_default} CACHE STRING "Include LoRa radio manager")
+
+# CC1101: auto-enabled for T-Embed CC1101
+if(TARGET_DEVICE STREQUAL "tembed_cc1101")
+    set(_cc1101_default 1)
+else()
+    set(_cc1101_default 0)
+endif()
+set(PURR_ENABLE_CC1101 ${_cc1101_default} CACHE STRING "Include CC1101 sub-GHz radio manager")
 
 # Mesh: requires LoRa. Defaults off.
 set(PURR_ENABLE_MESH 0 CACHE STRING "Include Meshtastic mesh stack (requires LoRa)")
@@ -85,6 +93,11 @@ if(PURR_ENABLE_LORA)
     list(APPEND REQUIRES drv_lora lib_radiolib)
 endif()
 
+# ── CC1101 ────────────────────────────────────────────────────────────────────
+if(PURR_ENABLE_CC1101)
+    list(APPEND REQUIRES drv_cc1101 lib_radiolib)
+endif()
+
 # ── Mesh / Meshtastic ─────────────────────────────────────────────────────────
 if(PURR_ENABLE_MESH)
     if(NOT PURR_ENABLE_LORA)
@@ -119,6 +132,13 @@ endif()
 if(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND SRCS "../apps/kitten_ui/kitten_ui.cpp")
     list(APPEND INCLUDE_DIRS "../apps/kitten_ui")
+
+# ── Device-specific: LilyGo T-Embed CC1101 ───────────────────────────────────
+elseif(TARGET_DEVICE STREQUAL "tembed_cc1101")
+    list(APPEND SRCS "../apps/kitten_ui/kitten_ui.cpp")
+    list(APPEND INCLUDE_DIRS "../apps/kitten_ui")
+    set(PURR_HAS_PSRAM 1 CACHE STRING "" FORCE)
+    message(STATUS "T-Embed CC1101: ESP32-S3R8  ST7789 170x320  CC1101 433/868/915 MHz  rotary encoder")
 
 # ── Device-specific: CYD variants ────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c")
@@ -221,7 +241,7 @@ elseif(TARGET_DEVICE STREQUAL "waveshare169")
     message(WARNING "waveshare169: WIP target — ST7789 + CST816S, no shell yet.")
 
 else()
-    message(FATAL_ERROR "Unknown TARGET_DEVICE='${TARGET_DEVICE}'. Valid: heltec, cyd, cyd_s028r, cyd_s024c, cyd_boot, tdeck, tdeck_plus, jc3248w535, waveshare169")
+    message(FATAL_ERROR "Unknown TARGET_DEVICE='${TARGET_DEVICE}'. Valid: heltec, tembed_cc1101, cyd, cyd_s028r, cyd_s024c, cyd_boot, tdeck, tdeck_plus, jc3248w535, waveshare169")
 endif()
 
 # ── Lua runtime ──────────────────────────────────────────────────────────────
@@ -288,6 +308,25 @@ set(PURR_DEFS "")
 
 if(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND PURR_DEFS PURR_DISPLAY_SSD1306=1)
+elseif(TARGET_DEVICE STREQUAL "tembed_cc1101")
+    list(APPEND PURR_DEFS
+        PURR_DISPLAY_ST7789=1
+        PURR_FORCE_KITTEN_UI=1
+        PURR_HAS_PSRAM=1
+        PURR_HAS_ENCODER=1
+        PURR_ENCODER_CLK=1
+        PURR_ENCODER_DT=2
+        PURR_ENCODER_SW=0
+        PURR_ST7789_MOSI=10
+        PURR_ST7789_SCLK=12
+        PURR_ST7789_CS=11
+        PURR_ST7789_DC=13
+        PURR_ST7789_RST=9
+        PURR_ST7789_BL=15
+        PURR_ST7789_WIDTH=170
+        PURR_ST7789_HEIGHT=320
+        PURR_ST7789_SPI_HOST=SPI3_HOST
+    )
 elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c" OR TARGET_DEVICE STREQUAL "cyd")
     list(APPEND PURR_DEFS PURR_DISPLAY_ILI9341=1 PURR_HAS_PARTITION_MGR=1)
     if(CYD_DISPLAY_VARIANT STREQUAL "s024c" OR TARGET_DEVICE STREQUAL "cyd_s024c")
@@ -323,6 +362,9 @@ if(PURR_ENABLE_BT)
 endif()
 if(PURR_ENABLE_LORA)
     list(APPEND PURR_DEFS PURR_HAS_LORA=1)
+endif()
+if(PURR_ENABLE_CC1101)
+    list(APPEND PURR_DEFS PURR_HAS_CC1101=1)
 endif()
 if(PURR_ENABLE_MESH)
     list(APPEND PURR_DEFS PURR_HAS_MESH=1)

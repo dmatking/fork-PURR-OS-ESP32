@@ -63,14 +63,15 @@ bool device_config_load(const char* path, device_config_t* out) {
 
     out->sd = doc["sd"] | false;
 
-    out->wifi = false; out->bt = false; out->lora = false;
+    out->wifi = false; out->bt = false; out->lora = false; out->cc1101 = false;
     JsonArray radios = doc["radios"];
     if (radios) {
         for (JsonVariant v : radios) {
             const char* r = v.as<const char*>();
-            if (r && strcmp(r, "wifi") == 0) out->wifi = true;
-            if (r && strcmp(r, "bt")   == 0) out->bt   = true;
-            if (r && strcmp(r, "lora") == 0) out->lora = true;
+            if (r && strcmp(r, "wifi")   == 0) out->wifi   = true;
+            if (r && strcmp(r, "bt")     == 0) out->bt     = true;
+            if (r && strcmp(r, "lora")   == 0) out->lora   = true;
+            if (r && strcmp(r, "cc1101") == 0) out->cc1101 = true;
         }
     }
 

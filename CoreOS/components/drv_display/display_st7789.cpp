@@ -1,6 +1,5 @@
 // display_st7789.cpp — ST7789 display driver via esp_lcd (pure ESP-IDF)
-// Target: Waveshare 1.69" 240x280
-
+// Default: Waveshare 1.69" 240x280. Pin/res overrides via PURR_ST7789_* defines.
 
 #include "display_st7789.h"
 #include "display_font5x7.h"
@@ -15,13 +14,33 @@
 
 static const char* TAG = "st7789";
 
-#define LCD_HOST    SPI3_HOST
-#define LCD_MOSI    13
-#define LCD_SCLK    11
+// SPI host: use SPI2 if the display shares SPI2 pins, else SPI3 (default)
+#ifndef PURR_ST7789_SPI_HOST
+#  define PURR_ST7789_SPI_HOST SPI3_HOST
+#endif
+#ifndef PURR_ST7789_MOSI
+#  define PURR_ST7789_MOSI 13
+#endif
+#ifndef PURR_ST7789_SCLK
+#  define PURR_ST7789_SCLK 11
+#endif
+#ifndef PURR_ST7789_CS
+#  define PURR_ST7789_CS   12
+#endif
+#ifndef PURR_ST7789_DC
+#  define PURR_ST7789_DC   10
+#endif
+#ifndef PURR_ST7789_RST
+#  define PURR_ST7789_RST  14
+#endif
+
+#define LCD_HOST    PURR_ST7789_SPI_HOST
+#define LCD_MOSI    PURR_ST7789_MOSI
+#define LCD_SCLK    PURR_ST7789_SCLK
 #define LCD_MISO    -1
-#define LCD_CS      12
-#define LCD_DC      10
-#define LCD_RST     14
+#define LCD_CS      PURR_ST7789_CS
+#define LCD_DC      PURR_ST7789_DC
+#define LCD_RST     PURR_ST7789_RST
 #define LCD_CLK_HZ  (40 * 1000 * 1000)
 
 #define BL_MODE     LEDC_LOW_SPEED_MODE

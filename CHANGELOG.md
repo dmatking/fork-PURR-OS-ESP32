@@ -2,6 +2,38 @@
 
 ---
 
+## [0.9.6] — 2026-06-09 — LilyGo T-Embed CC1101 support, CC1101 radio driver, rotary encoder, Meshtastic plan
+
+### New device: LilyGo T-Embed CC1101
+- `CoreOS/system/kernel/devices/tembed_cc1101.json` — device config: ESP32-S3R8, 16MB flash, 8MB PSRAM, ST7789 170×320, CC1101 radio, rotary encoder
+- `SDK/targets/tembed_cc1101.defaults` — sdkconfig: 16MB flash, OPI PSRAM 80MHz, 240MHz CPU
+- `CoreOS/main/CMakeLists.txt` — new `tembed_cc1101` target block with all compile-time pin/resolution defines
+- `SDK/sdk_core.py` — added `tembed_cc1101` to TARGETS, `_BUILD_DIRS`, and argparse choices
+- KittenUI auto-selected (no touch, encoder-only input); `PURR_FORCE_KITTEN_UI` flag added so non-OLED devices can use KittenUI
+
+### New component: drv_cc1101 (CC1101 sub-GHz FSK radio)
+- `CoreOS/components/drv_cc1101/cc1101_manager.cpp/.h` — RadioLib CC1101 driver on SPI2 (MOSI=6, MISO=5, SCK=7, CS=4, GDO0=3)
+- ISR-driven RX via GDO0, ring-buffer rx, tx, sleep/wake (yield/reclaim), RSSI
+- `PURR_ENABLE_CC1101` cmake flag, `PURR_HAS_CC1101` compile define
+- `device_config_t.cc1101` field — parsed from `"cc1101"` in device JSON radios array
+- KITT init path: `cc1101_manager_init(433.92 MHz, 4.8 kbps FSK)` when `PURR_HAS_CC1101`
+- KITT update path: `cc1101_manager_update()` called each tick
+
+### Rotary encoder input
+- `PURR_HAS_ENCODER`, `PURR_ENCODER_CLK/DT/SW` compile defines
+- `kitt.cpp` — encoder GPIO init (INPUT_PULLUP), CLK-edge polling in `poll_gpio_inputs()`; DT determines KEY_UP/KEY_DOWN; SW fires KEY_SELECT via raw key buffer
+
+### ST7789 pin/resolution overrides
+- `display_st7789.h/.cpp` — all pins and resolution now override-able at compile time via `PURR_ST7789_MOSI/SCLK/CS/DC/RST/BL/WIDTH/HEIGHT/SPI_HOST`; defaults remain Waveshare 1.69" (240×280)
+
+### Meshtastic + ATAK plan
+- `docs/MESHTASTIC_ATAK_PLAN.md` — full phased implementation plan: current status (Phases 1-2 done in `purr_mesh.cpp`), Phase 3 position, Phase 4 admin, Phase 5 ATAK/CoT UDP gateway, Phase 6 store-and-forward; SDK flag table, CoT XML format, compatible hardware table
+
+### Housekeeping
+- Deleted `PURR_TODO.md` from repo root (superseded by docs/ plans)
+
+---
+
 ## [0.9.5] — 2026-06-09 — KITT 0.6.0 — Kernel panic screens, PSRAM Lua allocator, serial panic command
 
 ### Kernel panic screens (`CoreOS/system/kernel/purr_panic.cpp`, `purr_panic.h`)
