@@ -42,7 +42,7 @@ static void paint_tab_bar(const mw_gl_draw_info_t *d)
     mw_gl_set_fill(MW_GL_FILL);
     mw_gl_set_border(MW_GL_BORDER_OFF);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
 
     for (int i = 0; i < TAB_COUNT; i++) {
         int16_t tx = (int16_t)(i * TAB_W);
@@ -153,7 +153,7 @@ static void paint(mw_handle_t h, const mw_gl_draw_info_t *d)
 
     paint_tab_bar(d);
 
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
 
     if (!kitt.sd_available()) {

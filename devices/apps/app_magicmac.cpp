@@ -15,7 +15,7 @@ static void paint(mw_handle_t h, const mw_gl_draw_info_t *d)
     mw_gl_rectangle(d, 0, 0, cr.width, cr.height);
     mw_gl_set_fg_colour(WCE_TXT);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_string(d, 8,  8, "Mac Plus emulator");
     mw_gl_string(d, 8, 20, "umac + 68k IPC bridge");
     mw_gl_set_fg_colour(WCE_SHD);

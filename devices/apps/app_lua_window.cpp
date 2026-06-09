@@ -464,7 +464,7 @@ void app_lua_window_paint(app_lua_window_t *w,
 
     // Error state
     if (!w->running && w->error[0]) {
-        mw_gl_set_font(MW_GL_FONT_9);
+        mw_gl_set_font(MW_GL_FONT_12);
         mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
         mw_gl_set_fg_colour(0xF800u);
         mw_gl_string(d, 4, 4, "Script error:");
@@ -485,7 +485,7 @@ void app_lua_window_paint(app_lua_window_t *w,
     // Render widget list under mutex
     xSemaphoreTake(w->mutex, portMAX_DELAY);
 
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
 
     for (int i = 0; i < w->widget_count; i++) {

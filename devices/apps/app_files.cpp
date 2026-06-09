@@ -81,7 +81,7 @@ static void draw_tabs(const mw_gl_draw_info_t *d, int16_t cw)
     const char *const names[2] = { "SD", "SPIFFS" };
     int16_t tw = (int16_t)(cw / 2);
     mw_gl_set_fill(MW_GL_FILL); mw_gl_set_border(MW_GL_BORDER_OFF);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
     for (int i = 0; i < 2; i++) {
         int16_t tx = (int16_t)(i * tw);
@@ -112,7 +112,7 @@ static void draw_path_bar(const mw_gl_draw_info_t *d, int16_t cw)
     int maxc = (cw - 6) / 6;
     if (plen > maxc) p += plen - maxc;
     mw_gl_set_fg_colour(WCE_HI);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
     mw_gl_string(d, 3, (int16_t)(TAB_H + 2), p);
     mw_gl_set_fg_colour(WCE_SHD);
@@ -127,7 +127,7 @@ static void draw_entry_list(const mw_gl_draw_info_t *d,
     int  visible  = list_h / ENTRY_H;
 
     mw_gl_set_fill(MW_GL_FILL); mw_gl_set_border(MW_GL_BORDER_OFF);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
 
     for (int i = 0; i < visible; i++) {
@@ -187,7 +187,7 @@ static void paint(mw_handle_t h, const mw_gl_draw_info_t *d)
     int16_t list_h = (int16_t)(ch - list_y);
     int16_t list_w = (int16_t)(cw - SCROLL_W);
 
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
 
     if (s_tab == 0 && !kitt.sd_available()) {
@@ -209,7 +209,7 @@ static void paint(mw_handle_t h, const mw_gl_draw_info_t *d)
     mw_gl_vline(d, sx, list_y, (int16_t)(ch - 1));
     mw_gl_set_fg_colour(WCE_DARK);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_string(d, (int16_t)(sx + 4), (int16_t)(list_y + 3),               "^");
     mw_gl_string(d, (int16_t)(sx + 4), (int16_t)(list_y + list_h / 2 + 3),  "v");
 }

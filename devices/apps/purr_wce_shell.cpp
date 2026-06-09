@@ -86,7 +86,7 @@ static void draw_smenu_box(const mw_gl_draw_info_t *d,
     mw_gl_set_fill(MW_GL_FILL); mw_gl_set_border(MW_GL_BORDER_OFF);
     mw_gl_set_fg_colour(WCE_TXT);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
 }
 
 // ── Shell paint ────────────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
     else            draw_raised(d, START_X, START_Y, START_W, START_H, WCE_BAR);
     mw_gl_set_fg_colour(WCE_TXT);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_string(d, START_X + 6, START_Y + 5, "Meow!");
 
     // Divider after start button
@@ -131,7 +131,7 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
             int16_t pitch = (int16_t)(area_w / n);
             int16_t bw    = (int16_t)(pitch - 2);
             mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-            mw_gl_set_font(MW_GL_FONT_9);
+            mw_gl_set_font(MW_GL_FONT_12);
             for (int i = 0; i < n; i++) {
                 int16_t bx  = (int16_t)(area_x + i * pitch);
                 mw_handle_t eh = taskbar_entries[i].handle;
@@ -155,7 +155,7 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
     draw_sunken(d, bx, TASKBAR_Y + 2, 48, TASKBAR_H - 4, WCE_BAR);
     mw_gl_set_fg_colour(WCE_TXT);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
     mw_gl_string(d, bx + 4, START_Y + 5, ram);
 
     if (!smenu_open) return;

@@ -84,7 +84,7 @@ static void _paint(mw_handle_t h, const mw_gl_draw_info_t *d)
 
         mw_gl_set_fg_colour(0xFFFF);  // white text
         mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-        mw_gl_set_font(MW_GL_FONT_9);
+        mw_gl_set_font(MW_GL_FONT_12);
         mw_gl_string(d, 8, 20, "MagiDOS — 8086 emulator");
         mw_gl_string(d, 8, 40, "Loading...");
         return;
@@ -107,7 +107,7 @@ static void _paint(mw_handle_t h, const mw_gl_draw_info_t *d)
 
     // Render CGA text — simplified: just show the raw characters
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
 
     for (int row = 0; row < CGA_ROWS && row * 12 < cr.height; row++) {
         for (int col = 0; col < CGA_COLS && col * 6 < cr.width; col++) {

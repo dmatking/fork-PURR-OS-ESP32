@@ -39,7 +39,7 @@ static void paint_tab_bar(const mw_gl_draw_info_t *d)
     mw_gl_set_fill(MW_GL_FILL);
     mw_gl_set_border(MW_GL_BORDER_OFF);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
 
     for (int i = 0; i < TAB_COUNT; i++) {
         int16_t tx = (int16_t)(i * TAB_W);
@@ -70,7 +70,7 @@ static void paint_sys(const mw_gl_draw_info_t *d, int16_t y0)
     char buf[40];
     mw_gl_set_fg_colour(WCE_TXT);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
 
     mw_gl_string(d, 4, (int16_t)(y0),
                  "PURR OS " PURR_OS_VERSION "  KITT " KITT_VERSION);
@@ -111,7 +111,7 @@ static void paint_wifi(const mw_gl_draw_info_t *d, int16_t y0)
     char buf[36];
     mw_gl_set_fg_colour(WCE_TXT);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
 
     if (s_wifi == WSCAN_SCANNING) {
         mw_gl_string(d, 4, y0, scan_anim[s_wanim % 3]);
@@ -166,7 +166,7 @@ static void paint_lora(const mw_gl_draw_info_t *d, int16_t y0)
     char buf[32];
     mw_gl_set_fg_colour(WCE_TXT);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
 
     if (!kitt.lora_enabled()) {
         mw_gl_string(d, 4, y0,           "LoRa: not available");
@@ -196,7 +196,7 @@ static void paint_log(const mw_gl_draw_info_t *d, int16_t y0)
 {
     mw_gl_set_fg_colour(WCE_TXT);
     mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
+    mw_gl_set_font(MW_GL_FONT_12);
 
     if (purr_log_count == 0) {
         mw_gl_string(d, 2, y0, "No log entries yet.");
