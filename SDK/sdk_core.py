@@ -314,8 +314,35 @@ MODULES = [
         "cmake":    "PURR_ENABLE_SHELL",
         "label":    "Debug Shell",
         "desc":     "drv_shell — USB serial REPL (gpio-set, display-color, reboot, ...)",
-        "targets":  ["heltec", "cyd", "tdeck"],
+        "targets":  ["heltec", "cyd", "cyd_s028r", "cyd_s024c", "tdeck", "tdeck_plus", "jc3248w535"],
         "default":  True,
+        "inverted": False,
+    },
+    {
+        "key":      "lua",
+        "cmake":    "PURR_ENABLE_LUA",
+        "label":    "Lua Runtime",
+        "desc":     "lib_lua — .paws/.claw script execution (~120 KB flash)",
+        "targets":  ["cyd", "cyd_s028r", "cyd_s024c", "tdeck_plus", "jc3248w535"],
+        "default":  True,
+        "inverted": False,
+    },
+    {
+        "key":      "magidos",
+        "cmake":    "PURR_ENABLE_MAGIDOS",
+        "label":    "MagiDOS",
+        "desc":     "8086 DOS emulator app (WIP — compiled but stub)",
+        "targets":  ["cyd", "cyd_s028r", "cyd_s024c", "tdeck_plus", "jc3248w535"],
+        "default":  False,
+        "inverted": False,
+    },
+    {
+        "key":      "magicmac",
+        "cmake":    "PURR_ENABLE_MAGICMAC",
+        "label":    "MagicMac",
+        "desc":     "Mac Plus emulator app (WIP — compiled but stub)",
+        "targets":  ["cyd", "cyd_s028r", "cyd_s024c", "tdeck_plus", "jc3248w535"],
+        "default":  False,
         "inverted": False,
     },
 ]
@@ -365,6 +392,9 @@ DEFAULT_CFG = {
         "lora":        True,
         "mesh":        False,
         "micropython": True,
+        "lua":         True,
+        "magidos":     False,
+        "magicmac":    False,
     },
 }
 
@@ -403,7 +433,7 @@ def _sanitize_cfg(cfg):
     """Enforce hard hardware constraints — call after any target change."""
     target = cfg["target"]
     # CYD has no LoRa hardware — strip flags regardless of what config says
-    if target in ("cyd", "cyd_boot"):
+    if target in ("cyd", "cyd_boot", "cyd_s028r", "cyd_s024c"):
         cfg["modules"]["lora"] = False
         cfg["modules"]["mesh"] = False
     # cyd_boot is fully fixed — wipe all optional module flags
@@ -623,12 +653,15 @@ def _cmake_flags(cfg):
         mods["lora"] = False
         mods["mesh"] = False
 
-    _flag("PURR_ENABLE_BT",      "bt",      True)
-    _flag("PURR_ENABLE_LORA",    "lora",    t["default_lora"])
-    _flag("PURR_ENABLE_MESH",    "mesh",    False)
-    _flag("PURR_ENABLE_MTP",     "mtp",     False)
-    _flag("PURR_ENABLE_FLASHER", "flasher", False)
-    _flag("PURR_ENABLE_SHELL",   "shell",   True)
+    _flag("PURR_ENABLE_BT",       "bt",       True)
+    _flag("PURR_ENABLE_LORA",     "lora",     t["default_lora"])
+    _flag("PURR_ENABLE_MESH",     "mesh",     False)
+    _flag("PURR_ENABLE_MTP",      "mtp",      False)
+    _flag("PURR_ENABLE_FLASHER",  "flasher",  False)
+    _flag("PURR_ENABLE_SHELL",    "shell",    True)
+    _flag("PURR_ENABLE_LUA",      "lua",      True)
+    _flag("PURR_ENABLE_MAGIDOS",  "magidos",  False)
+    _flag("PURR_ENABLE_MAGICMAC", "magicmac", False)
 
     flags.append(f"-DBUILD_TDECK_PLUS={1 if cfg.get('tdeck_plus') else 0}")
 
@@ -896,8 +929,8 @@ def do_flash(cfg, port=None):
     build_dir  = _build_dir(cfg)
     spiffs_img = os.path.join(build_dir, "spiffs.bin")
 
-    # cyd (ota_0) → 0x110000; all others (factory) → 0x10000
-    app_offset    = "0x110000" if target == "cyd" else "0x10000"
+    # cyd (ota_0) → 0x120000; all others (factory) → 0x10000
+    app_offset    = "0x120000" if target == "cyd" else "0x10000"
     spiffs_offset = "0x390000" if target in ("cyd", "cyd_boot") else "0x3b0000"
 
     cmd = [
@@ -1012,13 +1045,13 @@ def do_full_flash(cfg, port=None):
         "0x8000",   os.path.join(boot_dir, "partition_table", "partition-table.bin"),
         "0xe000",   os.path.join(boot_dir, "ota_data_initial.bin"),
         "0x10000",  os.path.join(boot_dir, "purr_os_core.bin"),   # factory
-        "0x110000", os.path.join(os_dir,   "purr_os_core.bin"),   # ota_0
+        "0x120000", os.path.join(os_dir,   "purr_os_core.bin"),   # ota_0
     ]
     if os.path.exists(spiffs_img):
         cmd += ["0x390000", spiffs_img]
         info("including SPIFFS at 0x390000")
 
-    info(f"full flash → {port}  (factory 0x10000 + ota_0 0x110000 + SPIFFS 0x390000)")
+    info(f"full flash → {port}  (factory 0x10000 + ota_0 0x120000 + SPIFFS 0x390000)")
     rc = run_live(cmd)
     if rc != 0:
         err(f"Full flash failed (exit {rc})")
@@ -1040,7 +1073,7 @@ def show_banner(cfg):
 
     div()
     wip_tag = f"  {C_YLW}[WIP]{C_RST}" if "WIP" in t.get("spec", "") else ""
-    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.9.2{C_RST}  {C_GRY}KITT v0.5.1{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
+    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.9.2{C_RST}  {C_GRY}KITT v0.5.3{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
 
     mini = (not mods.get("micropython", True)) or t["fixed"]
     print(f"  Variant  : {'mini — no MicroPython' if mini else 'full — with MicroPython'}")

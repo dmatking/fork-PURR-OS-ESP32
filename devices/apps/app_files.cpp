@@ -225,8 +225,8 @@ static void message(const mw_message_t *msg)
 
     case MW_TOUCH_DOWN_MESSAGE: {
         mw_util_rect_t cr = mw_get_window_client_rect(msg->recipient_handle);
-        int16_t cx = (int16_t)((msg->message_data >> 16)    - (uint32_t)cr.x);
-        int16_t cy = (int16_t)((msg->message_data & 0xFFFF) - (uint32_t)cr.y);
+        int16_t cx = (int16_t)(msg->message_data >> 16);
+        int16_t cy = (int16_t)(msg->message_data & 0xFFFF);
 
         if (cy >= 0 && cy < TAB_H) {
             int nt = cx / (cr.width / 2);

@@ -1,6 +1,5 @@
-// lua_runtime.cpp — Lua 5.4 integration for PURR OS
-// Provides Lua environment with sandboxed access to KITT APIs.
-// Apps can be restricted (.paws) or full-access (.claw).
+// lua_runtime.cpp — Lua 5.4 integration for PURR OS (global singleton runtime)
+// Used for KITT-level scripting. App windows use app_lua_window.cpp instead.
 
 #include "lua_runtime.h"
 #include "../kitt.h"
@@ -10,7 +9,12 @@
 #include <lua.hpp>
 #include <stdio.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_timer.h"
 
+static const char *LUA_TAG = "lua";
 extern KITT kitt;
 
 static lua_State* L = nullptr;
@@ -179,19 +183,19 @@ void lua_module_touch_register() {
 // ── System Module (restricted access) ─────────────────────────────────────────
 
 static int lua_system_time_ms(lua_State* L) {
-    lua_pushinteger(L, (lua_Integer)millis());
+    lua_pushinteger(L, (lua_Integer)(esp_timer_get_time() / 1000LL));
     return 1;
 }
 
 static int lua_system_delay(lua_State* L) {
     uint32_t ms = (uint32_t)luaL_checkinteger(L, 1);
-    delay(ms);
+    vTaskDelay(pdMS_TO_TICKS(ms < 1 ? 1 : ms));
     return 0;
 }
 
 static int lua_system_print(lua_State* L) {
     const char* s = luaL_checkstring(L, 1);
-    Serial.print(s);
+    ESP_LOGI(LUA_TAG, "%s", s);
     return 0;
 }
 
@@ -224,7 +228,7 @@ void lua_runtime_init() {
 
     L = luaL_newstate();
     if (!L) {
-        Serial.println("[lua] ERROR: failed to create Lua state");
+        ESP_LOGE(LUA_TAG, "failed to create Lua state");
         return;
     }
 
@@ -237,30 +241,28 @@ void lua_runtime_init() {
     lua_module_system_register(false);  // default: no restrictions for init
 
     is_initialized = true;
-    Serial.println("[lua] runtime initialized");
+    ESP_LOGI(LUA_TAG, "runtime initialized");
 }
 
 bool lua_run_file(const char* path, bool restricted) {
     if (!L) {
-        Serial.println("[lua] ERROR: runtime not initialized");
+        ESP_LOGE(LUA_TAG, "runtime not initialized");
         return false;
     }
 
-    // Re-register system module with correct restriction level
     lua_module_system_register(restricted);
-
-    Serial.printf("[lua] loading %s (restricted=%d)\n", path, restricted);
+    ESP_LOGI(LUA_TAG, "loading %s (restricted=%d)", path, restricted);
 
     int status = luaL_loadfile(L, path);
     if (status != LUA_OK) {
-        Serial.printf("[lua] load error: %s\n", lua_tostring(L, -1));
+        ESP_LOGE(LUA_TAG, "load error: %s", lua_tostring(L, -1));
         lua_pop(L, 1);
         return false;
     }
 
     status = lua_pcall(L, 0, 0, 0);
     if (status != LUA_OK) {
-        Serial.printf("[lua] runtime error: %s\n", lua_tostring(L, -1));
+        ESP_LOGE(LUA_TAG, "runtime error: %s", lua_tostring(L, -1));
         lua_pop(L, 1);
         return false;
     }
@@ -270,7 +272,7 @@ bool lua_run_file(const char* path, bool restricted) {
 
 bool lua_run_code(const char* code, const char* name, bool restricted) {
     if (!L) {
-        Serial.println("[lua] ERROR: runtime not initialized");
+        ESP_LOGE(LUA_TAG, "runtime not initialized");
         return false;
     }
 
@@ -278,14 +280,14 @@ bool lua_run_code(const char* code, const char* name, bool restricted) {
 
     int status = luaL_loadbuffer(L, code, strlen(code), name);
     if (status != LUA_OK) {
-        Serial.printf("[lua] compile error: %s\n", lua_tostring(L, -1));
+        ESP_LOGE(LUA_TAG, "compile error: %s", lua_tostring(L, -1));
         lua_pop(L, 1);
         return false;
     }
 
     status = lua_pcall(L, 0, 0, 0);
     if (status != LUA_OK) {
-        Serial.printf("[lua] runtime error: %s\n", lua_tostring(L, -1));
+        ESP_LOGE(LUA_TAG, "runtime error: %s", lua_tostring(L, -1));
         lua_pop(L, 1);
         return false;
     }

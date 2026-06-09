@@ -15,11 +15,14 @@ set(BUILD_MINI     0        CACHE STRING "1 = strip MicroPython runtime")
 set(CYD_DISPLAY_VARIANT "s028r" CACHE STRING "CYD variant: s028r | s024c")
 
 # ── Optional module toggles ───────────────────────────────────────────────────
-set(PURR_ENABLE_BT      1 CACHE STRING "Include Bluetooth manager")
-set(PURR_ENABLE_MTP     0 CACHE STRING "Include MTP USB manager")
-set(PURR_ENABLE_FLASHER 0 CACHE STRING "Include OTA partition flasher")
-set(PURR_ENABLE_LTE     0 CACHE STRING "Include LTE manager (experimental)")
-set(PURR_ENABLE_SHELL   1 CACHE STRING "Include USB serial debug shell (esp_console)")
+set(PURR_ENABLE_BT       1 CACHE STRING "Include Bluetooth manager")
+set(PURR_ENABLE_MTP      0 CACHE STRING "Include MTP USB manager")
+set(PURR_ENABLE_FLASHER  0 CACHE STRING "Include OTA partition flasher")
+set(PURR_ENABLE_LTE      0 CACHE STRING "Include LTE manager (experimental)")
+set(PURR_ENABLE_SHELL    1 CACHE STRING "Include USB serial debug shell (esp_console)")
+set(PURR_ENABLE_LUA      1 CACHE STRING "Include Lua 5.4 runtime (.paws/.claw scripts)")
+set(PURR_ENABLE_MAGIDOS  0 CACHE STRING "Include MagiDOS 8086 emulator app")
+set(PURR_ENABLE_MAGICMAC 0 CACHE STRING "Include MagicMac Plus emulator app")
 
 # LoRa: auto-enabled for heltec/tdeck, off for cyd/cyd_boot.
 if(TARGET_DEVICE STREQUAL "heltec" OR TARGET_DEVICE STREQUAL "tdeck")
@@ -32,7 +35,7 @@ set(PURR_ENABLE_LORA ${_lora_default} CACHE STRING "Include LoRa radio manager")
 # Mesh: requires LoRa. Defaults off.
 set(PURR_ENABLE_MESH 0 CACHE STRING "Include Meshtastic mesh stack (requires LoRa)")
 
-message(STATUS "PURR OS  target=${TARGET_DEVICE}  ui=${PURR_UI_KERNEL}  mini=${BUILD_MINI}  bt=${PURR_ENABLE_BT}  lora=${PURR_ENABLE_LORA}  mesh=${PURR_ENABLE_MESH}  mtp=${PURR_ENABLE_MTP}  flasher=${PURR_ENABLE_FLASHER}  lte=${PURR_ENABLE_LTE}  shell=${PURR_ENABLE_SHELL}")
+message(STATUS "PURR OS  target=${TARGET_DEVICE}  ui=${PURR_UI_KERNEL}  mini=${BUILD_MINI}  bt=${PURR_ENABLE_BT}  lora=${PURR_ENABLE_LORA}  mesh=${PURR_ENABLE_MESH}  mtp=${PURR_ENABLE_MTP}  flasher=${PURR_ENABLE_FLASHER}  lte=${PURR_ENABLE_LTE}  shell=${PURR_ENABLE_SHELL}  lua=${PURR_ENABLE_LUA}  magidos=${PURR_ENABLE_MAGIDOS}  magicmac=${PURR_ENABLE_MAGICMAC}")
 
 # ── Core sources (all targets) ────────────────────────────────────────────────
 set(SRCS
@@ -328,6 +331,15 @@ if(PURR_ENABLE_SHELL)
 endif()
 if(NOT BUILD_MINI)
     list(APPEND PURR_DEFS PURR_HAS_MICROPYTHON=1)
+endif()
+if(PURR_ENABLE_LUA)
+    list(APPEND PURR_DEFS PURR_HAS_LUA=1)
+endif()
+if(PURR_ENABLE_MAGIDOS)
+    list(APPEND PURR_DEFS PURR_HAS_MAGIDOS=1)
+endif()
+if(PURR_ENABLE_MAGICMAC)
+    list(APPEND PURR_DEFS PURR_HAS_MAGICMAC=1)
 endif()
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC ${PURR_DEFS})

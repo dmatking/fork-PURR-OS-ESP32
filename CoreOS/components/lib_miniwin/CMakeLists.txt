@@ -61,6 +61,11 @@ set(MINIWIN_HAL_SRCS
 set(PURR_MW_APPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../devices/apps")
 file(GLOB PURR_MW_APP_SRCS "${PURR_MW_APPS_DIR}/*.cpp")
 
+set(_mw_requires nvs_flash esp_timer esp_lcd log driver)
+if(PURR_ENABLE_LUA)
+    list(APPEND _mw_requires lib_lua)
+endif()
+
 idf_component_register(
     SRCS         ${MINIWIN_CORE_SRCS} ${MINIWIN_HAL_SRCS} ${PURR_MW_APP_SRCS}
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin"
@@ -68,13 +73,19 @@ idf_component_register(
                  "${PURR_MW_HAL_DIR}"
                  "${PURR_MW_APPS_DIR}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/gl/fonts/truetype/mcufont"
-    REQUIRES     nvs_flash
-                 esp_timer
-                 esp_lcd
-                 log
-                 driver
-                 lib_lua
+    REQUIRES     ${_mw_requires}
 )
+
+# Feature flag propagation — lib_miniwin compiles devices/apps/ so it needs these defines
+if(PURR_ENABLE_LUA)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_HAS_LUA=1)
+endif()
+if(PURR_ENABLE_MAGIDOS)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_HAS_MAGIDOS=1)
+endif()
+if(PURR_ENABLE_MAGICMAC)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_HAS_MAGICMAC=1)
+endif()
 
 # IDF 5.3.x does not propagate include dirs through managed-component REQUIRES chains.
 # Arduino.h transitively includes headers from many IDF components. Glob every
@@ -84,11 +95,15 @@ file(GLOB IDF_ALL_COMPONENT_INCLUDES LIST_DIRECTORIES true
      "${idf_path}/components/*/include")
 list(FILTER IDF_ALL_COMPONENT_INCLUDES EXCLUDE REGEX ".*/linux/include$")
 list(FILTER IDF_ALL_COMPONENT_INCLUDES EXCLUDE REGEX ".*/riscv/include$")
+set(_mw_include_extra "")
+if(PURR_ENABLE_LUA)
+    list(APPEND _mw_include_extra "${CMAKE_CURRENT_SOURCE_DIR}/../lib_lua/src")
+endif()
 target_include_directories(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel"
     "${CMAKE_CURRENT_SOURCE_DIR}/../drv_display"
     "${CMAKE_CURRENT_SOURCE_DIR}/../drv_touch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../lib_lua/src"
+    ${_mw_include_extra}
     ${IDF_ALL_COMPONENT_INCLUDES}
     "${idf_path}/components/driver/deprecated"
     "${idf_path}/components/driver/touch_sensor/esp32/include"

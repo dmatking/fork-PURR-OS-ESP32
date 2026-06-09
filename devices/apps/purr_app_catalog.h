@@ -9,9 +9,7 @@ typedef struct {
     void (*launch)(void);
 } purr_catalog_entry_t;
 
-#define PURR_CATALOG_N 6
-
-extern const purr_catalog_entry_t purr_catalog[PURR_CATALOG_N];
+extern const purr_catalog_entry_t purr_catalog[];
 extern const int purr_catalog_count;
 
 #ifdef __cplusplus
