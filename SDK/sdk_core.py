@@ -869,7 +869,9 @@ def _build_spiffs(cfg):
     for d in ("system/kernel", "system/logs", "apps"):
         os.makedirs(os.path.join(staging_dir, d), exist_ok=True)
 
-    device_target = "cyd" if target == "cyd_boot" else target
+    # cyd_s024c and cyd_s028r share the same device JSON as plain "cyd"
+    _cyd_family = ("cyd", "cyd_boot", "cyd_s024c", "cyd_s028r")
+    device_target = "cyd" if target in _cyd_family else target
     device_src = os.path.join(COREOS_DIR, "system", "kernel", "devices", f"{device_target}.json")
     if not os.path.exists(device_src):
         device_src = os.path.join(COREOS_DIR, "system", "kernel", "device.json")
@@ -880,9 +882,9 @@ def _build_spiffs(cfg):
     shutil.copy2(device_src, os.path.join(staging_dir, "system", "kernel", "device.json"))
     info(f"SPIFFS: {device_target}.json → /system/kernel/device.json")
 
-    # cyd/cyd_boot: 0x70000 = 458752 (448 KB) at 0x390000
-    # others:       0x50000 = 327680 (320 KB) at 0x3b0000
-    spiffs_size = 458752 if target in ("cyd", "cyd_boot") else 327680
+    # CYD family: 0x70000 = 458752 (448 KB) at 0x390000
+    # others:     0x50000 = 327680 (320 KB) at 0x3b0000
+    spiffs_size = 458752 if target in _cyd_family else 327680
     spiffs_img  = os.path.join(build_dir, "spiffs.bin")
 
     rc = run_live([sys.executable, spiffsgen, str(spiffs_size), staging_dir, spiffs_img])
