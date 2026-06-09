@@ -86,6 +86,9 @@ endif()
 if(PURR_ENABLE_MAGICMAC)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_HAS_MAGICMAC=1)
 endif()
+if(PURR_UI_THEME STREQUAL "blackberry")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_THEME_BLACKBERRY=1)
+endif()
 
 # IDF 5.3.x does not propagate include dirs through managed-component REQUIRES chains.
 # Arduino.h transitively includes headers from many IDF components. Glob every

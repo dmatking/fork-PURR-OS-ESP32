@@ -2,6 +2,59 @@
 
 ---
 
+## [0.9.4] — 2026-06-08 — KITT 0.5.3 — Blackberry theme, Lua window API, touch fix, conditional modules
+
+### Blackberry shell theme (`devices/apps/shell_blackberry.cpp`)
+- New MiniWin shell with green-on-black phosphor terminal aesthetic (Blackberry OS 6 layout)
+- Full-screen layout: status bar (16px) → time bar (24px) → notif bar (12px) → wallpaper (142px) → tabs (14px) → dock (32px)
+- Uptime clock (HH:MM:SS) centered in time bar; WiFi indicator; free RAM in notif strip
+- App drawer: tap wallpaper area to open grid of catalog + SD apps (4-column icon grid, 2-letter abbreviations)
+- Dock: APPS (toggle drawer), FILES, SETT, BOOT (restart)
+- Tab strip: Recent / All / System with active underline
+- SD apps launch via `app_lua_window_create()`; catalog apps via `purr_catalog[].launch()`
+- Guarded by `PURR_THEME_BLACKBERRY`; WCE `purr_app.cpp` files wrapped with `#ifndef PURR_THEME_BLACKBERRY`
+
+### `purr_wm_launch()` MiniWin implementation (`devices/apps/purr_wm_launch.cpp`)
+- Real implementation (replaces stub): creates `app_lua_window_t` + MiniWin window
+- Auto-detects `.claw` extension for admin privilege
+- Brings existing window to front if already open (no duplicate windows)
+- `#else` path provides a no-op stub when `PURR_HAS_LUA` is not defined
+- Stub removed from `ui_stubs.cpp` (now dedicated file covers both paths)
+
+### Lua window API (`devices/apps/app_lua_window.cpp`)
+- Fully implemented behind `#ifdef PURR_HAS_LUA`
+- Per-window `lua_State*` + FreeRTOS task; retained-mode widget list (max 48) under mutex
+- `win.*` API: `clear`, `label`, `button`, `rect`, `wait_touch`, `sleep`, `width`, `height`
+- `sd.*` API: `read`, `write`, `list`
+- `kitt.*` API (admin only): `wifi_connected`, `sd_available`, `reboot`, `free_ram`, `time_ms`
+- `.paws` = sandboxed (win.* + sd.*); `.claw` = admin (+ kitt.*)
+
+### Touch coordinate fix (`devices/apps/app_settings.cpp`, `app_files.cpp`)
+- MiniWin delivers `MW_TOUCH_DOWN_MESSAGE` with coordinates already in client-relative space
+- Removed double-subtraction of `mw_get_window_client_rect()` offset from both files
+- Fixes broken tab switching in Settings and Files apps on all devices
+
+### Lua runtime (`CoreOS/system/kernel/modules/lua_runtime.cpp`)
+- Arduino API replaced with ESP-IDF: `Serial` → `ESP_LOGI`, `millis()` → `esp_timer_get_time() / 1000`, `delay()` → `vTaskDelay()`
+
+### Conditional modules
+- `purr_app_catalog.cpp/h` — MagiDOS / MagicMac entries wrapped in `#ifdef PURR_HAS_MAGIDOS/MAGICMAC`; catalog uses `sizeof` count (no fixed N)
+- `lib_miniwin/CMakeLists.txt` — `PURR_HAS_LUA/MAGIDOS/MAGICMAC/THEME_BLACKBERRY` propagated to component
+- `main/CMakeLists.txt` — `PURR_ENABLE_LUA/MAGIDOS/MAGICMAC` cache vars; Lua runtime source wired in
+
+### SDK (`SDK/sdk_core.py`)
+- Version bumped to 0.9.4
+- MagiDOS / MagicMac module entries added with cmake flags
+- LoRa flag removed from CYD targets
+- `cyd_s028r` / `cyd_s024c` added to applicable module target lists
+- UI theme picker added: `[t]` in module wizard when `ui_kernel=miniwin`; `wce` (default) or `blackberry`
+- `PURR_UI_THEME` cmake flag emitted by `_cmake_flags()`
+
+### Version
+- `purr_version.h` — PURR OS 0.9.2 → **0.9.4**
+
+---
+
 ## [0.9.2] — 2026-06-08 — KITT 0.5.3 — SD card, conman shell, file explorer, app launcher, WCE shell rewrite
 
 ### SD card integration (KITT)

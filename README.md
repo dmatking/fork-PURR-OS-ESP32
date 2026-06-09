@@ -1,4 +1,4 @@
-# PURR OS — v0.9.2
+# PURR OS — v0.9.4
 
 > **MEGA DISCLAIMER:** This project is very much vibe-coded. It has gone from 0 to "Jesus Christ" at an alarming rate. It is fully open-source and humans are actively encouraged to help. Please.
 
@@ -42,12 +42,22 @@ For more details, see **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 
 | Component | Version | Release Date |
 |-----------|---------|--------------|
-| PURR OS   | v0.9.2  | 2026-06-08   |
+| PURR OS   | v0.9.4  | 2026-06-08   |
 | KITT      | v0.5.3  | 2026-06-08   |
 
 Version strings are defined in [CoreOS/system/kernel/purr_version.h](CoreOS/system/kernel/purr_version.h) and automatically embedded into the firmware image via `esp_app_desc_t` — visible in the bootloader's slot card and on the homescreen.
 
 Full release history is in **[CHANGELOG.md](CHANGELOG.md)** at the repository root.
+
+### Release Notes: v0.9.4 / KITT v0.5.3
+
+- **Blackberry shell theme** (`shell_blackberry.cpp`) — green-on-black phosphor terminal aesthetic; status/time/notif/wallpaper/tabs/dock layout; app drawer via wallpaper tap; selectable via `PURR_UI_THEME=blackberry` (SDK: `[t]` in module wizard)
+- **Lua window API** (`app_lua_window.cpp`) — fully implemented: `win.*` / `sd.*` / `kitt.*` Lua bindings, per-window `lua_State*` + FreeRTOS task, retained-mode widget list with mutex
+- **`purr_wm_launch()` wired** — real MiniWin implementation in `purr_wm_launch.cpp`; creates Lua app window; stub removed from `ui_stubs.cpp`
+- **Touch fix** — MiniWin delivers touch already in client-relative coords; removed double-subtraction in `app_settings.cpp` and `app_files.cpp` (fixes broken tab switching)
+- **Lua runtime ESP-IDF** — `Serial`/`millis()`/`delay()` replaced with `ESP_LOGI`/`esp_timer_get_time()`/`vTaskDelay()`
+- **Conditional modules** — MagiDOS/MagicMac wrapped in `#ifdef`; catalog uses `sizeof` count; `PURR_HAS_*` defines propagated to lib_miniwin
+- **SDK 0.9.4** — MagiDOS/MagicMac/Lua module pickers; LoRa stripped from CYD targets; `[t]` UI theme picker when `ui_kernel=miniwin`
 
 ### Release Notes: v0.9.2 / KITT v0.5.3
 

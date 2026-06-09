@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PURR OS SDK v0.9.2 — interactive build / flash / monitor tool.
+"""PURR OS SDK v0.9.4 — interactive build / flash / monitor tool.
 Invoked by SDK.ps1 (or directly: python sdk_core.py [flags]).
 """
 
@@ -369,6 +369,16 @@ UI_KERNEL_DESCS = {
     "none":    "no UI framework — headless / raw display only",
 }
 
+UI_THEMES = {
+    "wce":        "WCE Classic",
+    "blackberry": "Blackberry (green-on-black terminal theme)",
+}
+
+UI_THEME_DESCS = {
+    "wce":        "Windows CE-style gray shell with Start menu and taskbar",
+    "blackberry": "Phosphor green-on-black shell — terminal aesthetic, tap wallpaper for app drawer",
+}
+
 SHELL_DESCS = {
     "smol": "Smol — minimal OLED shell",
     "none": "Headless — no UI shell compiled",
@@ -396,6 +406,7 @@ DEFAULT_CFG = {
         "magidos":     False,
         "magicmac":    False,
     },
+    "ui_theme": "wce",
 }
 
 
@@ -451,6 +462,9 @@ def _sanitize_cfg(cfg):
         pass
     elif "ui_kernel" not in cfg or cfg["ui_kernel"] not in UI_KERNELS:
         cfg["ui_kernel"] = TARGETS.get(target, {}).get("default_ui", "none")
+    # ui_theme: only meaningful when ui_kernel == miniwin
+    if "ui_theme" not in cfg or cfg["ui_theme"] not in UI_THEMES:
+        cfg["ui_theme"] = "wce"
 
 
 # ── Wizard ────────────────────────────────────────────────────────────────────
@@ -518,6 +532,22 @@ def pick_ui_kernel(cfg):
         cfg["ui_kernel"] = default_ui
 
 
+def pick_ui_theme(cfg):
+    header("MiniWin shell theme:")
+    keys = list(UI_THEMES.keys())
+    for i, k in enumerate(keys, 1):
+        print(f"  [{i}]  {k:<14}  {C_GRY}{UI_THEME_DESCS[k]}{C_RST}")
+    print()
+    cur  = cfg.get("ui_theme", "wce")
+    didx = keys.index(cur) + 1 if cur in keys else 1
+    raw  = input(f"  Choice [{didx}]: ").strip() or str(didx)
+    try:
+        idx = int(raw) - 1
+        cfg["ui_theme"] = keys[idx] if 0 <= idx < len(keys) else cur
+    except ValueError:
+        cfg["ui_theme"] = cur
+
+
 def pick_modules(cfg):
     target = cfg["target"]
     if TARGETS[target]["fixed"]:
@@ -557,8 +587,12 @@ def pick_modules(cfg):
 
         is_cyd = target in ("cyd", "cyd_s028r", "cyd_s024c")
         if is_cyd:
-            ui = cfg.get("ui_kernel", TARGETS[target].get("default_ui", "none"))
-            print(f"\n        {C_GRY}+-- ui: {ui}  ([u] to change){C_RST}")
+            ui    = cfg.get("ui_kernel", TARGETS[target].get("default_ui", "none"))
+            theme = cfg.get("ui_theme", "wce")
+            if ui == "miniwin":
+                print(f"\n        {C_GRY}+-- ui: {ui} / theme: {theme}  ([u] kernel, [t] theme){C_RST}")
+            else:
+                print(f"\n        {C_GRY}+-- ui: {ui}  ([u] to change){C_RST}")
 
         print()
         prompt = f"  Toggle [1-{len(visible)}]"
@@ -566,6 +600,8 @@ def pick_modules(cfg):
             prompt += ", [k] LoRa kernel"
         if is_cyd:
             prompt += ", [u] UI kernel"
+            if cfg.get("ui_kernel") == "miniwin":
+                prompt += ", [t] theme"
         raw = input(prompt + ", or Enter to continue: ").strip()
 
         if not raw:
@@ -575,6 +611,9 @@ def pick_modules(cfg):
             continue
         if raw.lower() == "u" and is_cyd:
             pick_ui_kernel(cfg)
+            continue
+        if raw.lower() == "t" and is_cyd and cfg.get("ui_kernel") == "miniwin":
+            pick_ui_theme(cfg)
             continue
         try:
             idx = int(raw) - 1
@@ -674,6 +713,10 @@ def _cmake_flags(cfg):
     if fixed:
         ui = "none"
     flags.append(f"-DPURR_UI_KERNEL={ui}")
+
+    # Shell theme (wce | blackberry) — only meaningful when ui_kernel=miniwin
+    theme = cfg.get("ui_theme", "wce") if ui == "miniwin" and not fixed else "wce"
+    flags.append(f"-DPURR_UI_THEME={theme}")
 
     return flags
 

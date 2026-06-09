@@ -23,6 +23,7 @@ set(PURR_ENABLE_SHELL    1 CACHE STRING "Include USB serial debug shell (esp_con
 set(PURR_ENABLE_LUA      1 CACHE STRING "Include Lua 5.4 runtime (.paws/.claw scripts)")
 set(PURR_ENABLE_MAGIDOS  0 CACHE STRING "Include MagiDOS 8086 emulator app")
 set(PURR_ENABLE_MAGICMAC 0 CACHE STRING "Include MagicMac Plus emulator app")
+set(PURR_UI_THEME        "wce" CACHE STRING "MiniWin shell theme: wce | blackberry")
 
 # LoRa: auto-enabled for heltec/tdeck, off for cyd/cyd_boot.
 if(TARGET_DEVICE STREQUAL "heltec" OR TARGET_DEVICE STREQUAL "tdeck")
@@ -347,6 +348,9 @@ if(PURR_ENABLE_MAGIDOS)
 endif()
 if(PURR_ENABLE_MAGICMAC)
     list(APPEND PURR_DEFS PURR_HAS_MAGICMAC=1)
+endif()
+if(PURR_UI_THEME STREQUAL "blackberry")
+    list(APPEND PURR_DEFS PURR_THEME_BLACKBERRY=1)
 endif()
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC ${PURR_DEFS})

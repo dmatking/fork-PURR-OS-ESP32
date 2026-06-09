@@ -1,5 +1,7 @@
 // WCE shell — cyd
 // Single full-screen shell window. App windows launched via purr_catalog[].
+// Compiled only when PURR_THEME_BLACKBERRY is not set (shell_blackberry.cpp takes over).
+#ifndef PURR_THEME_BLACKBERRY
 
 #include "miniwin.h"
 #include "miniwin_utilities.h"
@@ -276,3 +278,5 @@ void mw_user_root_message_function(const mw_message_t *message)
 }
 
 } // extern "C"
+
+#endif // PURR_THEME_BLACKBERRY
