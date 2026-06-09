@@ -105,7 +105,7 @@ static void bb_scan_apps(void)
         bool admin = (strcmp(ext, ".claw") == 0);
         if (!admin && strcmp(ext, ".paws") != 0) continue;
         bb_app_t *a = &bb_apps[bb_napp++];
-        snprintf(a->path, sizeof(a->path), "/sdcard/apps/%s", ent->d_name);
+        snprintf(a->path, sizeof(a->path), "/sdcard/apps/%.242s", ent->d_name);
         strncpy(a->name, ent->d_name, sizeof(a->name) - 1);
         a->name[sizeof(a->name) - 1] = '\0';
         char *dot = strrchr(a->name, '.');
@@ -234,9 +234,11 @@ static void paint_timebar(const mw_gl_draw_info_t *d)
     uint32_t hh    = up_s / 3600;
     uint32_t mm    = (up_s % 3600) / 60;
     uint32_t ss    = up_s % 60;
-    char tbuf[12];
+    char tbuf[16];
     snprintf(tbuf, sizeof(tbuf), "%02lu:%02lu:%02lu",
-             (unsigned long)hh, (unsigned long)mm, (unsigned long)ss);
+             (unsigned long)(hh > 99 ? 99 : hh),
+             (unsigned long)mm,
+             (unsigned long)ss);
 
     // Centered time
     int16_t tw = (int16_t)(strlen(tbuf) * 6);
