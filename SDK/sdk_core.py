@@ -172,8 +172,8 @@ TARGETS = {
     "heltec": {
         "chip":         "esp32s3",
         "desc":         "Heltec WiFi LoRa 32 V3",
-        "spec":         "ESP32-S3  8MB  SSD1306  SX1262 LoRa",
-        "shells":       [],
+        "spec":         "ESP32-S3  8MB  SSD1306  SX1262 LoRa  KittenUI (auto)",
+        "shells":       ["kitten_ui"],
         "default_lora": True,
         "default_ui":   "none",
         "fixed":        False,
