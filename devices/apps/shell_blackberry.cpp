@@ -61,11 +61,12 @@ extern KITT kitt;
 #define GRID_CELL_H 44
 
 // ── State ─────────────────────────────────────────────────────────────────────
-typedef enum { BB_HOME, BB_DRAWER, BB_TASKS } bb_state_t;
+typedef enum { BB_HOME, BB_DRAWER, BB_TASKS, BB_SYSTEM } bb_state_t;
 
 static mw_handle_t  shell_handle;
-static bb_state_t   bb_state = BB_HOME;
-static int          bb_tab   = 1;  // "All" default
+static bb_state_t   bb_state        = BB_HOME;
+static int          bb_tab          = 1;  // "All" default
+static bool         bb_reboot_armed = false;  // true after first reboot tap
 
 // ── App list ──────────────────────────────────────────────────────────────────
 #define MAX_BB_APPS 16
@@ -339,6 +340,45 @@ static void paint_dock(const mw_gl_draw_info_t *d)
     }
 }
 
+static void paint_system(const mw_gl_draw_info_t *d)
+{
+    bb_fill(d, 0, CONTENT_Y, SCR_W, CONTENT_H + TAB_H, BB_BLACK);
+
+    bb_text(d, 4, (int16_t)(CONTENT_Y + 2), "[ system ]", BB_GREEN_MID);
+    mw_gl_set_fg_colour(BB_SEP);
+    mw_gl_hline(d, 0, (int16_t)(SCR_W - 1), (int16_t)(CONTENT_Y + 14));
+
+    // Reboot button row
+    int16_t bx = 8, by = (int16_t)(CONTENT_Y + 22), bw = (int16_t)(SCR_W - 16), bh = 26;
+
+    if (bb_reboot_armed) {
+        // Armed state — red background, confirm prompt
+        bb_fill(d, bx, by, bw, bh, BB_ADMIN_BG);
+        mw_gl_set_fg_colour(0xFF4444u);
+        mw_gl_set_fill(MW_GL_NO_FILL);
+        mw_gl_set_border(MW_GL_BORDER_ON);
+        mw_gl_rectangle(d, bx, by, bw, bh);
+        mw_gl_set_fill(MW_GL_FILL);
+        mw_gl_set_border(MW_GL_BORDER_OFF);
+        int16_t lx = (int16_t)(bx + (bw - (int16_t)(strlen("!! TAP AGAIN TO REBOOT !!") * 6)) / 2);
+        bb_text(d, lx, (int16_t)(by + 8), "!! TAP AGAIN TO REBOOT !!", 0xFF4444u);
+
+        // Cancel hint
+        bb_text(d, 8, (int16_t)(by + bh + 8), "tap elsewhere to cancel", BB_GREEN_DIM);
+    } else {
+        // Normal state — green reboot button
+        bb_fill(d, bx, by, bw, bh, BB_ICON_BG);
+        mw_gl_set_fg_colour(BB_SEP);
+        mw_gl_set_fill(MW_GL_NO_FILL);
+        mw_gl_set_border(MW_GL_BORDER_ON);
+        mw_gl_rectangle(d, bx, by, bw, bh);
+        mw_gl_set_fill(MW_GL_FILL);
+        mw_gl_set_border(MW_GL_BORDER_OFF);
+        int16_t lx = (int16_t)(bx + (bw - (int16_t)(strlen("Reboot") * 6)) / 2);
+        bb_text(d, lx, (int16_t)(by + 8), "Reboot", BB_GREEN_HI);
+    }
+}
+
 #define TASK_ROW_H  20
 
 static void paint_tasks(const mw_gl_draw_info_t *d)
@@ -439,6 +479,7 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
     paint_notif(d);
     if (bb_state == BB_DRAWER)      paint_drawer(d);
     else if (bb_state == BB_TASKS)  paint_tasks(d);
+    else if (bb_state == BB_SYSTEM) paint_system(d);
     else                            paint_wallpaper(d);
     paint_tabs(d);
     paint_dock(d);
@@ -450,6 +491,7 @@ static void handle_dock(int col)
 {
     switch (col) {
     case 0:  // APPS — toggle drawer
+        bb_reboot_armed = false;
         bb_state = (bb_state == BB_DRAWER) ? BB_HOME : BB_DRAWER;
         if (bb_state == BB_DRAWER) bb_scan_apps();
         break;
@@ -486,10 +528,13 @@ static void shell_message(const mw_message_t *msg)
         if (tab >= 0 && tab < TAB_COUNT) {
             bb_tab = tab;
             if (tab == 0) {
-                // Tasks tab — toggle tasks view
                 bb_state = (bb_state == BB_TASKS) ? BB_HOME : BB_TASKS;
+                bb_reboot_armed = false;
+            } else if (tab == 2) {
+                bb_state = (bb_state == BB_SYSTEM) ? BB_HOME : BB_SYSTEM;
+                bb_reboot_armed = false;
             } else {
-                // Other tabs open the app drawer
+                // All tab — open app drawer
                 if (bb_state != BB_DRAWER) {
                     bb_state = BB_DRAWER;
                     bb_scan_apps();
@@ -502,7 +547,23 @@ static void shell_message(const mw_message_t *msg)
 
     // Content area
     if (ty >= CONTENT_Y && ty < TAB_Y) {
-        if (bb_state == BB_TASKS) {
+        if (bb_state == BB_SYSTEM) {
+            // Hit-test the reboot button (bx=8, by=CONTENT_Y+22, bw=SCR_W-16, bh=26)
+            int16_t bx = 8, by = (int16_t)(CONTENT_Y + 22);
+            int16_t bw = (int16_t)(SCR_W - 16), bh = 26;
+            bool hit_button = (tx >= bx && tx < bx + bw && ty >= by && ty < by + bh);
+            if (hit_button) {
+                if (bb_reboot_armed) {
+                    esp_restart();
+                } else {
+                    bb_reboot_armed = true;
+                }
+            } else {
+                // Tap anywhere else — cancel armed state
+                bb_reboot_armed = false;
+            }
+            mw_paint_window_client(shell_handle);
+        } else if (bb_state == BB_TASKS) {
             // Tap close bar
             if (ty < CONTENT_Y + 16) {
                 bb_state = BB_HOME;
