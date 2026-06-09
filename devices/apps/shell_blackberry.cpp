@@ -174,7 +174,7 @@ static void bb_launch_lua(bb_app_t *app)
     s_lua_win = mw_add_window(&r, app->name,
         lua_win_paint, lua_win_message, NULL, 0,
         MW_WINDOW_FLAG_IS_VISIBLE | MW_WINDOW_FLAG_HAS_TITLE_BAR |
-        MW_WINDOW_FLAG_CAN_BE_CLOSED | MW_WINDOW_FLAG_TOUCH_INT_AND_EXT,
+        MW_WINDOW_FLAG_CAN_BE_CLOSED | MW_WINDOW_FLAG_TOUCH_FOCUS_AND_EVENT,
         NULL);
 }
 

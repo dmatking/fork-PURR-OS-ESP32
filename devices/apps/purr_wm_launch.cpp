@@ -77,7 +77,7 @@ extern "C" bool purr_wm_launch(const char *path)
     s_pwm_win = mw_add_window(&r, title,
         pwm_paint, pwm_message, NULL, 0,
         MW_WINDOW_FLAG_IS_VISIBLE | MW_WINDOW_FLAG_HAS_TITLE_BAR |
-        MW_WINDOW_FLAG_CAN_BE_CLOSED | MW_WINDOW_FLAG_TOUCH_INT_AND_EXT,
+        MW_WINDOW_FLAG_CAN_BE_CLOSED | MW_WINDOW_FLAG_TOUCH_FOCUS_AND_EVENT,
         NULL);
     return true;
 }
