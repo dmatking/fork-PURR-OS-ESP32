@@ -58,7 +58,11 @@ static int               s_app_count = 0;
 static bool s_child_running = false;
 static char s_child_path[128] = {};
 
-static uint32_t s_last_input_ms = 0;
+static uint32_t s_last_input_ms   = 0;
+static uint32_t s_select_press_ms = 0;  // when SELECT was pressed down
+
+#define HOLD_THRESHOLD_MS  500  // >= 500ms held = "hold" (launch/confirm)
+                                // <  500ms        = "click" (move cursor)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -133,8 +137,8 @@ static void draw_desktop() {
         kitt.text_print(6, "No apps found");
         kitt.text_print(7, "BCK:menu");
     } else {
-        kitt.text_print(6, s_confirm ? "SEL:launch" : "SEL:select");
-        kitt.text_print(7, "BCK:menu  DN:next");
+        kitt.text_print(6, s_confirm ? "HOLD:launch CLK:next" : "CLK:move  BCK:menu");
+        kitt.text_print(7, "DN/UP:scroll");
     }
 }
 
@@ -147,7 +151,7 @@ static void draw_menu() {
                  (i == s_menu_sel) ? '>' : ' ', MENU_ITEMS[i]);
         kitt.text_print(1 + i, line);
     }
-    kitt.text_print(7, "SEL:ok  BCK:back");
+    kitt.text_print(7, "CLK:next HOLD:open BCK:back");
 }
 
 static void draw_about() {
@@ -265,24 +269,30 @@ static void draw_lora() {
 
 // ── Input handlers ────────────────────────────────────────────────────────────
 
-static void handle_desktop(KITT::generic_key_t key) {
+// held=true  → long press (>= HOLD_THRESHOLD_MS): launch / confirm action
+// held=false → short click: move cursor / navigate
+static void handle_desktop(KITT::generic_key_t key, bool held) {
     int n = s_app_count;
     switch (key) {
     case KITT::KEY_SELECT:
-        if (s_confirm && n > 0) {
-            s_confirm = false;
-            strncpy(s_child_path, s_apps[s_cursor].path, sizeof(s_child_path) - 1);
-            if (kitt.app_launch(s_apps[s_cursor].path)) {
-                s_child_running = true;
-            } else {
-                kitt.text_clear();
-                kitt.text_print(0, "Launch failed");
-                kitt.text_print(1, "Check serial log");
-                vTaskDelay(pdMS_TO_TICKS(2000));
+        if (held) {
+            // Hold = launch selected app
+            if (n > 0) {
+                s_confirm = false;
+                strncpy(s_child_path, s_apps[s_cursor].path, sizeof(s_child_path) - 1);
+                if (kitt.app_launch(s_apps[s_cursor].path)) {
+                    s_child_running = true;
+                } else {
+                    kitt.text_clear();
+                    kitt.text_print(0, "Launch failed");
+                    kitt.text_print(1, "Check serial log");
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                }
             }
         } else {
+            // Click = move cursor to next app
             if (n > 0) s_cursor = (s_cursor + 1) % n;
-            s_confirm = true;
+            s_confirm = true;  // cursor is now on an app, hint shows "HOLD:launch"
         }
         break;
     case KITT::KEY_DOWN:
@@ -302,7 +312,7 @@ static void handle_desktop(KITT::generic_key_t key) {
     }
 }
 
-static void handle_menu(KITT::generic_key_t key) {
+static void handle_menu(KITT::generic_key_t key, bool held) {
     switch (key) {
     case KITT::KEY_DOWN:
         s_menu_sel = (s_menu_sel + 1) % MENU_COUNT;
@@ -311,13 +321,19 @@ static void handle_menu(KITT::generic_key_t key) {
         s_menu_sel = (s_menu_sel - 1 + MENU_COUNT) % MENU_COUNT;
         break;
     case KITT::KEY_SELECT:
-        switch (s_menu_sel) {
-        case 0: s_screen = SCR_ABOUT;   break;
-        case 1: s_screen = SCR_SYSINFO; break;
-        case 2: s_screen = SCR_WIFI;    break;
-        case 3: s_screen = SCR_LORA;    break;
-        case 4: esp_restart();          break;
-        default: s_screen = SCR_DESKTOP; break;
+        if (!held) {
+            // Click just moves selection down (cycle through items)
+            s_menu_sel = (s_menu_sel + 1) % MENU_COUNT;
+        } else {
+            // Hold = confirm menu item
+            switch (s_menu_sel) {
+            case 0: s_screen = SCR_ABOUT;   break;
+            case 1: s_screen = SCR_SYSINFO; break;
+            case 2: s_screen = SCR_WIFI;    break;
+            case 3: s_screen = SCR_LORA;    break;
+            case 4: esp_restart();          break;
+            default: s_screen = SCR_DESKTOP; break;
+            }
         }
         break;
     case KITT::KEY_BACK:
@@ -343,25 +359,46 @@ static void kitten_ui_task(void*) {
             rescan();
         }
 
-        // Drain key queue
+        // Drain key queue — use raw events to measure SELECT hold duration
         KITT::generic_key_t key;
         bool pressed;
         while (kitt.get_key_event(&key, &pressed)) {
-            if (!pressed)          continue;
-            if (s_child_running)   continue;
+            if (s_child_running) continue;
 
             s_last_input_ms = now_ms();
 
-            // Info screens: any key returns to desktop
-            if (s_screen == SCR_ABOUT   ||
-                s_screen == SCR_SYSINFO ||
-                s_screen == SCR_WIFI    ||
-                s_screen == SCR_LORA) {
-                s_screen = SCR_DESKTOP;
-            } else if (s_screen == SCR_MENU) {
-                handle_menu(key);
+            if (key == KITT::KEY_SELECT) {
+                if (pressed) {
+                    // Record when the button went down
+                    s_select_press_ms = now_ms();
+                } else {
+                    // On release, classify as click or hold
+                    bool held = (now_ms() - s_select_press_ms) >= HOLD_THRESHOLD_MS;
+
+                    if (s_screen == SCR_ABOUT   ||
+                        s_screen == SCR_SYSINFO ||
+                        s_screen == SCR_WIFI    ||
+                        s_screen == SCR_LORA) {
+                        s_screen = SCR_DESKTOP;
+                    } else if (s_screen == SCR_MENU) {
+                        handle_menu(key, held);
+                    } else {
+                        handle_desktop(key, held);
+                    }
+                }
             } else {
-                handle_desktop(key);
+                if (!pressed) continue;  // only act on press for other keys
+
+                if (s_screen == SCR_ABOUT   ||
+                    s_screen == SCR_SYSINFO ||
+                    s_screen == SCR_WIFI    ||
+                    s_screen == SCR_LORA) {
+                    s_screen = SCR_DESKTOP;
+                } else if (s_screen == SCR_MENU) {
+                    handle_menu(key, false);
+                } else {
+                    handle_desktop(key, false);
+                }
             }
         }
 
