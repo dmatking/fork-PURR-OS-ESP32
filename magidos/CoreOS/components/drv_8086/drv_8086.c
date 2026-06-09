@@ -127,14 +127,110 @@ esp_err_t drv_8086_load_com(const uint8_t *data, size_t len)
     return ESP_OK;
 }
 
+// Helper: read little-endian word from buffer
+static inline uint16_t read_word_le(const uint8_t *buf, uint32_t offset)
+{
+    return (uint16_t)buf[offset] | ((uint16_t)buf[offset + 1] << 8);
+}
+
 esp_err_t drv_8086_load_exe(const uint8_t *data, size_t len)
 {
-    // MZ EXE: parse header, apply relocations, set up segments
-    // TODO: implement MZ loader — COM files cover most simple DOS apps for now
-    (void)data;
-    (void)len;
-    ESP_LOGW(TAG, "EXE loading not yet implemented");
-    return ESP_ERR_NOT_SUPPORTED;
+    // MZ EXE format parser and loader
+    // Reads MZ header, calculates load address, applies relocations, sets up registers
+
+    if (!s_initialized) {
+        ESP_LOGE(TAG, "CPU not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (len < 0x3C) {
+        ESP_LOGE(TAG, "MZ file too small for header");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Read MZ header fields (little-endian)
+    uint16_t last_page_bytes = read_word_le(data, 0x02);   // bytes in last page
+    uint16_t pages_total     = read_word_le(data, 0x04);   // total pages
+    uint16_t num_relocations = read_word_le(data, 0x06);   // number of relocations
+    uint16_t header_para     = read_word_le(data, 0x08);   // header size in paragraphs
+    uint16_t min_extra_para  = read_word_le(data, 0x0A);   // min extra memory
+    uint16_t max_extra_para  = read_word_le(data, 0x0C);   // max extra memory
+    uint16_t initial_ss      = read_word_le(data, 0x0E);   // initial SS segment
+    uint16_t initial_sp      = read_word_le(data, 0x10);   // initial SP register
+    uint16_t initial_ip      = read_word_le(data, 0x14);   // initial IP register
+    uint16_t initial_cs_ofs  = read_word_le(data, 0x16);   // initial CS offset
+    uint16_t reloc_table_ofs = read_word_le(data, 0x18);   // relocation table offset
+
+    // Calculate image size
+    uint32_t image_size = (pages_total - 1) * 512 + (last_page_bytes ? last_page_bytes : 512);
+    uint32_t header_size = header_para * 16;
+
+    if (header_size > len || (header_size + image_size) > len) {
+        ESP_LOGE(TAG, "MZ file truncated: header=%u, image=%u, actual=%zu",
+                 header_size, image_size, len);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Load address: typically 0x0800 (0800:0000) but can vary
+    // For safety, use 0x0800 (matches many DOS extenders)
+    uint16_t load_segment = 0x0800;
+
+    // Load image into memory at load_segment:0
+    uint32_t load_addr = load_segment * 16;
+    memcpy(mem + load_addr, data + header_size, image_size);
+
+    ESP_LOGI(TAG, "MZ: header=%u, image=%u, load_seg=%04X, relocs=%u",
+             header_size, image_size, load_segment, num_relocations);
+
+    // Apply relocations
+    // Each relocation: 4 bytes = offset (2 bytes) + segment (2 bytes)
+    for (uint16_t i = 0; i < num_relocations; i++) {
+        uint32_t reloc_ofs = reloc_table_ofs + i * 4;
+        if (reloc_ofs + 4 > len) {
+            ESP_LOGW(TAG, "relocation table truncated at entry %u", i);
+            break;
+        }
+
+        uint16_t reloc_offset  = read_word_le(data, reloc_ofs);
+        uint16_t reloc_segment = read_word_le(data, reloc_ofs + 2);
+
+        // Relocation address in loaded image
+        uint32_t reloc_addr = load_addr + (reloc_segment * 16) + reloc_offset;
+
+        // Check bounds
+        if (reloc_addr + 2 > load_addr + image_size) {
+            ESP_LOGW(TAG, "relocation out of bounds: offset=%u, seg=%u",
+                     reloc_offset, reloc_segment);
+            continue;
+        }
+
+        // Apply relocation: add load_segment to the 16-bit value
+        uint16_t *reloc_ptr = (uint16_t *)(mem + reloc_addr);
+        uint16_t base_segment = *reloc_ptr;
+        *reloc_ptr = base_segment + load_segment;
+    }
+
+    // Set up registers for execution
+    // CS:IP points to entry point (initial_cs_ofs:initial_ip relative to load)
+    regs16[REG_CS] = load_segment + initial_cs_ofs;
+    reg_ip = initial_ip;
+
+    // SS:SP points to stack
+    regs16[REG_SS] = load_segment + initial_ss;
+    regs16[REG_SP] = initial_sp;
+
+    // Initialize other segments
+    regs16[REG_DS] = load_segment;
+    regs16[REG_ES] = load_segment;
+
+    // Initialize flags to known state
+    regs8[FLAG_IF] = 1;  // interrupts enabled
+    regs8[FLAG_TF] = 0;  // trap off
+
+    s_running = true;
+    ESP_LOGI(TAG, "loaded MZ at %04X, CS:IP=%04X:%04X, SS:SP=%04X:%04X",
+             load_segment, regs16[REG_CS], reg_ip, regs16[REG_SS], regs16[REG_SP]);
+    return ESP_OK;
 }
 
 esp_err_t drv_8086_load_file(const char *path)
