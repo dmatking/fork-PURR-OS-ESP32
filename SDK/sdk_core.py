@@ -560,7 +560,7 @@ def pick_modules(cfg):
         div()
         print(f"\n  Kernel modules — {C_CYN}{target}{C_RST}\n")
         print(f"  {C_GRY}Always compiled: wifi_manager  power_manager{C_RST}")
-        if target == "cyd":
+        if target in ("cyd", "cyd_s024c", "cyd_s028r"):
             print(f"  {C_GRY}                  display_ili9341  touch_cst816s  partition_manager{C_RST}")
         else:
             print(f"  {C_GRY}                  display_ssd1306{C_RST}")
@@ -972,9 +972,10 @@ def do_flash(cfg, port=None):
     build_dir  = _build_dir(cfg)
     spiffs_img = os.path.join(build_dir, "spiffs.bin")
 
-    # cyd (ota_0) → 0x120000; all others (factory) → 0x10000
-    app_offset    = "0x120000" if target == "cyd" else "0x10000"
-    spiffs_offset = "0x390000" if target in ("cyd", "cyd_boot") else "0x3b0000"
+    # CYD variants flash OS to ota_0 (0x120000); all others use factory slot (0x10000)
+    _cyd_targets = ("cyd", "cyd_s024c", "cyd_s028r")
+    app_offset    = "0x120000" if target in _cyd_targets else "0x10000"
+    spiffs_offset = "0x390000" if target in (*_cyd_targets, "cyd_boot") else "0x3b0000"
 
     cmd = [
         sys.executable, "-m", "esptool",
@@ -1018,8 +1019,9 @@ def do_monitor(cfg, port=None):
 # ── Full build + full flash (CYD: factory + ota_0 together) ──────────────────
 
 def do_full_build(cfg, clean=False):
-    """Build cyd_boot (factory) then cyd (OS) back-to-back."""
-    if cfg["target"] not in ("cyd", "cyd_boot"):
+    """Build cyd_boot (factory) then cyd/cyd_s024c/cyd_s028r (OS) back-to-back."""
+    _cyd_os_targets = ("cyd", "cyd_s024c", "cyd_s028r")
+    if cfg["target"] not in (*_cyd_os_targets, "cyd_boot"):
         warn("Full Build is only meaningful for CYD targets — running single build instead")
         do_build(cfg, clean=clean)
         return
@@ -1029,7 +1031,9 @@ def do_full_build(cfg, clean=False):
     boot_cfg["modules"] = dict(DEFAULT_CFG["modules"])
 
     os_cfg = dict(cfg)
-    os_cfg["target"] = "cyd"
+    # If target is cyd_boot (run directly), build cyd_s024c as the OS image
+    if os_cfg["target"] == "cyd_boot":
+        os_cfg["target"] = "cyd_s024c"
 
     print(f"\n{C_YLW}{'━'*44}{C_RST}")
     info("Full Build step 1/2 — PURR Kernel (factory, OTA-immune)")
@@ -1056,8 +1060,11 @@ def do_full_flash(cfg, port=None):
         cfg["flash_port"] = port
         save_cfg(cfg)
 
+    # Determine OS target: use the configured target (cyd_s024c, cyd_s028r, or cyd)
+    _cyd_os_targets = ("cyd", "cyd_s024c", "cyd_s028r")
+    os_target  = cfg["target"] if cfg["target"] in _cyd_os_targets else "cyd_s024c"
     boot_dir   = os.path.join(COREOS_DIR, _BUILD_DIRS["cyd_boot"])
-    os_dir     = os.path.join(COREOS_DIR, _BUILD_DIRS["cyd"])
+    os_dir     = os.path.join(COREOS_DIR, _BUILD_DIRS[os_target])
     spiffs_img = os.path.join(os_dir, "spiffs.bin")
 
     missing = []
@@ -1066,7 +1073,7 @@ def do_full_flash(cfg, port=None):
         (os.path.join(boot_dir, "partition_table", "partition-table.bin"),"cyd_boot/partition-table.bin"),
         (os.path.join(boot_dir, "ota_data_initial.bin"),                  "cyd_boot/ota_data_initial.bin"),
         (os.path.join(boot_dir, "purr_os_core.bin"),                      "cyd_boot/purr_os_core.bin"),
-        (os.path.join(os_dir,   "purr_os_core.bin"),                      "cyd/purr_os_core.bin"),
+        (os.path.join(os_dir,   "purr_os_core.bin"),                      f"{os_target}/purr_os_core.bin"),
     ]:
         if not os.path.exists(path):
             missing.append(label)
