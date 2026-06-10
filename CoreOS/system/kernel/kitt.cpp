@@ -250,6 +250,17 @@ BootMode KITT::get_boot_mode() const {
     return boot_mode;
 }
 
+// Kernel-only: save boot mode to NVS (protected namespace)
+static void save_boot_mode_nvs() {
+    nvs_handle_t nvs_h;
+    if (nvs_open("purr_kernel", NVS_READWRITE, &nvs_h) == ESP_OK) {
+        nvs_set_u8(nvs_h, "boot_mode", (uint8_t)boot_mode);
+        nvs_commit(nvs_h);
+        nvs_close(nvs_h);
+        ESP_LOGI(TAG, "Boot mode saved: %s", boot_mode == BOOT_MAGICMAC ? "MagicMac" : "PURR OS");
+    }
+}
+
 // ── Boot sequence ──────────────────────────────────────────────────────────────
 
 bool KITT::init(const char* device_json_path) {
@@ -257,6 +268,17 @@ bool KITT::init(const char* device_json_path) {
 
     // Step 2: mount filesystem
     nvs_flash_init();
+
+    // Load boot mode from NVS (kernel-only, protected from app interference)
+    nvs_handle_t nvs_h;
+    if (nvs_open("purr_kernel", NVS_READONLY, &nvs_h) == ESP_OK) {
+        uint8_t bm = (uint8_t)BOOT_PURR_OS;
+        nvs_get_u8(nvs_h, "boot_mode", &bm);
+        boot_mode = (BootMode)bm;
+        nvs_close(nvs_h);
+        ESP_LOGI(TAG, "Boot mode: %s", boot_mode == BOOT_MAGICMAC ? "MagicMac" : "PURR OS");
+    }
+
     esp_vfs_spiffs_conf_t spiffs_cfg = {
         .base_path              = "/spiffs",
         .partition_label        = NULL,
