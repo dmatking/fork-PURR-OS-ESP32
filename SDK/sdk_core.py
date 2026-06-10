@@ -69,9 +69,9 @@ def _scan_serial_ports():
     except ImportError:
         pass
 
-    # Fallback: glob /dev/ttyUSB* and /dev/ttyACM* on Linux
+    # Fallback: glob /dev/tty* patterns on Linux (USB, ACM, AMC/Qualcomm)
     if not results and sys.platform.startswith("linux"):
-        for pattern in ("/dev/ttyUSB*", "/dev/ttyACM*"):
+        for pattern in ("/dev/ttyUSB*", "/dev/ttyACM*", "/dev/ttyAMC*"):
             for dev in sorted(glob.glob(pattern)):
                 if dev not in [r[0] for r in results]:
                     results.append((dev, ""))
@@ -98,7 +98,7 @@ def _pick_port(prompt_label, saved=""):
     if not ports:
         # No devices found — fall back to manual entry
         if sys.platform.startswith("linux"):
-            example = "/dev/ttyUSB0"
+            example = "/dev/ttyUSB0 (or /dev/ttyAMC0 for T-Deck Plus)"
         elif sys.platform == "darwin":
             example = "/dev/cu.usbserial-0001"
         else:
@@ -1205,7 +1205,7 @@ def _write_flash_guide(target, out_dir, chip, flash_mode, flash_freq, flash_size
         esptool_cmd,
         "```",
         "",
-        "Replace `PORT` with your serial port (e.g. `/dev/ttyUSB0` or `COM3`).",
+        "Replace `PORT` with your serial port (e.g. `/dev/ttyUSB0`, `/dev/ttyAMC0`, or `COM3`).",
         "",
         "---",
         "",
