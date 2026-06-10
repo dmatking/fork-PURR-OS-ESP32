@@ -1,8 +1,0 @@
-source "/home/Catto/esp/idf/components/bootloader/Kconfig.projbuild"
-source "/home/Catto/esp/idf/components/esp_app_format/Kconfig.projbuild"
-source "/home/Catto/esp/idf/components/esp_rom/Kconfig.projbuild"
-source "/home/Catto/esp/idf/components/esptool_py/Kconfig.projbuild"
-source "/home/Catto/esp/idf/components/partition_table/Kconfig.projbuild"
-source "/home/Catto/Documents/Projects/PURR-OS-ESP32/CoreOS/managed_components/espressif__arduino-esp32/Kconfig.projbuild"
-source "/home/Catto/Documents/Projects/PURR-OS-ESP32/CoreOS/managed_components/espressif__esp-sr/Kconfig.projbuild"
-source "/home/Catto/Documents/Projects/PURR-OS-ESP32/CoreOS/managed_components/espressif__esp_rainmaker/Kconfig.projbuild"

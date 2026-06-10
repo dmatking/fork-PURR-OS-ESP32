@@ -1,4 +1,6 @@
 # Build artifacts
+build/
+build_*/
 CoreOS/build/
 CoreOS/build_*/
 CoreOS/sdkconfig
@@ -11,6 +13,12 @@ CoreOS/managed_components/
 # SDK config (contains local paths/ports, not for VCS)
 Builder/purr_build.cfg
 Builder/purr_sdk.cfg
+SDK/purr_sdk.cfg
+
+# Root-level scratch files
+CMakeLists.txt
+main.cpp
+purr_api.h
 
 # Python
 __pycache__/
