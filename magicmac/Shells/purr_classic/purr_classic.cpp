@@ -38,16 +38,28 @@ void purr_classic_start(void)
     // Init IPC bridge (must come before umac so the window is registered)
     purr_ipc_init();
 
-    // Init emulator
+    // Init emulator with ROM from SD card (/sdcard/magicmac/mac.rom)
+    // Falls back to SPIFFS if SD card ROM not found
+    const char *rom_path = "/sdcard/magicmac/mac.rom";
+    FILE *f = fopen(rom_path, "rb");
+    if (!f) {
+        ESP_LOGW(TAG, "SD card ROM not found, trying SPIFFS fallback");
+        rom_path = UMAC_ROM_PATH;  // Falls back to /spiffs/mac.rom
+    } else {
+        fclose(f);
+    }
+
     umac_config_t cfg = {
-        .rom_path = UMAC_ROM_PATH,
+        .rom_path = rom_path,
         .ram_size = UMAC_RAM_SIZE,
         .verbose  = false,
     };
     if (umac_init(&cfg) != ESP_OK) {
-        ESP_LOGE(TAG, "umac init failed — ROM missing from SPIFFS?");
+        ESP_LOGE(TAG, "umac init failed — ROM missing from %s", rom_path);
         return;
     }
+
+    ESP_LOGI(TAG, "umac initialized with ROM from %s", rom_path);
 
     // Wire frame output
     umac_set_frame_callback(_on_frame);
