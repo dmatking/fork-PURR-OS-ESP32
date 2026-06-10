@@ -14,5 +14,8 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 set(PROJECT_VER "0.10.0")
 project(purr_os_core)
 
-# Enable partition manager (SD card support)
-add_compile_definitions(PURR_HAS_PARTITION_MGR)
+# Enable hardware support
+add_compile_definitions(
+    PURR_HAS_PARTITION_MGR  # SD card support
+    PURR_HAS_LORA           # LoRa radio support
+)
