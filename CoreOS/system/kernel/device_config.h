@@ -27,3 +27,7 @@ typedef struct {
 } device_config_t;
 
 bool device_config_load(const char* path, device_config_t* out);
+
+// Fill *out with compile-time defaults for the current target.
+// Returns false if no compile-time default is defined for this target.
+bool device_config_default(device_config_t* out);

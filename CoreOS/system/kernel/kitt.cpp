@@ -254,14 +254,18 @@ bool KITT::init(const char* device_json_path) {
         return false;
     }
 
-    // Step 3: parse device.json
+    // Step 3: parse device.json — fall back to compile-time defaults if missing
     if (!device_config_load(device_json_path, &cfg)) {
-        Serial.println("[kitt] ERR 0x01 device.json parse failed");
-        purr_panic(PURR_STOP_CATFAIL, PURR_PANIC_BLUE, "device.json parse failed");
-        return false;
+        Serial.println("[kitt] device.json not found — trying compile-time defaults");
+        if (!device_config_default(&cfg)) {
+            Serial.println("[kitt] ERR 0x01 no device config");
+            purr_panic(PURR_STOP_CATFAIL, PURR_PANIC_BLUE, "device.json missing, no default");
+            return false;
+        }
     }
 
-    // Step 5: init display
+    // Step 5: init display (skipped for MiniWin targets — mw_init() calls mw_hal_lcd_init())
+#ifndef PURR_HAS_MINIWIN
     if (strcmp(cfg.display, "ssd1306") == 0) {
 #ifdef PURR_DISPLAY_SSD1306
         display_ssd1306_init();
@@ -291,6 +295,7 @@ bool KITT::init(const char* device_json_path) {
         purr_panic(PURR_STOP_HAL_FAIL, PURR_PANIC_RED, "Unknown display type");
         return false;
     }
+#endif // PURR_HAS_MINIWIN
 
     // Step 7: boot splash or verbose log
     if (cfg.verbose_boot) {
@@ -413,7 +418,8 @@ bool KITT::init(const char* device_json_path) {
     }
 #endif
 
-    // Step 12: touch
+    // Step 12: touch (skipped for MiniWin targets — mw_init() calls mw_hal_touch_init())
+#ifndef PURR_HAS_MINIWIN
 #ifdef PURR_HAS_TOUCH_MXT
     if (strcmp(cfg.touch, "mxt336t") == 0) {
         touch_mxt336t_init();
@@ -445,6 +451,7 @@ bool KITT::init(const char* device_json_path) {
         log("KITT", "touch GT911 OK");
     }
 #endif
+#endif // PURR_HAS_MINIWIN
 
     // Step 15: MicroPython runtime
 #ifdef PURR_HAS_MICROPYTHON
@@ -623,6 +630,9 @@ uint16_t KITT::display_width()  { return cfg.display_w; }
 uint16_t KITT::display_height() { return cfg.display_h; }
 
 void KITT::text_print(uint8_t row, const char* text) {
+#ifdef PURR_HAS_MINIWIN
+    (void)row; (void)text; return;
+#endif
 #ifdef PURR_DISPLAY_SSD1306
     if (strcmp(cfg.display, "ssd1306") == 0) { display_ssd1306_text(row, text); return; }
 #endif
@@ -639,6 +649,9 @@ void KITT::text_print(uint8_t row, const char* text) {
 }
 
 void KITT::text_clear() {
+#ifdef PURR_HAS_MINIWIN
+    return;
+#endif
 #ifdef PURR_DISPLAY_SSD1306
     if (strcmp(cfg.display, "ssd1306") == 0) { display_ssd1306_clear(); return; }
 #endif
@@ -654,6 +667,9 @@ void KITT::text_clear() {
 }
 
 void KITT::text_set_color(uint32_t fg_hex, uint32_t bg_hex) {
+#ifdef PURR_HAS_MINIWIN
+    (void)fg_hex; (void)bg_hex; return;
+#endif
     auto to565 = [](uint32_t c) -> uint16_t {
         uint8_t r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
         return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));

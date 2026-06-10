@@ -79,3 +79,24 @@ bool device_config_load(const char* path, device_config_t* out) {
              out->device, out->display, out->display_w, out->display_h, out->psram);
     return true;
 }
+
+bool device_config_default(device_config_t* out) {
+    memset(out, 0, sizeof(*out));
+#ifdef PURR_TARGET_TDECK_PLUS
+    strlcpy(out->device,   "tdeck_plus", sizeof(out->device));
+    strlcpy(out->display,  "st7789",     sizeof(out->display));
+    strlcpy(out->touch,    "gt911",      sizeof(out->touch));
+    out->display_w   = 320;
+    out->display_h   = 240;
+    out->psram       = true;
+    out->flash_mb    = 16;
+    out->sd          = true;
+    out->wifi        = true;
+    out->bt          = true;
+    out->cpu_max_mhz = 240;
+    ESP_LOGW(TAG, "device.json missing — using compile-time tdeck_plus defaults");
+    return true;
+#else
+    return false;
+#endif
+}
