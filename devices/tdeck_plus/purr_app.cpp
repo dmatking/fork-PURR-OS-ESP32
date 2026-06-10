@@ -17,6 +17,7 @@
 #include "purr_app_catalog.h"
 #include "purr_taskbar.h"
 #include "hal_input.h"
+#include "app_cursor.h"
 
 #define SCR_W       mw_hal_lcd_get_display_width()
 #define SCR_H       mw_hal_lcd_get_display_height()
@@ -325,12 +326,17 @@ void mw_user_init(void)
         shell_paint, shell_message, NULL, 0,
         MW_WINDOW_FLAG_IS_VISIBLE | MW_WINDOW_FLAG_TOUCH_FOCUS_AND_EVENT,
         NULL);
+
+    // Initialize cursor window (always-on-top, fullscreen)
+    app_cursor_init();
+
     mw_paint_all();
 }
 
 void mw_user_root_paint_function(const mw_gl_draw_info_t *draw_info)
 {
-    hal_input_draw_cursor(draw_info);
+    // Cursor is now drawn by app_cursor fullscreen window (always-on-top)
+    (void)draw_info;
 }
 
 void mw_user_root_message_function(const mw_message_t *message)
