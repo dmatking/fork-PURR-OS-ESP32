@@ -18,6 +18,7 @@
 #include "purr_taskbar.h"
 #include "hal_input.h"
 #include "app_cursor.h"
+#include "desktop_icons.h"
 
 #define SCR_W       mw_hal_lcd_get_display_width()
 #define SCR_H       mw_hal_lcd_get_display_height()
@@ -97,6 +98,9 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
     mw_gl_set_fill(MW_GL_FILL); mw_gl_set_border(MW_GL_BORDER_OFF);
     mw_gl_set_solid_fill_colour(WCE_DESKTOP);
     mw_gl_rectangle(d, 0, 0, SCR_W, TASKBAR_Y);
+
+    // Draw desktop icons (SD card, Apps folder, etc.)
+    desktop_icons_paint(d);
 
     mw_gl_set_solid_fill_colour(WCE_BAR);
     mw_gl_rectangle(d, 0, TASKBAR_Y, SCR_W, TASKBAR_H);
@@ -210,6 +214,15 @@ static void shell_message(const mw_message_t *msg)
 
     int16_t tx = (int16_t)(msg->message_data >> 16);
     int16_t ty = (int16_t)(msg->message_data & 0xFFFF);
+
+    // Check if click hit a desktop icon
+    int icon_clicked = desktop_icons_touch(tx, ty);
+    if (icon_clicked >= 0) {
+        smenu_open = false;
+        smenu_folder = -1;
+        desktop_icon_launch(icon_clicked);
+        return;
+    }
 
     if (smenu_open) {
         if (smenu_folder < 0) {
