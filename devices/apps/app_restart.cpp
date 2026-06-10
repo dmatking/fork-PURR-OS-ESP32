@@ -1,7 +1,8 @@
 #include "app_restart.h"
-#include "esp_system.h"
+#include "app_restart_menu.h"
 
 void app_restart_launch(void)
 {
-    esp_restart();
+    // Show restart menu with boot mode selection instead of immediate restart
+    app_restart_menu_launch();
 }
