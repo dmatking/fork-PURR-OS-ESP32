@@ -6,20 +6,19 @@
 #include "miniwin.h"
 #include "purr_app_catalog.h"
 #include "esp_log.h"
+#include <string.h>
 
 static const char *TAG = "desktop";
 
 #define ICON_SIZE       48
 #define ICON_PADDING    4
 #define LABEL_H         14
+#define DISPLAY_WIDTH   320
 
-// Icon registry
-static const desktop_icon_entry_t icons[] = {
-    { SCR_W - ICON_SIZE - ICON_PADDING, ICON_PADDING,
-      ICON_SIZE, ICON_SIZE + LABEL_H, "SD Card", ICON_SD_CARD },
-
-    { SCR_W - ICON_SIZE - ICON_PADDING, ICON_SIZE + LABEL_H + ICON_PADDING * 3,
-      ICON_SIZE, ICON_SIZE + LABEL_H, "Apps", ICON_APPS },
+// Icon registry - positions calculated at runtime in desktop_icons_paint
+static desktop_icon_entry_t icons[] = {
+    { 0, 0, ICON_SIZE, ICON_SIZE + LABEL_H, "SD Card", ICON_SD_CARD },
+    { 0, 0, ICON_SIZE, ICON_SIZE + LABEL_H, "Apps", ICON_APPS },
 };
 
 // Draw a single icon (box + label)
@@ -31,6 +30,7 @@ static void draw_icon(const mw_gl_draw_info_t *d, const desktop_icon_entry_t *ic
     // Draw icon box (white background, gray border)
     mw_gl_set_fg_colour(0x999999);
     mw_gl_set_fill(MW_GL_FILL);
+    mw_gl_set_border(MW_GL_BORDER_OFF);
     mw_gl_rectangle(d, ix, iy, ix + ICON_SIZE, iy + ICON_SIZE);
 
     mw_gl_set_fg_colour(0xFFFFFF);
@@ -49,10 +49,11 @@ static void draw_icon(const mw_gl_draw_info_t *d, const desktop_icon_entry_t *ic
     case ICON_APPS:
         // Draw grid pattern (2x2 dots)
         mw_gl_set_fg_colour(0x0066FF);
-        mw_gl_filled_rectangle(d, ix + 10, iy + 10, 6, 6);
-        mw_gl_filled_rectangle(d, ix + 24, iy + 10, 6, 6);
-        mw_gl_filled_rectangle(d, ix + 10, iy + 24, 6, 6);
-        mw_gl_filled_rectangle(d, ix + 24, iy + 24, 6, 6);
+        mw_gl_set_fill(MW_GL_FILL);
+        mw_gl_rectangle(d, ix + 10, iy + 10, ix + 16, iy + 16);
+        mw_gl_rectangle(d, ix + 24, iy + 10, ix + 30, iy + 16);
+        mw_gl_rectangle(d, ix + 10, iy + 24, ix + 16, iy + 30);
+        mw_gl_rectangle(d, ix + 24, iy + 24, ix + 30, iy + 30);
         break;
     default:
         break;
@@ -70,6 +71,13 @@ static void draw_icon(const mw_gl_draw_info_t *d, const desktop_icon_entry_t *ic
 void desktop_icons_paint(const mw_gl_draw_info_t *d)
 {
     if (!d) return;
+
+    // Update icon positions based on display width
+    int16_t right_x = mw_hal_lcd_get_display_width() - ICON_SIZE - ICON_PADDING;
+    icons[0].x = right_x;
+    icons[0].y = ICON_PADDING;
+    icons[1].x = right_x;
+    icons[1].y = ICON_SIZE + LABEL_H + ICON_PADDING * 3;
 
     for (int i = 0; i < ICON_COUNT; i++) {
         draw_icon(d, &icons[i]);
@@ -93,9 +101,9 @@ void desktop_icon_launch(int icon_type)
 {
     switch (icon_type) {
     case ICON_SD_CARD:
-        // Launch files app with /sdcard/ path
+        // Launch files app
         for (int i = 0; i < purr_catalog_count; i++) {
-            if (purr_catalog[i].app_id == 0x0003) {  // files app ID
+            if (purr_catalog[i].name && strstr(purr_catalog[i].name, "Files")) {
                 purr_catalog[i].launch();
                 return;
             }
@@ -103,9 +111,10 @@ void desktop_icon_launch(int icon_type)
         break;
 
     case ICON_APPS:
-        // Launch files app with /system/apps/ or app launcher
+        // Launch launcher or app manager
         for (int i = 0; i < purr_catalog_count; i++) {
-            if (purr_catalog[i].app_id == 0x0001) {  // launcher app ID
+            if (purr_catalog[i].name && (strstr(purr_catalog[i].name, "Launcher") ||
+                                          strstr(purr_catalog[i].name, "Programs"))) {
                 purr_catalog[i].launch();
                 return;
             }

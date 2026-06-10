@@ -24,6 +24,17 @@ bool    hal_input_click_pending();  // consume pending trackball click
 // so touch takes over. Cursor reappears automatically on next trackball movement.
 void    hal_input_notify_touch();
 
+// Trackball input for external systems (e.g., MagicMac emulator)
+// Poll raw trackball state without consuming cursor position
+typedef struct {
+    int16_t dx, dy;     // movement delta since last poll
+    bool    click;      // click pressed this tick
+} hal_trackball_event_t;
+
+// Get and consume trackball movement and click state
+// Returns true if any movement or click occurred
+bool    hal_input_trackball_poll(hal_trackball_event_t *evt);
+
 #ifdef __cplusplus
 }
 #endif

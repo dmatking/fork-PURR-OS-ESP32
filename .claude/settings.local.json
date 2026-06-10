@@ -303,10 +303,31 @@
       "Bash(git commit -m 'feat: add boot mode infrastructure for MagicMac support *)",
       "Bash(git commit -m 'feat: add MagicMac settings app for WiFi/BT control *)",
       "Bash(git commit -m 'feat: MagicMac settings app and kernel-protected NVS boot persistence *)",
-      "Bash(git commit -m 'feat: wire MagicMac boot flow into system startup *)"
+      "Bash(git commit -m 'feat: wire MagicMac boot flow into system startup *)",
+      "Bash(git commit -m 'feat: load MagicMac ROM from SD card \\(/sdcard/magicmac/mac.rom\\) *)",
+      "Bash(git commit -m 'feat: implement Mac framebuffer rendering to display *)",
+      "Bash(git commit -m 'feat: scale Mac framebuffer to display \\(not clip\\) *)",
+      "Bash(python3 SDK/sdk_core.py --target tdeck_plus --magicmac --build)",
+      "Bash(git commit -m 'docs: comprehensive MagicMac documentation *)",
+      "Bash(git commit -m 'docs: MagicMac implementation summary and testing checklist *)",
+      "Bash(git commit -m 'fix: remove ArduinoJson dependency from MagicMac settings app *)",
+      "Bash(git commit -m 'bump: version 0.10.0 \\(OS\\) and 0.6.7 \\(KITT\\) *)",
+      "Bash(git commit -m 'fix: format string errors and unused function warning in settings app *)",
+      "Bash(git commit -m 'wip: defer MagicMac shell integration pending component linking *)",
+      "Bash(git commit -m 'feat: add restart menu with boot mode selection *)",
+      "Bash(git commit -m 'improve: better mouse cursor design with crosshair *)",
+      "Bash(git commit -m 'fix: enable partition manager \\(SD card support\\) *)",
+      "Bash(git commit -m 'feat: enable LoRa radio support on T-Deck Plus *)",
+      "Bash(git commit -m 'bump: version 0.10.1 \\(LoRa + SD fixes, KITT 0.6.8\\) *)",
+      "Bash(git commit -m 'feat: fullscreen cursor window with trackball click synthesis *)",
+      "Bash(git commit -m 'feat: integrate fullscreen cursor window into shell *)",
+      "Bash(git commit -m 'feat: desktop icons \\(SD card, Apps folder\\) *)",
+      "Bash(mv devices/tdeck_plus/desktop_icons.* devices/apps/)",
+      "Bash(git commit -m 'fix: desktop icons and cursor integration, build successful *)"
     ],
     "additionalDirectories": [
-      "/home/Catto/Documents/Projects/PURR-OS-ESP32"
+      "/home/Catto/Documents/Projects/PURR-OS-ESP32",
+      "/home/Catto/Documents/Projects/PURR-OS-ESP32/devices/tdeck_plus"
     ]
   }
 }

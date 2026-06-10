@@ -8,6 +8,10 @@
 #include "purr_apps_common.h"
 #include "purr_taskbar.h"
 #include "../kernel/kitt.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdio.h>
 
 static mw_handle_t s_handle = MW_INVALID_HANDLE;
@@ -69,7 +73,7 @@ static void paint(mw_handle_t h, const mw_gl_draw_info_t *d)
 
     // Instructions
     mw_gl_set_fg_colour(WCE_SHD);
-    mw_gl_set_font(MW_GL_FONT_8);
+    mw_gl_set_font(MW_GL_FONT_9);
     mw_gl_string(d, 8, 110, "Select boot mode and restart,");
     mw_gl_string(d, 8, 120, "or cancel to return to desktop");
 }
@@ -85,8 +89,8 @@ static void message(const mw_message_t *msg)
         break;
 
     case MW_TOUCH_DOWN_MESSAGE: {
-        int16_t x = msg->touch_down_x;
-        int16_t y = msg->touch_down_y;
+        int16_t x = (int16_t)(msg->message_data >> 16);
+        int16_t y = (int16_t)(msg->message_data & 0xFFFF);
 
         // Button hit test (relative to window client area)
         mw_util_rect_t cr = mw_get_window_client_rect(msg->recipient_handle);
@@ -112,8 +116,8 @@ static void message(const mw_message_t *msg)
     }
 
     case MW_TOUCH_UP_MESSAGE: {
-        int16_t x = msg->touch_up_x;
-        int16_t y = msg->touch_up_y;
+        int16_t x = (int16_t)(msg->message_data >> 16);
+        int16_t y = (int16_t)(msg->message_data & 0xFFFF);
 
         // Button hit test (relative to window client area)
         mw_util_rect_t cr = mw_get_window_client_rect(msg->recipient_handle);
@@ -125,14 +129,14 @@ static void message(const mw_message_t *msg)
             ESP_LOGI("restart_menu", "Restarting to PURR OS");
             kitt.set_boot_mode(BOOT_PURR_OS);
             vTaskDelay(pdMS_TO_TICKS(500));
-            kitt.reboot();
+            esp_restart();
         }
         // MagicMac button clicked
         else if (rel_x >= 120 && rel_x <= 210 && rel_y >= 30 && rel_y <= 40) {
             ESP_LOGI("restart_menu", "Restarting to MagicMac");
             kitt.set_boot_mode(BOOT_MAGICMAC);
             vTaskDelay(pdMS_TO_TICKS(500));
-            kitt.reboot();
+            esp_restart();
         }
         // Cancel button clicked
         else if (rel_x >= 10 && rel_x <= 210 && rel_y >= 80 && rel_y <= 90) {

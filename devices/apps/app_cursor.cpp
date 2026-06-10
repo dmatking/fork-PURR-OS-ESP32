@@ -47,8 +47,6 @@ static void message_handler(const mw_message_t *msg)
 {
     switch (msg->message_id) {
     case MW_WINDOW_CREATED_MESSAGE:
-        // Set window to be always-on-top
-        mw_set_window_always_on_top(msg->recipient_handle, true);
         mw_paint_window_client(msg->recipient_handle);
         break;
 
@@ -91,7 +89,6 @@ void app_cursor_init(void)
         paint_cursor, message_handler, NULL, 0, 0, NULL);
 
     if (s_cursor_win != MW_INVALID_HANDLE) {
-        mw_set_window_always_on_top(s_cursor_win, true);
         ESP_LOGI(TAG, "cursor window created");
     }
 }
