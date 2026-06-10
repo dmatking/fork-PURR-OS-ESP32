@@ -24,6 +24,10 @@
 static const char* TAG = "tdeck_touch";
 static i2c_master_bus_handle_t s_bus = NULL;
 static i2c_master_dev_handle_t s_dev = NULL;
+
+// Exported so hal_input.cpp can add the keyboard device to the same bus
+// without creating a second I2C master on the same physical pins.
+i2c_master_bus_handle_t tdeck_i2c_bus_handle(void) { return s_bus; }
 static bool s_pressed = false;
 static int16_t s_x = 0, s_y = 0;
 

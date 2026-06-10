@@ -20,6 +20,10 @@ uint8_t hal_input_key_read();
 
 bool    hal_input_click_pending();  // consume pending trackball click
 
+// Call when the touch IC reports an actual finger touch — hides trackball cursor
+// so touch takes over. Cursor reappears automatically on next trackball movement.
+void    hal_input_notify_touch();
+
 #ifdef __cplusplus
 }
 #endif

@@ -40,6 +40,9 @@ static const char *TAG = "tdeck_input";
 
 // ── State ─────────────────────────────────────────────────────────────────────
 static i2c_master_bus_handle_t s_i2c_bus  = NULL;
+
+// Provided by hal_touch.cpp — GT911 and keyboard share I2C_NUM_0 (SDA=18, SCL=8)
+extern i2c_master_bus_handle_t tdeck_i2c_bus_handle(void);
 static i2c_master_dev_handle_t s_kb_dev   = NULL;
 
 static int16_t  s_cx = 160, s_cy = 120;   // cursor position
@@ -111,29 +114,20 @@ static void _tb_poll() {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void hal_input_init() {
-    // I2C bus is already initialised by hal_touch.cpp (GT911 shares the bus).
-    // Re-use the same bus handle by opening a second device on it.
-    // Since MiniWin inits touch before input, bus is ready; we just add the keyboard device.
-    i2c_master_bus_config_t bus_cfg = {};
-    bus_cfg.i2c_port          = I2C_NUM_0;
-    bus_cfg.sda_io_num        = (gpio_num_t)KB_SDA;
-    bus_cfg.scl_io_num        = (gpio_num_t)KB_SCL;
-    bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
-    bus_cfg.glitch_ignore_cnt = 7;
-    bus_cfg.flags.enable_internal_pullup = true;
-
-    // Attempt to get existing bus; if not yet created, create it
-    esp_err_t rc = i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
-    if (rc != ESP_OK) {
-        // Bus likely already exists from touch init — find it by trying to add device directly
-        // IDF 5.x doesn't have i2c_master_get_bus_handle, so we create a fresh bus on a
-        // different port if port 0 is taken. T-Deck Plus only has one I2C bus, so in practice
-        // hal_touch must not have called i2c_new_master_bus yet, or we share the handle.
-        // Simplest safe path: use I2C_NUM_1 as a dedicated keyboard bus.
-        bus_cfg.i2c_port = I2C_NUM_1;
-        rc = i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
-        if (rc != ESP_OK) {
-            ESP_LOGE(TAG, "keyboard I2C bus init failed: %d", rc);
+    // GT911 (touch) already created the I2C_NUM_0 master bus in hal_touch.cpp.
+    // Reuse that handle so keyboard (0x55) and touch (0x5D) share the same bus.
+    s_i2c_bus = tdeck_i2c_bus_handle();
+    if (!s_i2c_bus) {
+        // Touch init hasn't run yet — create the bus here as fallback.
+        i2c_master_bus_config_t bus_cfg = {};
+        bus_cfg.i2c_port          = I2C_NUM_0;
+        bus_cfg.sda_io_num        = (gpio_num_t)KB_SDA;
+        bus_cfg.scl_io_num        = (gpio_num_t)KB_SCL;
+        bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
+        bus_cfg.glitch_ignore_cnt = 7;
+        bus_cfg.flags.enable_internal_pullup = true;
+        if (i2c_new_master_bus(&bus_cfg, &s_i2c_bus) != ESP_OK) {
+            ESP_LOGE(TAG, "keyboard I2C bus init failed");
             s_i2c_bus = NULL;
         }
     }
@@ -225,4 +219,12 @@ bool hal_input_click_pending() {
     if (!s_click_pending) return false;
     s_click_pending = false;
     return true;
+}
+
+void hal_input_notify_touch() {
+    if (s_cursor_visible) {
+        s_cursor_visible = false;
+        mw_paint_all();
+    }
+    s_idle_ticks = 0;
 }

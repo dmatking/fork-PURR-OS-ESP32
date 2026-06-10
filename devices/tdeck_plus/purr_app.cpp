@@ -3,6 +3,7 @@
 
 #include "miniwin.h"
 #include "miniwin_utilities.h"
+#include "hal/hal_touch.h"
 #include "gl/gl.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -179,6 +180,12 @@ static void shell_message(const mw_message_t *msg)
     if (msg->message_id == MW_WINDOW_CREATED_MESSAGE ||
         msg->message_id == MW_TIMER_MESSAGE) {
         hal_input_tick();
+
+        // If the touch IC reports a real finger touch, hide the trackball cursor
+        // so touch takes over. Cursor reappears on next trackball movement.
+        if (mw_hal_touch_get_state() == MW_HAL_TOUCH_STATE_DOWN) {
+            hal_input_notify_touch();
+        }
 
         // Synthesize a touch-down event if the trackball click was pressed
         if (hal_input_click_pending()) {
