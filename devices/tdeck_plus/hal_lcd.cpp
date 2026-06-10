@@ -84,6 +84,8 @@ void mw_hal_lcd_init(void) {
     esp_lcd_new_panel_st7789(s_io, &panel_cfg, &s_panel);
     esp_lcd_panel_reset(s_panel);
     esp_lcd_panel_init(s_panel);
+    esp_lcd_panel_swap_xy(s_panel, true);
+    esp_lcd_panel_mirror(s_panel, true, false);
     esp_lcd_panel_invert_color(s_panel, true);
     esp_lcd_panel_disp_on_off(s_panel, true);
 
