@@ -68,6 +68,7 @@ typedef struct {
 struct app_lua_window {
     bool              is_admin;
     volatile bool     running;
+    volatile bool     background_mode;
     char              error[256];
     char              path[512];
     lua_State        *L;
@@ -320,6 +321,17 @@ static int l_kitt_time_ms(lua_State *L)
     return 1;
 }
 
+static int l_kitt_set_background(lua_State *L)
+{
+    app_lua_window_t *w = get_win(L);
+    if (!w) { lua_pushboolean(L, false); return 1; }
+    if (!w->is_admin) { lua_pushboolean(L, false); return 1; }
+    bool bg = lua_toboolean(L, 1);
+    app_lua_window_set_background(w, bg);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
 // ── Module registration ───────────────────────────────────────────────────────
 
 static void register_win_api(lua_State *L, app_lua_window_t *w)
@@ -356,6 +368,7 @@ static void register_kitt_api(lua_State *L)
     lua_pushcfunction(L, l_kitt_reboot);         lua_setfield(L, -2, "reboot");
     lua_pushcfunction(L, l_kitt_free_ram);       lua_setfield(L, -2, "free_ram");
     lua_pushcfunction(L, l_kitt_time_ms);        lua_setfield(L, -2, "time_ms");
+    lua_pushcfunction(L, l_kitt_set_background); lua_setfield(L, -2, "set_background");
     lua_setglobal(L, "kitt");
 }
 
@@ -555,6 +568,21 @@ const char *app_lua_window_get_error(app_lua_window_t *w)
     return w ? w->error : "null";
 }
 
+bool app_lua_window_get_background(app_lua_window_t *w)
+{
+    return w ? w->background_mode : false;
+}
+
+void app_lua_window_set_background(app_lua_window_t *w, bool bg)
+{
+    if (w) w->background_mode = bg;
+}
+
+const char *app_lua_window_get_path(app_lua_window_t *w)
+{
+    return w ? w->path : "";
+}
+
 #else  // PURR_HAS_LUA not defined — stub implementation
 
 #include <stdlib.h>
@@ -601,6 +629,21 @@ bool app_lua_window_is_running(app_lua_window_t *w)
 const char *app_lua_window_get_error(app_lua_window_t *w)
 {
     return w ? w->error : "null";
+}
+
+bool app_lua_window_get_background(app_lua_window_t *w)
+{
+    (void)w; return false;
+}
+
+void app_lua_window_set_background(app_lua_window_t *w, bool bg)
+{
+    (void)w; (void)bg;
+}
+
+const char *app_lua_window_get_path(app_lua_window_t *w)
+{
+    return w ? w->path : "";
 }
 
 #endif  // PURR_HAS_LUA

@@ -16,6 +16,9 @@ void              app_lua_window_on_message(app_lua_window_t* w, uint32_t msg_id
 
 bool              app_lua_window_is_running(app_lua_window_t* w);
 const char*       app_lua_window_get_error(app_lua_window_t* w);
+bool              app_lua_window_get_background(app_lua_window_t* w);
+void              app_lua_window_set_background(app_lua_window_t* w, bool bg);
+const char*       app_lua_window_get_path(app_lua_window_t* w);
 
 #ifdef __cplusplus
 }

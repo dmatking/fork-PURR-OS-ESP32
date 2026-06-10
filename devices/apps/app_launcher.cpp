@@ -19,6 +19,29 @@ static mw_handle_t s_script_win = MW_INVALID_HANDLE;
 static app_lua_window_t *s_script = NULL;
 static app_tab_t s_tab = TAB_USER;
 
+// Background task tracking
+#define MAX_BACKGROUND_TASKS 8
+static app_lua_window_t *s_background_tasks[MAX_BACKGROUND_TASKS] = {NULL};
+static int s_background_count = 0;
+
+static void add_background_task(app_lua_window_t *w)
+{
+    if (s_background_count < MAX_BACKGROUND_TASKS)
+        s_background_tasks[s_background_count++] = w;
+}
+
+static void remove_background_task(app_lua_window_t *w)
+{
+    for (int i = 0; i < s_background_count; i++) {
+        if (s_background_tasks[i] == w) {
+            for (int j = i; j < s_background_count - 1; j++)
+                s_background_tasks[j] = s_background_tasks[j + 1];
+            s_background_count--;
+            return;
+        }
+    }
+}
+
 #define WIN_W    240
 #define WIN_H    190
 #define TAB_H    16
@@ -130,7 +153,13 @@ static void script_message(const mw_message_t *msg)
         app_lua_window_on_message(s_script, msg->message_id, msg->message_data);
         break;
     case MW_WINDOW_REMOVED_MESSAGE:
-        if (s_script) app_lua_window_free(s_script);
+        if (s_script) {
+            if (app_lua_window_get_background(s_script)) {
+                add_background_task(s_script);
+            } else {
+                app_lua_window_free(s_script);
+            }
+        }
         s_script = NULL;
         s_script_win = MW_INVALID_HANDLE;
         taskbar_unregister(s_script_win);
@@ -296,4 +325,16 @@ void app_launcher_launch(void)
     s_handle = mw_add_window(&r, "Apps",
         paint, message, NULL, 0, APP_WIN_FLAGS_TOUCH, NULL);
     taskbar_register(s_handle, "Apps");
+}
+
+// Background task accessors (for task manager app)
+app_lua_window_t **app_launcher_get_background_tasks(int *count)
+{
+    if (count) *count = s_background_count;
+    return s_background_tasks;
+}
+
+void app_launcher_remove_background_task(app_lua_window_t *w)
+{
+    remove_background_task(w);
 }
