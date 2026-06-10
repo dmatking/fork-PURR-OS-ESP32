@@ -80,6 +80,7 @@ static const char *TAG = "kitt";
 // ── Internal state ─────────────────────────────────────────────────────────────
 
 static device_config_t cfg;
+static BootMode boot_mode    = BOOT_PURR_OS;
 static bool kitt_ready       = false;
 static bool kitt_flasher     = false;
 static bool display_pi_flag  = false;
@@ -239,6 +240,16 @@ static void check_reserved_combo(KITT::generic_key_t key, bool pressed) {
         reserved_combo_cb();
 }
 
+// ── Boot mode ──────────────────────────────────────────────────────────────────
+
+void KITT::set_boot_mode(BootMode mode) {
+    boot_mode = mode;
+}
+
+BootMode KITT::get_boot_mode() const {
+    return boot_mode;
+}
+
 // ── Boot sequence ──────────────────────────────────────────────────────────────
 
 bool KITT::init(const char* device_json_path) {
@@ -331,15 +342,15 @@ bool KITT::init(const char* device_json_path) {
         }
     }
 
-    // Step 9: WiFi
-    if (cfg.wifi) {
+    // Step 9: WiFi (skip in MagicMac mode to save memory)
+    if (cfg.wifi && boot_mode != BOOT_MAGICMAC) {
         wifi_manager_init();
         log("KITT", "wifi OK");
     }
 
-    // Step 10: BT
+    // Step 10: BT (skip in MagicMac mode to save memory)
 #ifdef PURR_HAS_BT
-    if (cfg.bt) {
+    if (cfg.bt && boot_mode != BOOT_MAGICMAC) {
         bt_manager_init();
         log("KITT", "bt OK");
     }

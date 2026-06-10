@@ -5,8 +5,16 @@
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
+enum BootMode {
+    BOOT_PURR_OS,
+    BOOT_MAGICMAC,
+};
+
 class KITT {
 public:
+    void set_boot_mode(BootMode mode);
+    BootMode get_boot_mode() const;
+
     bool init(const char* device_json_path);
     void update();
     void shutdown();

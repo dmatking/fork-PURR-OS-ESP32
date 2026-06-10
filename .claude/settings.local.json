@@ -299,7 +299,8 @@
       "Bash(git commit -m 'feat: add background task support for .claw apps with task manager *)",
       "Bash(pkill -f \"sdk_core.py\")",
       "Bash(git commit -m 'feat: add terminal.claw - Lua-based kernel terminal *)",
-      "Bash(git commit -m 'feat: add full LoRa radio control API and client apps *)"
+      "Bash(git commit -m 'feat: add full LoRa radio control API and client apps *)",
+      "Bash(git commit -m 'feat: add boot mode infrastructure for MagicMac support *)"
     ],
     "additionalDirectories": [
       "/home/Catto/Documents/Projects/PURR-OS-ESP32"
