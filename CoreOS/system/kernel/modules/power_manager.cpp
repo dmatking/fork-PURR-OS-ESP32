@@ -99,7 +99,7 @@ int  power_manager_battery_voltage_mv() { return cached_voltage; }
 int  power_manager_battery_current_ma() { return 0; }
 bool power_manager_battery_charging() {
 #if BATT_CHG_PIN >= 0
-    return gpio_get_level((gpio_num_t)BATT_CHG_PIN) == HIGH;
+    return gpio_get_level((gpio_num_t)BATT_CHG_PIN) == 1;
 #else
     return false;
 #endif

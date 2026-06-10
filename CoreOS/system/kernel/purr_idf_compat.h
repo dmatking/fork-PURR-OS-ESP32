@@ -1,7 +1,6 @@
 #pragma once
-// Arduino-ESP32 now provides the full Arduino API.
-// This file is kept so existing #include "purr_idf_compat.h" sites compile unchanged.
-#include <Arduino.h>
+// IDF-only compatibility layer (Arduino removed as optional module).
+// Keep stubs for removed Arduino-ESP32 functions.
 #include "esp_log.h"
 #include "driver/gpio.h"
 

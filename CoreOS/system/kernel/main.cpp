@@ -1,7 +1,11 @@
-#include "purr_idf_compat.h"
 #include "kitt.h"
 #include "device_config.h"
 #include "purr_panic.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "app_main";
 #ifdef PURR_HAS_SHELL
 #include "drv_shell.h"
 #endif
@@ -17,12 +21,10 @@ KITT kitt;
 extern void system_start();
 
 void setup() {
-    Serial.begin(115200);
-
     if (!kitt.init("/system/kernel/device.json")) {
-        Serial.println("[KITT] FATAL: init failed");
-        purr_panic(PURR_STOP_CATFAIL, PURR_PANIC_RED, "KITT init failed — see serial");
-        while (true) delay(1000);
+        ESP_LOGE(TAG, "KITT init failed");
+        purr_panic(PURR_STOP_CATFAIL, PURR_PANIC_RED, "KITT init failed — see logs");
+        while (true) vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
 #ifdef PURR_HAS_LUA
@@ -43,9 +45,9 @@ void loop() {
     kitt.update();
 #ifdef PURR_HAS_MINIWIN
     mw_process_message();
-    delay(MW_TICK_PERIOD_MS);
+    vTaskDelay(pdMS_TO_TICKS(MW_TICK_PERIOD_MS));
 #else
-    delay(10);
+    vTaskDelay(pdMS_TO_TICKS(10));
 #endif
 }
 

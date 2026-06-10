@@ -3,6 +3,10 @@
 #include "purr_panic.h"
 #include "purr_version.h"
 #include <ArduinoJson.h>
+#include "esp_log.h"
+#include "esp_timer.h"
+
+static const char *TAG = "kitt";
 #ifdef PURR_DISPLAY_SSD1306
 #  include "display_ssd1306.h"
 #endif
@@ -142,12 +146,12 @@ static bool combo_select_held = false;
 
 extern "C" void kitt_display_yield_to_pi() {
     display_pi_flag = true;
-    Serial.println("[kitt] display yielded to Pi");
+    ESP_LOGI(TAG, "display yielded to Pi");
 }
 
 extern "C" void kitt_display_reclaim_from_pi() {
     display_pi_flag = false;
-    Serial.println("[kitt] display reclaimed from Pi");
+    ESP_LOGI(TAG, "display reclaimed from Pi");
 }
 
 // ── LVGL keypad input driver ───────────────────────────────────────────────────
@@ -181,7 +185,7 @@ static void push_raw_key(uint8_t pin, bool pressed) {
     KITT::raw_key_event_t ev;
     ev.gpio_pin    = pin;
     ev.pressed     = pressed;
-    ev.timestamp_ms = millis();
+    ev.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
     int next = (key_buf_head + 1) % KEY_BUF_SIZE;
     if (next != key_buf_tail) {
         key_buf[key_buf_head] = ev;
@@ -238,7 +242,7 @@ static void check_reserved_combo(KITT::generic_key_t key, bool pressed) {
 // ── Boot sequence ──────────────────────────────────────────────────────────────
 
 bool KITT::init(const char* device_json_path) {
-    Serial.printf("[kitt] PURR OS v%s  KITT v%s  boot start\n", PURR_OS_VERSION, KITT_VERSION);
+    ESP_LOGI(TAG, "PURR OS v%s  KITT v%s  boot start", PURR_OS_VERSION, KITT_VERSION);
 
     // Step 2: mount filesystem
     nvs_flash_init();
@@ -256,9 +260,9 @@ bool KITT::init(const char* device_json_path) {
 
     // Step 3: parse device.json — fall back to compile-time defaults if missing
     if (!device_config_load(device_json_path, &cfg)) {
-        Serial.println("[kitt] device.json not found — trying compile-time defaults");
+        ESP_LOGI(TAG, "device.json not found — trying compile-time defaults");
         if (!device_config_default(&cfg)) {
-            Serial.println("[kitt] ERR 0x01 no device config");
+            ESP_LOGE(TAG, "ERR 0x01 no device config");
             purr_panic(PURR_STOP_CATFAIL, PURR_PANIC_BLUE, "device.json missing, no default");
             return false;
         }
@@ -291,7 +295,7 @@ bool KITT::init(const char* device_json_path) {
         display_st7789_init();
 #endif
     } else {
-        Serial.println("[kitt] ERR 0x02 unknown display type");
+        ESP_LOGE(TAG, "ERR 0x02 unknown display type");
         purr_panic(PURR_STOP_HAL_FAIL, PURR_PANIC_RED, "Unknown display type");
         return false;
     }
@@ -395,7 +399,7 @@ bool KITT::init(const char* device_json_path) {
 
     // Step 14: power manager
     power_manager_init(cfg.cpu_max_mhz);
-    last_battery_refresh = millis();
+    last_battery_refresh = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
     // Step 14b: rotary encoder GPIO init
 #ifdef PURR_HAS_ENCODER
@@ -473,7 +477,7 @@ bool KITT::init(const char* device_json_path) {
     }
 
     // Step 19: first heartbeat
-    last_heartbeat_ms = millis();
+    last_heartbeat_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
     {
         nvs_handle_t h;
         if (nvs_open("kitt_hb", NVS_READWRITE, &h) == ESP_OK) {
@@ -490,7 +494,7 @@ bool KITT::init(const char* device_json_path) {
 // ── Main update tick ───────────────────────────────────────────────────────────
 
 void KITT::update() {
-    uint32_t now = millis();
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
     // Heartbeat — 500ms interval
     if (now - last_heartbeat_ms >= 500) {
@@ -607,11 +611,11 @@ void KITT::shutdown() {
 #endif
     power_manager_deinit();
     kitt_ready = false;
-    Serial.println("[kitt] shutdown");
+    ESP_LOGI(TAG, "shutdown");
 }
 
 void KITT::emergency_text(const char* line1, const char* line2, const char* line3) {
-    Serial.printf("[KITT EMERGENCY] %s | %s | %s\n", line1, line2, line3);
+    ESP_LOGE(TAG, "[EMERGENCY] %s | %s | %s", line1, line2, line3);
     text_clear();
     text_print(0, line1);
     text_print(1, line2);
@@ -715,7 +719,7 @@ void KITT::show_boot_splash() {
 }
 
 void KITT::log(const char* tag, const char* message) {
-    Serial.printf("[%s] %s\n", tag, message);
+    ESP_LOGI(tag, "%s", message);
     if (cfg.verbose_boot && cfg.display_w > 128) {
         static uint8_t log_row = 2;
         char buf[48];
@@ -731,7 +735,7 @@ void KITT::log_errorf(uint8_t code, const char* fmt, ...) {
     va_start(args, fmt);
     vsnprintf(msg, sizeof(msg), fmt, args);
     va_end(args);
-    Serial.printf("[KITT ERR 0x%02X] %s\n", code, msg);
+    ESP_LOGE(TAG, "ERR 0x%02X %s", code, msg);
 }
 
 void KITT::display_yield_to_pi()    { kitt_display_yield_to_pi(); }
@@ -959,7 +963,7 @@ void KITT::apps_scan() {
 void KITT::firmware_scan() {
     fw_count = 0;
     // /friends/ not implemented yet — placeholder
-    Serial.println("[kitt] firmware_scan: /friends/ not mounted");
+    ESP_LOGW(TAG, "firmware_scan: /friends/ not mounted");
 }
 
 int  KITT::app_list_count()      { return app_count; }
@@ -977,13 +981,13 @@ bool KITT::app_launch(const char* path) {
 #ifdef PURR_HAS_MICROPYTHON
     return mpython_exec_app(path);
 #else
-    Serial.printf("[kitt] app_launch: %s — no MicroPython in this build\n", path);
+    ESP_LOGW(TAG, "app_launch: %s — no MicroPython in this build", path);
     return false;
 #endif
 }
 
 bool KITT::firmware_launch(const char* path) {
-    Serial.printf("[kitt] firmware launch: %s (pending)\n", path);
+    ESP_LOGI(TAG, "firmware launch: %s (pending)", path);
     return false;
 }
 

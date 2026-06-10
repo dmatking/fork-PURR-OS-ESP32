@@ -19,14 +19,19 @@
 #ifdef PURR_HAS_PARTITION_MGR
 #  include "../kernel/modules/partition_manager.h"
 #endif
-#include "../kernel/purr_idf_compat.h"
 #include "esp_spiffs.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_app_desc.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdio.h>
+
+static const char *TAG = "sys";
 
 extern KITT kitt;
 extern void  bridge_start();
@@ -41,28 +46,28 @@ static int last_mem_warn = 0;
 static void write_crash_log(const char* app, const char* reason) {
     FILE* f = fopen("/spiffs/logs/crash.txt", "a");
     if (!f) return;
-    fprintf(f, "[%lu] %s: %s\n", (unsigned long)millis(), app, reason);
+    fprintf(f, "[%lu] %s: %s\n", (unsigned long)(esp_timer_get_time() / 1000ULL), app, reason);
     fclose(f);
 }
 
 // Memory monitor callback (registered with KITT)
 static void on_memory_warning(int pct) {
     if (pct >= MEM_WARN_98 && last_mem_warn < MEM_WARN_98) {
-        Serial.println("[sys] MEM CRITICAL 98%");
+        ESP_LOGE(TAG, "MEM CRITICAL 98%");
         kitt.process_kill("explorer");
         last_mem_warn = pct;
     } else if (pct >= MEM_WARN_95 && last_mem_warn < MEM_WARN_95) {
-        Serial.println("[sys] MEM WARN 95%");
+        ESP_LOGW(TAG, "MEM WARN 95%");
         last_mem_warn = pct;
     } else if (pct >= MEM_WARN_90 && last_mem_warn < MEM_WARN_90) {
-        Serial.println("[sys] MEM WARN 90%");
+        ESP_LOGW(TAG, "MEM WARN 90%");
         last_mem_warn = pct;
     }
 }
 
 // Crash report callback
 static void on_crash_report(const char* app, const char* reason) {
-    Serial.printf("[sys] crash: %s — %s\n", app, reason);
+    ESP_LOGE(TAG, "crash: %s — %s", app, reason);
     write_crash_log(app, reason);
 }
 
@@ -89,7 +94,7 @@ static bool ota0_is_purr() {
 #endif
 
 static void system_task(void*) {
-    Serial.println("[sys] system.meow started");
+    ESP_LOGI(TAG, "system.meow started");
 
     kitt.set_memory_warning_cb(on_memory_warning);
     kitt.set_crash_report_cb(on_crash_report);
