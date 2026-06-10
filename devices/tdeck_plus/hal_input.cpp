@@ -187,21 +187,25 @@ void hal_input_tick() {
 void hal_input_draw_cursor(const mw_gl_draw_info_t *d) {
     if (!s_cursor_visible) return;
 
-    // Simple arrow cursor — filled triangle outline
-    mw_gl_set_fg_colour(MW_HAL_LCD_WHITE);
-    mw_gl_set_border(MW_GL_BORDER_ON);
-    mw_gl_set_fill(MW_GL_NO_FILL);
-
-    // Arrow: tip at (s_cx, s_cy), pointing top-left
-    // Draw as two lines forming the arrow shaft + head
     int16_t x = s_cx, y = s_cy;
-    mw_gl_vline(d, x, y, (int16_t)(y + CURSOR_H - 1));
-    mw_gl_hline(d, x, (int16_t)(x + CURSOR_W - 1), y);
-    mw_gl_line(d, x, y, (int16_t)(x + CURSOR_W - 2), (int16_t)(y + CURSOR_H - 2));
 
-    // Black border for visibility on any background
+    // Draw solid mouse cursor with inverted background for visibility
+    // Black outline
     mw_gl_set_fg_colour(MW_HAL_LCD_BLACK);
-    mw_gl_line(d, (int16_t)(x + 1), y, (int16_t)(x + CURSOR_W - 1), (int16_t)(y + CURSOR_H - 3));
+    mw_gl_set_fill(MW_GL_FILL);
+    mw_gl_set_border(MW_GL_BORDER_ON);
+    mw_gl_rectangle(d, x, y, (int16_t)(x + CURSOR_W), (int16_t)(y + CURSOR_H));
+
+    // White fill with thin crosshair
+    mw_gl_set_fg_colour(MW_HAL_LCD_WHITE);
+    mw_gl_set_fill(MW_GL_FILL);
+    mw_gl_rectangle(d, (int16_t)(x + 1), (int16_t)(y + 1), (int16_t)(x + CURSOR_W - 1), (int16_t)(y + CURSOR_H - 1));
+
+    // Crosshair in black
+    mw_gl_set_fg_colour(MW_HAL_LCD_BLACK);
+    mw_gl_set_fill(MW_GL_NO_FILL);
+    mw_gl_vline(d, (int16_t)(x + CURSOR_W / 2), y, (int16_t)(y + CURSOR_H));
+    mw_gl_hline(d, x, (int16_t)(x + CURSOR_W), (int16_t)(y + CURSOR_H / 2));
 }
 
 bool hal_input_cursor_visible()  { return s_cursor_visible; }
