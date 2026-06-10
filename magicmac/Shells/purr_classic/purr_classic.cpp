@@ -5,19 +5,55 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+// Display HAL for rendering
+extern void mw_hal_lcd_monochrome_bitmap_clip(
+    int16_t image_start_x, int16_t image_start_y,
+    uint16_t bitmap_width, uint16_t bitmap_height,
+    int16_t clip_start_x, int16_t clip_start_y,
+    int16_t clip_width, int16_t clip_height,
+    uint32_t fg_colour, uint32_t bg_colour,
+    const uint8_t *image_data);
+
+extern int16_t mw_hal_lcd_get_display_width(void);
+extern int16_t mw_hal_lcd_get_display_height(void);
+
 static const char *TAG = "purr_classic";
 
 // ---------------------------------------------------------------------------
 // Frame callback — drv_umac calls this each time the Mac framebuffer changes.
-// Converts the 1-bit Mac framebuffer to the display's native format and blits.
-// Mac Plus native: 512x342 1bpp. CYD display: 240x320 16bpp (ILI9341).
-// We scale down and invert (Mac is black-on-white).
+// Mac Plus: 512x342 1bpp (monochrome, black-on-white)
+// Render directly using display HAL monochrome bitmap function
 // ---------------------------------------------------------------------------
 static void _on_frame(const uint8_t *buf, int w, int h)
 {
-    // TODO: 1bpp → RGB565 conversion + scale to 240x320
-    // For now, forward raw buffer pointer to display driver for stub testing
-    (void)buf; (void)w; (void)h;
+    if (!buf || w == 0 || h == 0) return;
+
+    // Get display dimensions
+    int16_t disp_w = mw_hal_lcd_get_display_width();  // T-Deck: 320 (landscape)
+    int16_t disp_h = mw_hal_lcd_get_display_height(); // T-Deck: 240 (landscape)
+
+    // Mac framebuffer: 512x342 → Display: 320x240
+    // Crop Mac center to fit display (leave some sides off-screen)
+    // Offset to center: ((320-512)/2, (240-342)/2) = (-96, -51)
+    int16_t offset_x = (disp_w - w) / 2;   // -96 (shows center 320px of 512px)
+    int16_t offset_y = (disp_h - h) / 2;   // -51 (shows center 240px of 342px)
+
+    // Mac framebuffer is stored as 1bpp, black-on-white
+    // Set foreground (pixels set to 1) = black (0x000000)
+    // Set background (pixels set to 0) = white (0xFFFFFF)
+    mw_hal_lcd_monochrome_bitmap_clip(
+        offset_x,           // image_start_x
+        offset_y,           // image_start_y
+        w,                  // bitmap_width (512)
+        h,                  // bitmap_height (342)
+        0,                  // clip_start_x
+        0,                  // clip_start_y
+        disp_w,             // clip_width
+        disp_h,             // clip_height
+        0x000000,           // fg_colour = black
+        0xFFFFFF,           // bg_colour = white
+        buf                 // image_data
+    );
 }
 
 // ---------------------------------------------------------------------------
