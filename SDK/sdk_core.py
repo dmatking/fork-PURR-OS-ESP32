@@ -1338,6 +1338,56 @@ def do_full_flash(cfg, port=None):
     do_flash(cfg, port=port)
 
 
+def do_flash_full_explicit(cfg, port=None):
+    """Full erase + explicit offset flash for T-Deck Plus.
+    Uses esptool directly with all offsets verified against partition table."""
+    if cfg["target"] != "tdeck_plus":
+        err("--flash-full only supported for T-Deck Plus")
+
+    port = _pick_port("Flash port", cfg.get("flash_port", ""))
+    if not port:
+        warn("Flash port not selected.")
+        return
+
+    out_dir = os.path.join(COREOS_DIR, "build_tdeck_plus")
+
+    # Verify all required files exist
+    files_needed = {
+        "bootloader.bin": os.path.join(out_dir, "bootloader/bootloader.bin"),
+        "partition-table.bin": os.path.join(out_dir, "partition_table/partition-table.bin"),
+        "ota_data_initial.bin": os.path.join(out_dir, "ota_data_initial.bin"),
+        "purr_os_core.bin": os.path.join(out_dir, "purr_os_core.bin"),
+    }
+
+    for name, path in files_needed.items():
+        if not os.path.exists(path):
+            err(f"Missing {name} at {path} — run --build first")
+
+    info(f"Erasing flash on {port}...")
+    cmd_erase = ["esptool.py", "--chip", "esp32s3", "-p", port, "erase_flash"]
+    result = subprocess.run(cmd_erase, cwd=REPO_DIR)
+    if result.returncode != 0:
+        err("Erase failed")
+
+    info(f"Flashing firmware to {port}...")
+    cmd_flash = [
+        "esptool.py", "--chip", "esp32s3", "-p", port, "-b", "460800",
+        "--before", "default_reset", "--after", "hard_reset",
+        "write_flash", "--flash_mode", "dio", "--flash_size", "16MB", "--flash_freq", "80m",
+        "0x0",      files_needed["bootloader.bin"],
+        "0x8000",   files_needed["partition-table.bin"],
+        "0xe000",   files_needed["ota_data_initial.bin"],
+        "0x10000",  files_needed["purr_os_core.bin"],
+    ]
+    result = subprocess.run(cmd_flash, cwd=REPO_DIR)
+    if result.returncode != 0:
+        err("Flash failed")
+
+    info(f"{C_GRN}✓ Flash complete!{C_RST}")
+    cfg["flash_port"] = port
+    save_cfg(cfg)
+
+
 # ── Banner ────────────────────────────────────────────────────────────────────
 
 def show_banner(cfg):
@@ -1684,6 +1734,8 @@ def main():
                    help="Build cyd_boot (factory) + cyd (OS) back-to-back")
     p.add_argument("--full-flash",  metavar="PORT", default="", dest="full_flash",
                    help="Flash factory + ota_0 + SPIFFS in one esptool call")
+    p.add_argument("--flash-full",  metavar="PORT|auto", default="", dest="flash_full_explicit",
+                   help="[T-Deck Plus] Full erase + explicit offset flash (0x0, 0x8000, 0xe000, 0x10000)")
     args = p.parse_args()
 
     cfg = load_cfg()
@@ -1702,7 +1754,7 @@ def main():
 
     direct = (args.build or bool(args.flash) or bool(args.monitor)
               or args.configure or args.full_build or bool(args.full_flash)
-              or args.scan)
+              or bool(args.flash_full_explicit) or args.scan)
     if direct:
         _apply_cli(cfg, args)
         if args.configure:
@@ -1713,7 +1765,9 @@ def main():
             do_full_build(cfg, clean=args.clean)
         elif args.build:
             do_build(cfg, clean=args.clean)
-        if args.full_flash:
+        if args.flash_full_explicit:
+            do_flash_full_explicit(cfg, port=args.flash_full_explicit)
+        elif args.full_flash:
             do_full_flash(cfg, port=args.full_flash)
         elif args.flash:
             do_flash(cfg, port=args.flash)
