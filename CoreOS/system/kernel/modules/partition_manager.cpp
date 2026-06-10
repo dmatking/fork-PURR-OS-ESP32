@@ -72,7 +72,16 @@ static bool slot_has_firmware(const esp_partition_t* part) {
 
 void pm_init() {
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI2_HOST;  // HSPI — pins 23/19/18; SPI3 is used by the display
+
+#ifdef PURR_DEVICE_TDECK_PLUS
+    // T-Deck Plus: SD card shares SPI3 with display — add device to existing bus
+    host.slot = SPI3_HOST;
+    sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
+    dev_cfg.host_id = SPI3_HOST;
+    dev_cfg.gpio_cs = (gpio_num_t)PM_SD_CS;
+    // Bus already initialized by display HAL — do NOT call spi_bus_initialize again
+#else
+    host.slot = SPI2_HOST;
     sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
     dev_cfg.host_id  = SPI2_HOST;
     dev_cfg.gpio_cs  = (gpio_num_t)PM_SD_CS;
@@ -83,9 +92,10 @@ void pm_init() {
         .sclk_io_num = PM_SD_SCLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = 512,   // one sector at a time; saves ~3.5KB DMA buffer
+        .max_transfer_sz = 512,
     };
     spi_bus_initialize((spi_host_device_t)host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
+#endif
 
     esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
         .format_if_mount_failed = false,
@@ -97,7 +107,7 @@ void pm_init() {
         sd_mounted = true;
         ESP_LOGI(TAG, "SD mounted: %lluMB", ((uint64_t)s_card->csd.capacity) * s_card->csd.sector_size / (1024 * 1024));
     } else {
-        ESP_LOGW(TAG, "SD not found");
+        ESP_LOGW(TAG, "SD not found (CS=%d)", PM_SD_CS);
     }
 }
 

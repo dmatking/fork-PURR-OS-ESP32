@@ -9,11 +9,20 @@
 #define PM_PATH_LEN     128
 #define PM_SD_MAX_FILES 16
 
-// SD card VSPI pins for CYD
-#define PM_SD_CS   5
-#define PM_SD_MOSI 23
-#define PM_SD_MISO 19
-#define PM_SD_SCLK 18
+// SD card SPI pins — device specific
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && defined(PURR_DEVICE_TDECK_PLUS)
+// T-Deck Plus: SD shares SPI3 bus with display (MOSI=41,MISO=38,CLK=40), CS=39
+#  define PM_SD_CS   39
+#  define PM_SD_MOSI 41
+#  define PM_SD_MISO 38
+#  define PM_SD_SCLK 40
+#else
+// CYD / generic: VSPI pins
+#  define PM_SD_CS   5
+#  define PM_SD_MOSI 23
+#  define PM_SD_MISO 19
+#  define PM_SD_SCLK 18
+#endif
 
 typedef struct {
     uint8_t  slot;

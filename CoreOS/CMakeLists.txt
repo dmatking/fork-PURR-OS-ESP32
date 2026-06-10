@@ -16,6 +16,7 @@ project(purr_os_core)
 
 # Enable hardware support
 add_compile_definitions(
-    PURR_HAS_PARTITION_MGR  # SD card support
-    PURR_HAS_LORA           # LoRa radio support
+    PURR_HAS_PARTITION_MGR   # SD card support
+    PURR_HAS_LORA            # LoRa radio support
+    PURR_DEVICE_TDECK_PLUS   # T-Deck Plus pin map (SD: CS=39, MOSI=41, MISO=38, CLK=40)
 )
