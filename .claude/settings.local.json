@@ -296,7 +296,10 @@
       "Bash(curl -s https://raw.githubusercontent.com/Xinyuan-LilyGO/T-Deck/main/examples/SD/SD.ino)",
       "Bash(git reset *)",
       "Bash(git commit -m 'fix: SD card SPI bus conflict, window refresh rate, button outline thickness *)",
-      "Bash(git commit -m 'feat: add background task support for .claw apps with task manager *)"
+      "Bash(git commit -m 'feat: add background task support for .claw apps with task manager *)",
+      "Bash(pkill -f \"sdk_core.py\")",
+      "Bash(git commit -m 'feat: add terminal.claw - Lua-based kernel terminal *)",
+      "Bash(git commit -m 'feat: add full LoRa radio control API and client apps *)"
     ],
     "additionalDirectories": [
       "/home/Catto/Documents/Projects/PURR-OS-ESP32"

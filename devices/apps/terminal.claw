@@ -70,6 +70,11 @@ function execute_command(cmd)
         add_output("  rm <file>         - delete file", COLOR_FG)
         add_output("  clear             - clear screen", COLOR_FG)
         add_output("  status            - system status", COLOR_FG)
+        add_output("  lora status       - LoRa radio status", COLOR_FG)
+        add_output("  lora send <text>  - send LoRa packet", COLOR_FG)
+        add_output("  lora freq <hz>    - set frequency", COLOR_FG)
+        add_output("  lora power <dbm>  - set transmit power", COLOR_FG)
+        add_output("  lora sf <factor>  - set spreading factor (7-12)", COLOR_FG)
         add_output("  run <script.claw> - execute .claw script", COLOR_FG)
         add_output("  lua <code>        - execute Lua code", COLOR_FG)
         add_output("  kit.<cmd>         - KITT API (wifi_connected, sd_available, free_ram, reboot)", COLOR_FG)
@@ -128,6 +133,71 @@ function execute_command(cmd)
         add_output("  SD Available: " .. (kitt.sd_available() and "yes" or "no"), COLOR_FG)
         add_output("  WiFi Connected: " .. (kitt.wifi_connected() and "yes" or "no"), COLOR_FG)
         add_output("  Uptime: " .. math.floor(kitt.time_ms() / 1000) .. "s", COLOR_FG)
+        add_prompt()
+
+    elseif cmd_name == "lora" then
+        if not parts[2] then
+            add_output("Usage: lora <status|send|freq|power|sf> [args]", COLOR_ERROR)
+        elseif parts[2] == "status" then
+            if lora.enabled() then
+                add_output("LoRa Status:", COLOR_INFO)
+                add_output("  Frequency: " .. lora.get_frequency() .. " Hz", COLOR_FG)
+                add_output("  Power: " .. lora.get_power() .. " dBm", COLOR_FG)
+                add_output("  RSSI: " .. lora.rssi() .. " dBm", COLOR_FG)
+                add_output("  SNR: " .. lora.snr() .. " dB", COLOR_FG)
+            else
+                add_output("LoRa not enabled", COLOR_ERROR)
+            end
+        elseif parts[2] == "send" then
+            if parts[3] then
+                local msg = cmd:sub(#cmd_name + 7 + string.len(parts[2]) + 1)
+                if lora.send(msg) then
+                    add_output("Sent: " .. msg, COLOR_SUCCESS)
+                else
+                    add_output("Send failed", COLOR_ERROR)
+                end
+            else
+                add_output("Usage: lora send <message>", COLOR_ERROR)
+            end
+        elseif parts[2] == "freq" then
+            if parts[3] then
+                local freq = tonumber(parts[3])
+                if freq then
+                    lora.set_frequency(freq)
+                    add_output("Frequency set to " .. freq .. " Hz", COLOR_SUCCESS)
+                else
+                    add_output("Invalid frequency", COLOR_ERROR)
+                end
+            else
+                add_output("Usage: lora freq <hz>", COLOR_ERROR)
+            end
+        elseif parts[2] == "power" then
+            if parts[3] then
+                local pow = tonumber(parts[3])
+                if pow then
+                    lora.set_power(pow)
+                    add_output("Power set to " .. pow .. " dBm", COLOR_SUCCESS)
+                else
+                    add_output("Invalid power", COLOR_ERROR)
+                end
+            else
+                add_output("Usage: lora power <dbm>", COLOR_ERROR)
+            end
+        elseif parts[2] == "sf" then
+            if parts[3] then
+                local sf = tonumber(parts[3])
+                if sf and sf >= 7 and sf <= 12 then
+                    lora.set_spreading_factor(sf)
+                    add_output("Spreading factor set to " .. sf, COLOR_SUCCESS)
+                else
+                    add_output("Invalid SF (7-12)", COLOR_ERROR)
+                end
+            else
+                add_output("Usage: lora sf <7-12>", COLOR_ERROR)
+            end
+        else
+            add_output("Unknown lora command", COLOR_ERROR)
+        end
         add_prompt()
 
     elseif cmd_name == "lua" then

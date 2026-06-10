@@ -32,6 +32,9 @@
 #include "gl/gl.h"
 #include "purr_apps_common.h"
 #include "kitt.h"
+#ifdef PURR_HAS_LORA
+#include "lora_manager.h"
+#endif
 #include <lua.hpp>
 #include <stdlib.h>
 #include <string.h>
@@ -332,6 +335,110 @@ static int l_kitt_set_background(lua_State *L)
     return 1;
 }
 
+// ── lora.* Lua API (.claw only) ────────────────────────────────────────────────
+
+#ifdef PURR_HAS_LORA
+
+static int l_lora_enabled(lua_State *L)
+{
+    lua_pushboolean(L, lora_manager_enabled());
+    return 1;
+}
+
+static int l_lora_send(lua_State *L)
+{
+    size_t len;
+    const char *data = lua_tolstring(L, 1, &len);
+    if (!data) { lua_pushboolean(L, false); return 1; }
+    bool ok = lora_manager_send((const uint8_t *)data, len);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
+static int l_lora_receive(lua_State *L)
+{
+    if (!lora_manager_data_available()) {
+        lua_pushnil(L);
+        return 1;
+    }
+    uint8_t buf[256];
+    size_t len = lora_manager_read(buf, sizeof(buf));
+    lua_pushlstring(L, (const char *)buf, len);
+    return 1;
+}
+
+static int l_lora_data_available(lua_State *L)
+{
+    lua_pushboolean(L, lora_manager_data_available());
+    return 1;
+}
+
+static int l_lora_rssi(lua_State *L)
+{
+    lua_pushinteger(L, lora_manager_rssi());
+    return 1;
+}
+
+static int l_lora_snr(lua_State *L)
+{
+    lua_pushnumber(L, lora_manager_snr());
+    return 1;
+}
+
+static int l_lora_set_frequency(lua_State *L)
+{
+    uint32_t freq = (uint32_t)lua_tointeger(L, 1);
+    lora_manager_set_frequency(freq);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+static int l_lora_get_frequency(lua_State *L)
+{
+    lua_pushinteger(L, (lua_Integer)lora_manager_get_frequency());
+    return 1;
+}
+
+static int l_lora_set_power(lua_State *L)
+{
+    uint8_t power = (uint8_t)lua_tointeger(L, 1);
+    lora_manager_set_power(power);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+static int l_lora_get_power(lua_State *L)
+{
+    lua_pushinteger(L, lora_manager_get_power());
+    return 1;
+}
+
+static int l_lora_set_spreading_factor(lua_State *L)
+{
+    uint8_t sf = (uint8_t)lua_tointeger(L, 1);
+    lora_manager_set_spreading_factor(sf);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+static int l_lora_set_bandwidth(lua_State *L)
+{
+    uint32_t bw = (uint32_t)lua_tointeger(L, 1);
+    lora_manager_set_bandwidth(bw);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+static int l_lora_set_coding_rate(lua_State *L)
+{
+    uint8_t cr = (uint8_t)lua_tointeger(L, 1);
+    lora_manager_set_coding_rate(cr);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+#endif // PURR_HAS_LORA
+
 // ── Module registration ───────────────────────────────────────────────────────
 
 static void register_win_api(lua_State *L, app_lua_window_t *w)
@@ -371,6 +478,27 @@ static void register_kitt_api(lua_State *L)
     lua_pushcfunction(L, l_kitt_set_background); lua_setfield(L, -2, "set_background");
     lua_setglobal(L, "kitt");
 }
+
+#ifdef PURR_HAS_LORA
+static void register_lora_api(lua_State *L)
+{
+    lua_newtable(L);
+    lua_pushcfunction(L, l_lora_enabled);            lua_setfield(L, -2, "enabled");
+    lua_pushcfunction(L, l_lora_send);               lua_setfield(L, -2, "send");
+    lua_pushcfunction(L, l_lora_receive);            lua_setfield(L, -2, "receive");
+    lua_pushcfunction(L, l_lora_data_available);     lua_setfield(L, -2, "data_available");
+    lua_pushcfunction(L, l_lora_rssi);               lua_setfield(L, -2, "rssi");
+    lua_pushcfunction(L, l_lora_snr);                lua_setfield(L, -2, "snr");
+    lua_pushcfunction(L, l_lora_set_frequency);      lua_setfield(L, -2, "set_frequency");
+    lua_pushcfunction(L, l_lora_get_frequency);      lua_setfield(L, -2, "get_frequency");
+    lua_pushcfunction(L, l_lora_set_power);          lua_setfield(L, -2, "set_power");
+    lua_pushcfunction(L, l_lora_get_power);          lua_setfield(L, -2, "get_power");
+    lua_pushcfunction(L, l_lora_set_spreading_factor); lua_setfield(L, -2, "set_spreading_factor");
+    lua_pushcfunction(L, l_lora_set_bandwidth);      lua_setfield(L, -2, "set_bandwidth");
+    lua_pushcfunction(L, l_lora_set_coding_rate);    lua_setfield(L, -2, "set_coding_rate");
+    lua_setglobal(L, "lora");
+}
+#endif
 
 // ── Lua task ──────────────────────────────────────────────────────────────────
 
@@ -430,8 +558,12 @@ app_lua_window_t *app_lua_window_create(const char *script_path, bool is_admin)
     luaL_openlibs(w->L);
     register_win_api(w->L, w);
     register_sd_api(w->L);
-    if (is_admin)
+    if (is_admin) {
         register_kitt_api(w->L);
+#ifdef PURR_HAS_LORA
+        register_lora_api(w->L);
+#endif
+    }
 
     w->running = true;
     BaseType_t rc = xTaskCreate(lua_task_fn, "lua_app", 8192, w, 3, &w->task);
