@@ -23,6 +23,9 @@ C_YLW  = "\033[93m"
 C_CYN  = "\033[96m"
 C_WHT  = "\033[97m"
 
+PURROS_VERSION = "0.9.5"
+KITT_VERSION   = "0.6.0"
+
 def info(msg):            print(f"{C_GRN}[purr]{C_RST} {msg}")
 def warn(msg):            print(f"{C_YLW}[warn]{C_RST} {msg}")
 def err(msg, code=1):     print(f"{C_RED}[err] {C_RST} {msg}", file=sys.stderr); sys.exit(code)
@@ -127,7 +130,7 @@ def _pick_port(prompt_label, saved=""):
 
 def _idf_py():
     """Return the idf.py invocation as a list using the IDF virtualenv python."""
-    idf_path = os.environ.get("IDF_PATH", "")
+    idf_path = _resolve_idf_path()
     if idf_path:
         candidate = os.path.join(idf_path, "tools", "idf.py")
         if os.path.exists(candidate):
@@ -895,9 +898,26 @@ def run_live(cmd, cwd=None):
 
 # ── SPIFFS image builder ──────────────────────────────────────────────────────
 
-def _build_spiffs(cfg):
-    target   = cfg["target"]
+def _resolve_idf_path():
+    """Find IDF_PATH from env or well-known locations."""
     idf_path = os.environ.get("IDF_PATH", "")
+    if idf_path and os.path.isfile(os.path.join(idf_path, "tools", "idf.py")):
+        return idf_path
+    for candidate in (
+        os.path.expanduser("~/esp/idf"),
+        os.path.expanduser("~/esp/esp-idf"),
+        os.path.expanduser("~/.espressif/idf"),
+        "/opt/esp-idf",
+    ):
+        if os.path.isfile(os.path.join(candidate, "tools", "idf.py")):
+            os.environ["IDF_PATH"] = candidate   # set so subsequent calls find it
+            return candidate
+    return ""
+
+
+def _build_spiffs(cfg):
+    target    = cfg["target"]
+    idf_path  = _resolve_idf_path()
     spiffsgen = os.path.join(idf_path, "components", "spiffs", "spiffsgen.py") if idf_path else ""
     if not spiffsgen or not os.path.exists(spiffsgen):
         warn("spiffsgen.py not found — skipping SPIFFS image")
@@ -1000,6 +1020,251 @@ def do_build(cfg, clean=False):
     _build_spiffs(cfg)
 
 
+# ── Release packing ───────────────────────────────────────────────────────────
+
+# Per-device notes included in the generated flash guide.
+_DEVICE_NOTES = {
+    "tdeck_plus": [
+        "GT911 capacitive touch: identity calibration matrix seeded to NVS on first boot — no resistive calibration screen.",
+        "I2C bus shared between GT911 (0x5D) and keyboard co-processor (0x55) on SDA=18 SCL=8.",
+        "ST7789 initialised in landscape (swap_xy + mirror) — display is correct orientation out of the box.",
+        "Trackball cursor hides automatically after 5 s of inactivity; reappears on trackball movement.",
+        "Erase NVS partition before first flash to guarantee clean calibration seed: esptool erase_region 0x9000 0x5000",
+    ],
+    "cyd_s028r": [
+        "XPT2046 SPI resistive touch — calibration stored in NVS; a one-time touch calibration screen runs on first boot.",
+        "Display: ILI9341 2.4\" 320x240. Backlight GPIO 21.",
+        "No LoRa hardware on this device.",
+    ],
+    "cyd_s024c": [
+        "CST816S I2C capacitive touch on SDA=33 SCL=32. BL=GPIO27 (not 21).",
+        "Display: ILI9341 2.4\" 320x240.",
+        "No LoRa hardware on this device.",
+    ],
+    "cyd_boot": [
+        "Factory kernel — chainloads ota_0 (the main OS). Flash this first, then flash the main OS over OTA or via ota_0 partition.",
+        "Fixed build: no module toggles, always minimal. Same hardware as cyd_s028r/s024c.",
+    ],
+    "jc3248w535": [
+        "GT911 capacitive touch on SDA=19 SCL=20. Identity calibration seeded on first boot.",
+        "8MB PSRAM required — MagiDOS enabled on this build.",
+        "Display: ST7796 3.5\" 480x320.",
+    ],
+    "waveshare169": [
+        "CST816S I2C capacitive touch on SDA=6 SCL=7 — verify pin assignments before flashing.",
+        "Display: ST7789 1.69\" 240x280.",
+        "No LoRa hardware on this device.",
+    ],
+    "heltec": [
+        "SX1262 LoRa enabled by default. Antenna required — do not transmit without antenna connected.",
+        "Display: SSD1306 0.96\" OLED 128x64.",
+        "KittenUI shell (non-MiniWin).",
+    ],
+    "tdeck": [
+        "WIP — touch not yet functional. Trackball + keyboard work.",
+        "Display: ST7789 320x240.",
+        "SX1262 LoRa enabled by default.",
+    ],
+}
+
+_GHREL_DIR = os.path.join(REPO_DIR, "GHReleases")
+
+# Release build sets
+RELEASE_SETS = {
+    "all":     ["cyd_s028r", "cyd_s024c", "cyd_boot", "tdeck_plus", "jc3248w535", "waveshare169", "heltec"],
+    "miniwin": ["cyd_s028r", "cyd_s024c", "tdeck_plus", "jc3248w535", "waveshare169"],
+    "s3":      ["tdeck_plus", "jc3248w535", "waveshare169", "heltec"],
+    "cyd":     ["cyd_s028r", "cyd_s024c", "cyd_boot"],
+}
+
+
+def _pack_release(cfg):
+    """Copy build artifacts to GHReleases/<target>/ and write a flash guide."""
+    import json as _json
+    target    = cfg["target"]
+    build_dir = _build_dir(cfg)
+    out_dir   = os.path.join(_GHREL_DIR, target)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Read flasher_args.json for canonical offsets
+    fargs_path = os.path.join(build_dir, "flasher_args.json")
+    if not os.path.exists(fargs_path):
+        warn(f"flasher_args.json not found in {os.path.basename(build_dir)} — skipping pack")
+        return
+
+    with open(fargs_path) as f:
+        fargs = _json.load(f)
+
+    chip       = fargs.get("extra_esptool_args", {}).get("chip", TARGETS[target]["chip"])
+    flash_mode = fargs.get("flash_settings", {}).get("flash_mode", "dio")
+    flash_freq = fargs.get("flash_settings", {}).get("flash_freq", "80m")
+    flash_size = fargs.get("flash_settings", {}).get("flash_size", "detect")
+    flash_files = fargs.get("flash_files", {})  # { "0x0": "bootloader/bootloader.bin", ... }
+
+    # Copy each bin and build the offset table
+    copied = {}  # offset -> filename
+    for offset, rel_path in flash_files.items():
+        src = os.path.join(build_dir, rel_path)
+        if not os.path.exists(src):
+            warn(f"  missing: {rel_path}")
+            continue
+        fname = os.path.basename(rel_path)
+        dst   = os.path.join(out_dir, fname)
+        shutil.copy2(src, dst)
+        copied[offset] = fname
+        info(f"  {offset}  {fname}")
+
+    # SPIFFS (not in flasher_args.json — SDK-generated)
+    spiffs_src = os.path.join(build_dir, "spiffs.bin")
+    _cyd_family = ("cyd", "cyd_boot", "cyd_s024c", "cyd_s028r")
+    spiffs_offset = "0x390000" if target in _cyd_family else "0x3b0000"
+    if os.path.exists(spiffs_src):
+        shutil.copy2(spiffs_src, os.path.join(out_dir, "spiffs.bin"))
+        copied[spiffs_offset] = "spiffs.bin"
+        info(f"  {spiffs_offset}  spiffs.bin")
+
+    # Write flash guide
+    _write_flash_guide(target, out_dir, chip, flash_mode, flash_freq, flash_size, copied)
+    info(f"release packed → GHReleases/{target}/")
+
+
+def _write_flash_guide(target, out_dir, chip, flash_mode, flash_freq, flash_size, files):
+    """Write FLASH_GUIDE.md for a device release."""
+    t     = TARGETS[target]
+    notes = _DEVICE_NOTES.get(target, [])
+
+    # Build esptool one-liner
+    file_args = " ".join(f"{off} {fname}" for off, fname in sorted(files.items()))
+    esptool_cmd = (
+        f"python -m esptool --chip {chip} -p PORT -b 460800 "
+        f"--before default_reset --after hard_reset "
+        f"write_flash --flash_mode {flash_mode} --flash_size {flash_size} --flash_freq {flash_freq} "
+        f"{file_args}"
+    )
+
+    import datetime as _dt
+    build_date = _dt.datetime.now().strftime("%Y-%m-%d")
+
+    lines = [
+        f"# PURR OS — {t['desc']}",
+        "",
+        f"**PURR OS:** v{PURROS_VERSION}  ",
+        f"**KITT:** v{KITT_VERSION}  ",
+        f"**Built:** {build_date}  ",
+        f"**Target:** `{target}`  ",
+        f"**Chip:** {chip}  ",
+        f"**Flash:** {flash_mode.upper()} / {flash_freq} / {flash_size}  ",
+        "",
+        "---",
+        "",
+        "## Files",
+        "",
+        "| Offset | File | Purpose |",
+        "|--------|------|---------|",
+    ]
+
+    _purpose = {
+        "bootloader.bin":       "ESP-IDF bootloader",
+        "partition-table.bin":  "Partition table",
+        "ota_data_initial.bin": "OTA slot selector (boot to ota_0)",
+        "purr_os_core.bin":     "PURR OS application",
+        "spiffs.bin":           "SPIFFS filesystem (device config, assets)",
+    }
+    for off, fname in sorted(files.items()):
+        purpose = _purpose.get(fname, fname)
+        lines.append(f"| `{off}` | `{fname}` | {purpose} |")
+
+    lines += [
+        "",
+        "---",
+        "",
+        "## Flash with ESP Web Flasher",
+        "",
+        "1. Open **https://esp.huhn.me** (or **https://espressif.github.io/esptool-js**) in Chrome/Edge.",
+        "2. Click **Connect** and select the device's COM port.",
+        f"3. Set chip to **{chip.upper()}**.",
+        "4. Add each file below with its offset:",
+        "",
+    ]
+    for off, fname in sorted(files.items()):
+        lines.append(f"   - Offset `{off}` → `{fname}`")
+
+    lines += [
+        "",
+        "5. Click **Program** and wait for completion.",
+        "6. Press reset on the device.",
+        "",
+        "> **Tip:** If the device was previously flashed with different firmware, erase flash first:",
+        f"> `python -m esptool --chip {chip} -p PORT erase_flash`",
+        "",
+        "---",
+        "",
+        "## Flash with esptool (command line)",
+        "",
+        "```bash",
+        esptool_cmd,
+        "```",
+        "",
+        "Replace `PORT` with your serial port (e.g. `/dev/ttyUSB0` or `COM3`).",
+        "",
+        "---",
+        "",
+        "## Device notes",
+        "",
+    ]
+    for note in notes:
+        lines.append(f"- {note}")
+
+    if not notes:
+        lines.append(f"- See PURR OS documentation for details.")
+
+    lines += [
+        "",
+        "---",
+        "",
+        "_Generated automatically by PURR OS SDK pack_release._",
+    ]
+
+    guide_path = os.path.join(out_dir, "FLASH_GUIDE.md")
+    _write(guide_path, "\n".join(lines) + "\n")
+    info(f"  FLASH_GUIDE.md written")
+
+
+def do_release_build(targets_list, clean=False):
+    """Build each target sequentially and pack to GHReleases/ after each success."""
+    total  = len(targets_list)
+    passed = []
+    failed = []
+
+    for i, target in enumerate(targets_list, 1):
+        header(f"Release build {i}/{total}: {target}")
+        # Build a minimal cfg for this target
+        rcfg = load_cfg()
+        rcfg["target"] = target
+        _sanitize_cfg(rcfg)
+
+        # Auto-enable MagiDOS for PSRAM S3 targets
+        if target in ("tdeck_plus", "jc3248w535"):
+            rcfg["modules"]["magidos"] = True
+
+        try:
+            do_build(rcfg, clean=clean)
+            _pack_release(rcfg)
+            passed.append(target)
+            info(f"[{i}/{total}] {target} — DONE")
+        except SystemExit as e:
+            failed.append(target)
+            warn(f"[{i}/{total}] {target} — FAILED (exit {e.code})")
+            warn("Continuing with next target...")
+
+    div()
+    if passed:
+        info(f"Built OK : {' '.join(passed)}")
+    if failed:
+        warn(f"Failed   : {' '.join(failed)}")
+    div()
+
+
 def do_flash(cfg, port=None):
     target = cfg["target"]
     chip   = TARGETS[target]["chip"]
@@ -1089,7 +1354,7 @@ def show_banner(cfg):
 
     div()
     wip_tag = f"  {C_YLW}[WIP]{C_RST}" if "WIP" in t.get("spec", "") else ""
-    print(f"\n  {C_WHT}{C_BOLD}PURR OS v0.9.5{C_RST}  {C_GRY}KITT v0.6.0{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
+    print(f"\n  {C_WHT}{C_BOLD}PURR OS v{PURROS_VERSION}{C_RST}  {C_GRY}KITT v{KITT_VERSION}{C_RST}  {C_CYN}{display} ({t['chip']}){C_RST}{wip_tag}")
 
     mini = (not mods.get("micropython", True)) or t["fixed"]
     print(f"  Variant  : {'mini — no MicroPython' if mini else 'full — with MicroPython'}")
@@ -1135,6 +1400,7 @@ def main_menu(cfg):
 
         print(f"  {C_WHT}[r]{C_RST} Build + Flash       {C_WHT}[a]{C_RST} Build + Flash + Monitor")
         print(f"  {C_WHT}[c]{C_RST} Configure           {C_WHT}[s]{C_RST} Configure + Build")
+        print(f"  {C_WHT}[R]{C_RST} Release Build       {C_GRY}(batch build set → GHReleases/){C_RST}")
         print(f"  {C_WHT}[~]{C_RST} Simulator           {C_GRY}(preview UI shells on PC){C_RST}")
         print(f"  {C_WHT}[q]{C_RST} Quit")
         print()
@@ -1181,6 +1447,8 @@ def main_menu(cfg):
                 do_full_build(cfg)
             else:
                 do_build(cfg)
+        elif choice == "R":
+            release_menu()
         elif choice == "~":
             sim_menu()
         else:
@@ -1188,6 +1456,52 @@ def main_menu(cfg):
 
 
 # ── Simulator ────────────────────────────────────────────────────────────────
+
+def release_menu():
+    """Interactive release-build set picker."""
+    div()
+    print(f"\n  {C_WHT}{C_BOLD}PURR OS Release Build{C_RST}  {C_GRY}v{PURROS_VERSION} / KITT v{KITT_VERSION}{C_RST}\n")
+    print(f"  Builds each device sequentially, packs binaries + flash guide to GHReleases/.\n")
+
+    set_keys = list(RELEASE_SETS.keys())
+    for i, key in enumerate(set_keys, 1):
+        targets = RELEASE_SETS[key]
+        print(f"  {C_WHT}[{i}]{C_RST} {key:<10} {C_GRY}{' '.join(targets)}{C_RST}")
+
+    print(f"\n  {C_WHT}[c]{C_RST} Custom    {C_GRY}(enter target names separated by spaces){C_RST}")
+    print(f"  {C_WHT}[q]{C_RST} Back\n")
+
+    choice = input("  Set: ").strip()
+
+    if choice == "q":
+        return
+
+    if choice == "c":
+        raw = input("  Targets (space-separated): ").strip().split()
+        targets = [t for t in raw if t in TARGETS]
+        invalid = [t for t in raw if t not in TARGETS]
+        if invalid:
+            warn(f"Unknown targets ignored: {' '.join(invalid)}")
+        if not targets:
+            warn("No valid targets — cancelling.")
+            return
+    else:
+        try:
+            key = set_keys[int(choice) - 1]
+            targets = RELEASE_SETS[key]
+        except (ValueError, IndexError):
+            warn(f"Unknown option '{choice}'")
+            return
+
+    clean = input(f"\n  Clean build? [y/N]: ").strip().lower() == "y"
+
+    print()
+    info(f"Release build: {' '.join(targets)}")
+    info(f"Output: GHReleases/  clean={clean}")
+    print()
+
+    do_release_build(targets, clean=clean)
+
 
 SIM_SHELLS = {
     "1": ("blackberry",  "BlackberryUI",     "320x240 — LVGL, real blackberry_ui.cpp"),
@@ -1311,6 +1625,10 @@ def _apply_cli(cfg, args):
         cfg["modules"]["flasher"] = True
     if args.gps:
         cfg["modules"]["gps"] = True
+    if args.magidos:
+        cfg["modules"]["magidos"] = True
+    if args.magicmac:
+        cfg["modules"]["magicmac"] = True
     if args.lora_kernel:
         cfg["lora_kernel"] = args.lora_kernel
     if args.ui_kernel:
@@ -1333,7 +1651,7 @@ def main():
         description="PURR OS SDK — build / flash / monitor tool",
     )
     p.add_argument("--target",      choices=list(TARGETS.keys()),
-                   metavar="heltec|tembed_cc1101|cyd_s028r|cyd_s024c|cyd|cyd_boot|tdeck|jc3248w535|waveshare169")
+                   metavar="heltec|tembed_cc1101|cyd_s028r|cyd_s024c|cyd|cyd_boot|tdeck|tdeck_plus|jc3248w535|waveshare169")
     p.add_argument("--build",       action="store_true")
     p.add_argument("--flash",       metavar="PORT|auto", default="",
                    help="Flash to port. Use 'auto' to detect automatically.")
@@ -1351,6 +1669,10 @@ def main():
     p.add_argument("--mtp",         action="store_true")
     p.add_argument("--flasher",     action="store_true")
     p.add_argument("--gps",         action="store_true")
+    p.add_argument("--magidos",     action="store_true",
+                   help="Enable MagiDOS 8086 emulator (requires 8MB PSRAM: tdeck_plus, jc3248w535)")
+    p.add_argument("--magicmac",    action="store_true",
+                   help="Enable MagicMac 68k emulator (requires 8MB PSRAM: tdeck_plus, jc3248w535)")
     p.add_argument("--lora-kernel", dest="lora_kernel", choices=list(LORA_KERNELS.keys()))
     p.add_argument("--ui-kernel",   dest="ui_kernel",   choices=list(UI_KERNELS.keys()))
     p.add_argument("--tdeck-plus",  action="store_true", dest="tdeck_plus")

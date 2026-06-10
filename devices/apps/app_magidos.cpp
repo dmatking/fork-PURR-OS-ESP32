@@ -10,6 +10,7 @@
 #include "magidos_cga.h"
 #include "magidos_filepicker.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
@@ -20,12 +21,20 @@ static const char *TAG = "app_magidos";
 static mw_handle_t s_handle = MW_INVALID_HANDLE;
 static TaskHandle_t s_emulator_task = NULL;
 
-// CGA framebuffer (80x25 chars @ 2 bytes/char = 4000 bytes)
+// CGA VRAM snapshot (80x25 chars @ 2 bytes/char = 4000 bytes)
 #define CGA_COLS 80
 #define CGA_ROWS 25
 #define CGA_BUFSIZE (CGA_COLS * CGA_ROWS * 2)
 static uint8_t s_cga_vram[CGA_BUFSIZE];
-static bool s_vram_dirty = false;
+static volatile bool s_vram_dirty = false;
+
+// RGB888 framebuffer in PSRAM — allocated at window creation, freed on removal.
+// Sized to the window client area; blitted with mw_gl_colour_bitmap each repaint.
+static uint8_t *s_fb = NULL;
+static int s_fb_w = 0, s_fb_h = 0;
+
+// Refresh period: 3 MiniWin ticks = 60ms ≈ 16fps
+#define REFRESH_TICKS 3
 
 // Emulator task
 static void _emulator_task(void *arg)
@@ -70,60 +79,26 @@ static void _emulator_task(void *arg)
     vTaskDelete(NULL);
 }
 
-// Paint callback — render CGA text using MiniWin primitives
+// Paint callback — single blit of the pre-rendered RGB888 framebuffer
 static void _paint(mw_handle_t h, const mw_gl_draw_info_t *d)
 {
     mw_util_rect_t cr = mw_get_window_client_rect(h);
 
-    // If emulator not running, show status
-    if (s_emulator_task == NULL || drv_8086_vram() == NULL) {
+    if (!s_fb || s_emulator_task == NULL) {
         mw_gl_set_fill(MW_GL_FILL);
         mw_gl_set_border(MW_GL_BORDER_OFF);
-        mw_gl_set_solid_fill_colour(0x0000);  // black background
+        mw_gl_set_solid_fill_colour(MW_HAL_LCD_BLACK);
         mw_gl_rectangle(d, 0, 0, cr.width, cr.height);
-
-        mw_gl_set_fg_colour(0xFFFF);  // white text
+        mw_gl_set_fg_colour(MW_HAL_LCD_WHITE);
         mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
         mw_gl_set_font(MW_GL_FONT_12);
-        mw_gl_string(d, 8, 20, "MagiDOS — 8086 emulator");
-        mw_gl_string(d, 8, 40, "Loading...");
+        mw_gl_string(d, 8, 20, "MagiDOS");
+        mw_gl_string(d, 8, 36, "Loading...");
         return;
     }
 
-    // Render CGA text mode using MiniWin drawing
-    // For simplicity: just text output with CGA colors
-    // CGA palette: 16 colors
-    const uint16_t cga_pal[16] = {
-        0x0000, 0x0015, 0x0540, 0x0555,  // black, blue, green, cyan
-        0xA800, 0xA815, 0xAAA0, 0xAD55,  // red, magenta, brown, light grey
-        0x5AAB, 0x555F, 0x57E0, 0x57FF,  // dark grey, bright blue, bright green, bright cyan
-        0xF800, 0xF81F, 0xFFE0, 0xFFFF,  // bright red, bright magenta, yellow, white
-    };
-
-    mw_gl_set_fill(MW_GL_FILL);
-    mw_gl_set_border(MW_GL_BORDER_OFF);
-    mw_gl_set_solid_fill_colour(0x0000);
-    mw_gl_rectangle(d, 0, 0, cr.width, cr.height);
-
-    // Render CGA text — simplified: just show the raw characters
-    mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_12);
-
-    for (int row = 0; row < CGA_ROWS && row * 12 < cr.height; row++) {
-        for (int col = 0; col < CGA_COLS && col * 6 < cr.width; col++) {
-            uint8_t ch = s_cga_vram[(row * CGA_COLS + col) * 2 + 0];
-            uint8_t attr = s_cga_vram[(row * CGA_COLS + col) * 2 + 1];
-            uint8_t fg = attr & 0x0F;
-            // uint8_t bg = (attr >> 4) & 0x0F;  // could use for background
-
-            if (ch >= 0x20 && ch < 0x7F) {
-                char buf[2] = { (char)ch, 0 };
-                mw_gl_set_fg_colour(cga_pal[fg]);
-                mw_gl_string(d, col * 6 + 2, row * 12 + 4, buf);
-            }
-        }
-    }
-
+    magidos_cga_render(s_cga_vram, CGA_COLS, CGA_ROWS, s_fb, s_fb_w, s_fb_h);
+    mw_gl_colour_bitmap(d, 0, 0, (uint16_t)s_fb_w, (uint16_t)s_fb_h, s_fb);
     s_vram_dirty = false;
 }
 
@@ -131,33 +106,41 @@ static void _paint(mw_handle_t h, const mw_gl_draw_info_t *d)
 static void _message(const mw_message_t *msg)
 {
     switch (msg->message_id) {
-    case MW_WINDOW_CREATED_MESSAGE:
+    case MW_WINDOW_CREATED_MESSAGE: {
+        mw_util_rect_t cr = mw_get_window_client_rect(msg->recipient_handle);
+        s_fb_w = cr.width;
+        s_fb_h = cr.height;
+        s_fb = (uint8_t*)heap_caps_malloc((size_t)(s_fb_w * s_fb_h * 3), MALLOC_CAP_SPIRAM);
+        if (!s_fb) {
+            ESP_LOGE(TAG, "framebuffer alloc failed (%dx%d)", s_fb_w, s_fb_h);
+        }
+
         mw_paint_window_frame(msg->recipient_handle, MW_WINDOW_FRAME_COMPONENT_ALL);
         mw_paint_window_client(msg->recipient_handle);
 
-        // Start emulator task
         if (s_emulator_task == NULL) {
             BaseType_t rc = xTaskCreate(_emulator_task, "magidos", 8192, NULL, 3, &s_emulator_task);
-            if (rc != pdPASS) {
-                ESP_LOGE(TAG, "failed to create emulator task");
-            }
+            if (rc != pdPASS) ESP_LOGE(TAG, "failed to create emulator task");
         }
+
+        mw_set_timer(mw_tick_counter + REFRESH_TICKS, msg->recipient_handle, MW_WINDOW_MESSAGE);
         break;
+    }
 
     case MW_WINDOW_REMOVED_MESSAGE:
         taskbar_unregister(msg->recipient_handle);
-        // Emulator task will self-delete when done
+        if (s_fb) { heap_caps_free(s_fb); s_fb = NULL; }
+        s_handle = MW_INVALID_HANDLE;
         break;
 
-    case MW_WINDOW_CLIENT_PAINT_MESSAGE:
-        // Refresh paint if VRAM changed
+    case MW_TIMER_MESSAGE:
         if (s_vram_dirty) {
             mw_paint_window_client(msg->recipient_handle);
         }
+        mw_set_timer(mw_tick_counter + REFRESH_TICKS, msg->recipient_handle, MW_WINDOW_MESSAGE);
         break;
 
     case MW_TOUCH_DOWN_MESSAGE: {
-        // Simple touch handling: map Y coordinate to DOS keys
         int16_t ty = (int16_t)(msg->message_data & 0xFFFF);
         int win_h = mw_get_window_client_rect(msg->recipient_handle).height;
         if (ty > win_h / 2)

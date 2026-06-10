@@ -218,7 +218,7 @@ static const uint8_t s_font8x8[96][8] = {
 };
 
 void magidos_cga_render(const uint8_t *vram, int cols, int rows,
-                         uint16_t *out, int out_w, int out_h)
+                         uint8_t *out_rgb888, int out_w, int out_h)
 {
     // Each CGA text cell is 2 bytes: [char][attr]
     // attr: bits 7-4 = background colour index, bits 3-0 = foreground colour index
@@ -255,7 +255,11 @@ void magidos_cga_render(const uint8_t *vram, int cols, int rows,
                     bool lit = (row_bits >> (7 - gx)) & 1;
                     int x_out = col * cell_w + px;
                     if (x_out >= out_w) continue;
-                    out[y_out * out_w + x_out] = lit ? fg_col : bg_col;
+                    uint16_t c = lit ? fg_col : bg_col;
+                    uint8_t *p = out_rgb888 + (y_out * out_w + x_out) * 3;
+                    p[0] = (uint8_t)((c >> 8) & 0xF8);
+                    p[1] = (uint8_t)((c >> 3) & 0xFC);
+                    p[2] = (uint8_t)((c & 0x1F) << 3);
                 }
             }
         }

@@ -1,6 +1,9 @@
 # Build artifacts
 build/
 build_*/
+
+# GitHub release staging — populated by SDK/pack_releases.sh, never committed
+GHReleases/
 CoreOS/build/
 CoreOS/build_*/
 CoreOS/sdkconfig
