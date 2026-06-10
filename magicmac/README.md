@@ -1,8 +1,30 @@
-# MagicMac
+# MagicMac — 68k Mac Plus Emulator with PURR OS Integration
 
-MagicMac is a special-edition PURR OS shell that runs Mac OS System 3 as the home screen using the umac Mac Plus emulator. The Mac Finder acts as the app launcher. Apps built with Retro68 run natively inside the emulator and can talk to the PURR OS kernel (LoRa, WiFi, Bluetooth, notifications) through a memory-mapped IPC window.
+MagicMac is a full Mac OS System 3-7 emulator that runs as a selectable boot mode alongside PURR OS. The Mac Finder acts as the app launcher. Apps built with Retro68 run natively inside the emulator and access PURR OS kernel services (LoRa, WiFi, Bluetooth) through a memory-mapped IPC bridge.
 
-This is a full-screen shell — it replaces the MiniWin window manager entirely and owns the display and touch for the lifetime of the session, the same way the explorer or blackberry shells do.
+**Key Features:**
+- **Boot mode selectable** at runtime via settings app
+- **Full-screen rendering** of 512×342 Mac framebuffer scaled to device display (320×240 on T-Deck)
+- **Memory optimized** — WiFi/BT disabled during MagicMac boot (saves 2-3MB for emulator)
+- **Kernel API access** — 68k apps can call PURR OS services via 0xF00000 IPC window
+- **Persistent settings** in `/sdcard/magicmac/magicmac.json`
+
+---
+
+## Implementation Status
+
+✅ **Completed:**
+- Boot mode infrastructure (KITT enum, NVS persistence)
+- Settings app (manage magicmac.json configuration)
+- Frame rendering (512×342 1bpp → 320×240 RGB565 scaled display)
+- ROM loading from `/sdcard/magicmac/mac.rom` (with SPIFFS fallback)
+- WiFi/BT conditional init (disabled in MagicMac mode to save RAM)
+- IPC bridge framework
+
+⏳ **TODO:**
+- Touch input wiring (Mac ADB mouse)
+- Disk selection from magicmac.json in IPC bridge
+- Full keyboard mapping (T-Deck keyboard → ADB)
 
 ---
 
@@ -63,19 +85,36 @@ magicmac/
 
 ### 1. Get the ROM image
 
-MagicMac requires a 512 KB Mac Plus ROM dump. This is not included for legal reasons.
+MagicMac requires a **512 KB Mac Plus ROM dump**. This is not included for legal reasons.
 
-The file must be named `mac.rom` and placed at:
+**Obtaining the ROM:**
+- Dump your own from an original Mac Plus (legally required)
+- Archive ROM files (legal gray area)
+- Cannot be included in repo due to copyright
 
+**Installation:**
+Place the ROM file at: `/sdcard/magicmac/mac.rom`
+
+The emulator loads it at boot. If SD card ROM is not found, it falls back to `/spiffs/mac.rom` (legacy).
+
+### 2. Build with SDK
+
+Use the PURR SDK build system with the `--magicmac` flag:
+
+```bash
+python3 SDK/sdk_core.py --target tdeck_plus --magicmac --build
+python3 SDK/sdk_core.py --target tdeck_plus --magicmac --flash /dev/ttyACM0
 ```
-CoreOS/spiffs_image/mac.rom
-```
 
-The SPIFFS image is flashed alongside the firmware. The emulator loads it at boot from `/spiffs/mac.rom`.
+The SDK automatically:
+- Enables `PURR_HAS_MAGICMAC` compile flag
+- Links purr_classic shell
+- Includes drv_umac + lib_purr_ipc components
+- Enables PSRAM support for 68k RAM
 
-### 2. Vendor umac and Musashi
+### 3. Optional: Vendor umac and Musashi (if building standalone)
 
-The emulator source is not included. Clone both into `CoreOS/components/drv_umac/`:
+If not using the SDK build system, manually clone the emulator sources:
 
 ```sh
 cd magicmac/CoreOS/components/drv_umac
@@ -87,53 +126,7 @@ git clone https://github.com/evansm7/umac umac
 git clone https://github.com/kstenerud/musashi musashi
 ```
 
-Then update `CMakeLists.txt` `SRCS` to match the actual source file names in those repos.
-
-### 3. Wire the IPC window into umac
-
-In `umac_core.c`, after `umac_init_core()` succeeds, register the IPC buffer so the 68k memory bus traps writes to `0xF00000`:
-
-```c
-// Replace the stub comment in umac_core.c with:
-umac_register_ipc_window(&s_ipc, PURR_IPC_BASE, sizeof(s_ipc));
-```
-
-The exact API depends on how evansm7/umac exposes memory-mapped I/O hooks. Check `umac/umac.h` in the cloned repo.
-
-### 4. Add PURR_HAS_CLASSIC_MAC to your build
-
-In `CoreOS/CMakeLists.txt`, add `purr_classic` to `EXTRA_COMPONENT_DIRS` and set the compile flag:
-
-```cmake
-list(APPEND EXTRA_COMPONENT_DIRS
-    "${CMAKE_SOURCE_DIR}/../magicmac/Shells/purr_classic"
-    "${CMAKE_SOURCE_DIR}/../magicmac/CoreOS/components/drv_umac"
-    "${CMAKE_SOURCE_DIR}/../magicmac/CoreOS/components/lib_purr_ipc"
-)
-```
-
-In your `sdkconfig` or `CMakeLists.txt` target compile options:
-
-```cmake
-add_compile_definitions(PURR_HAS_CLASSIC_MAC)
-```
-
-In `CoreOS/system/system/main.cpp`, add the shell selection alongside the existing shell guards:
-
-```cpp
-#ifdef PURR_HAS_CLASSIC_MAC
-    purr_classic_start();   // does not return
-#endif
-```
-
-### 5. Enable PSRAM (recommended)
-
-System 3 runs in 512 KB which fits in internal SRAM on CYD. If you want System 6 compatibility or headroom, enable PSRAM in `sdkconfig`:
-
-```
-CONFIG_ESP32_SPIRAM_SUPPORT=y
-CONFIG_SPIRAM_USE_MALLOC=y
-```
+Then update `CMakeLists.txt` `SRCS` to match actual source file names.
 
 ### 6. Flash and test
 
