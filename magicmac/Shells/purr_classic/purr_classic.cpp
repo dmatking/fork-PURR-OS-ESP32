@@ -4,14 +4,14 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <string.h>
 
 // Display HAL for rendering
-extern void mw_hal_lcd_monochrome_bitmap_clip(
+extern void mw_hal_lcd_colour_bitmap_clip(
     int16_t image_start_x, int16_t image_start_y,
     uint16_t bitmap_width, uint16_t bitmap_height,
     int16_t clip_start_x, int16_t clip_start_y,
     int16_t clip_width, int16_t clip_height,
-    uint32_t fg_colour, uint32_t bg_colour,
     const uint8_t *image_data);
 
 extern int16_t mw_hal_lcd_get_display_width(void);
@@ -19,40 +19,59 @@ extern int16_t mw_hal_lcd_get_display_height(void);
 
 static const char *TAG = "purr_classic";
 
+// Scale buffer for intermediate scaled framebuffer (320x240 RGB565)
+static uint8_t scale_buf[320 * 240 * 2];
+
+// Nearest-neighbor scaling: 1bpp 512x342 → RGB565 320x240
+static void scale_mac_framebuffer(const uint8_t *src_1bpp, int src_w, int src_h,
+                                  uint8_t *dst_rgb565, int dst_w, int dst_h)
+{
+    uint16_t *dst = (uint16_t *)dst_rgb565;
+
+    // Precompute scaled colors (black and white in RGB565 format)
+    uint16_t col_black = 0x0000;   // Black
+    uint16_t col_white = 0xFFFF;   // White
+
+    for (int y = 0; y < dst_h; y++) {
+        // Map destination row to source row (nearest-neighbor)
+        int src_y = (y * src_h) / dst_h;
+        int src_stride = (src_w + 7) / 8;  // 1bpp row stride
+
+        for (int x = 0; x < dst_w; x++) {
+            // Map destination column to source column (nearest-neighbor)
+            int src_x = (x * src_w) / dst_w;
+
+            // Read 1bpp pixel from source
+            uint8_t byte = src_1bpp[src_y * src_stride + (src_x / 8)];
+            bool pixel_set = (byte >> (7 - (src_x & 7))) & 1;
+
+            // Write RGB565 pixel to destination
+            dst[y * dst_w + x] = pixel_set ? col_black : col_white;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Frame callback — drv_umac calls this each time the Mac framebuffer changes.
-// Mac Plus: 512x342 1bpp (monochrome, black-on-white)
-// Render directly using display HAL monochrome bitmap function
+// Mac Plus: 512x342 1bpp → Scale to display 320x240 RGB565
 // ---------------------------------------------------------------------------
 static void _on_frame(const uint8_t *buf, int w, int h)
 {
     if (!buf || w == 0 || h == 0) return;
 
-    // Get display dimensions
-    int16_t disp_w = mw_hal_lcd_get_display_width();  // T-Deck: 320 (landscape)
-    int16_t disp_h = mw_hal_lcd_get_display_height(); // T-Deck: 240 (landscape)
+    int16_t disp_w = mw_hal_lcd_get_display_width();  // 320
+    int16_t disp_h = mw_hal_lcd_get_display_height(); // 240
 
-    // Mac framebuffer: 512x342 → Display: 320x240
-    // Crop Mac center to fit display (leave some sides off-screen)
-    // Offset to center: ((320-512)/2, (240-342)/2) = (-96, -51)
-    int16_t offset_x = (disp_w - w) / 2;   // -96 (shows center 320px of 512px)
-    int16_t offset_y = (disp_h - h) / 2;   // -51 (shows center 240px of 342px)
+    // Scale Mac framebuffer to display size (nearest-neighbor)
+    scale_mac_framebuffer(buf, w, h, scale_buf, disp_w, disp_h);
 
-    // Mac framebuffer is stored as 1bpp, black-on-white
-    // Set foreground (pixels set to 1) = black (0x000000)
-    // Set background (pixels set to 0) = white (0xFFFFFF)
-    mw_hal_lcd_monochrome_bitmap_clip(
-        offset_x,           // image_start_x
-        offset_y,           // image_start_y
-        w,                  // bitmap_width (512)
-        h,                  // bitmap_height (342)
-        0,                  // clip_start_x
-        0,                  // clip_start_y
-        disp_w,             // clip_width
-        disp_h,             // clip_height
-        0x000000,           // fg_colour = black
-        0xFFFFFF,           // bg_colour = white
-        buf                 // image_data
+    // Blit scaled framebuffer to display
+    mw_hal_lcd_colour_bitmap_clip(
+        0, 0,               // Start at display origin
+        disp_w, disp_h,     // Scaled framebuffer size (320x240)
+        0, 0,               // No clipping needed (full display)
+        disp_w, disp_h,
+        scale_buf
     );
 }
 
