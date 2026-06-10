@@ -70,8 +70,21 @@ if(PURR_ENABLE_LUA)
     list(APPEND _mw_requires lib_lua)
 endif()
 
+# MagiDOS: compile drv_8086.c (which #includes 8086tiny.c) directly into
+# lib_miniwin so app_magidos.cpp.obj and drv_8086.c.obj live in the same
+# archive — no cross-archive link-order dependency.
+set(_mw_magidos_srcs "")
+if(PURR_ENABLE_MAGIDOS)
+    set(_drv8086_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../../magidos/CoreOS/components/drv_8086")
+    set(_ipc_dir     "${CMAKE_CURRENT_SOURCE_DIR}/../../../magidos/CoreOS/components/lib_purr_dos_ipc")
+    list(APPEND _mw_magidos_srcs
+        "${_drv8086_dir}/drv_8086.c"
+        "${_ipc_dir}/purr_dos_ipc.c"
+    )
+endif()
+
 idf_component_register(
-    SRCS         ${MINIWIN_CORE_SRCS} ${MINIWIN_HAL_SRCS} ${PURR_MW_APP_SRCS}
+    SRCS         ${MINIWIN_CORE_SRCS} ${MINIWIN_HAL_SRCS} ${PURR_MW_APP_SRCS} ${_mw_magidos_srcs}
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal"
                  "${PURR_MW_HAL_DIR}"
@@ -86,6 +99,13 @@ if(PURR_ENABLE_LUA)
 endif()
 if(PURR_ENABLE_MAGIDOS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_HAS_MAGIDOS=1)
+    # 8086tiny (compiled via drv_8086.c) uses intentional operator tricks.
+    target_compile_options(${COMPONENT_LIB} PRIVATE
+        -Wno-parentheses -Wno-unused-value -Wno-misleading-indentation
+        -Wno-implicit-fallthrough -Wno-address
+        -Wno-error=parentheses -Wno-error=unused-value
+        -Wno-error=misleading-indentation -Wno-error=implicit-fallthrough
+        -Wno-error=address -Wno-error=comment -Wno-comment)
 endif()
 if(PURR_ENABLE_MAGICMAC)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_HAS_MAGICMAC=1)

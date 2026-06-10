@@ -5,9 +5,9 @@ if(TARGET_DEVICE STREQUAL "cyd" OR TARGET_DEVICE STREQUAL "cyd_boot"
     list(APPEND SRCS "display_ili9341.cpp")
 elseif(TARGET_DEVICE STREQUAL "jc3248w535")
     list(APPEND SRCS "display_st7796.cpp")
-elseif(TARGET_DEVICE STREQUAL "waveshare169")
+elseif(TARGET_DEVICE STREQUAL "waveshare169" OR TARGET_DEVICE STREQUAL "tdeck_plus" OR TARGET_DEVICE STREQUAL "tdeck")
     list(APPEND SRCS "display_st7789.cpp")
-elseif(TARGET_DEVICE STREQUAL "heltec" OR TARGET_DEVICE STREQUAL "tdeck")
+elseif(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND SRCS "display_ssd1306.cpp")
 endif()
 

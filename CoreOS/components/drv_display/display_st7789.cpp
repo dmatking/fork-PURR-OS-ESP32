@@ -67,7 +67,8 @@ static void bl_set(uint8_t v) {
 }
 
 void display_st7789_init() {
-    if (_ready) return; _ready = true;
+    if (_ready) return;
+    _ready = true;
 
     spi_bus_config_t bus = { .mosi_io_num = LCD_MOSI, .miso_io_num = LCD_MISO,
                               .sclk_io_num = LCD_SCLK, .quadwp_io_num = -1,
@@ -76,9 +77,9 @@ void display_st7789_init() {
     spi_bus_initialize(LCD_HOST, &bus, SPI_DMA_CH_AUTO);
 
     esp_lcd_panel_io_spi_config_t io_cfg = { .cs_gpio_num = LCD_CS, .dc_gpio_num = LCD_DC,
-                                              .spi_clock_hz = LCD_CLK_HZ,
-                                              .lcd_cmd_bits = 8, .lcd_param_bits = 8,
-                                              .trans_queue_depth = 10 };
+                                              .spi_mode = 0, .pclk_hz = LCD_CLK_HZ,
+                                              .trans_queue_depth = 10,
+                                              .lcd_cmd_bits = 8, .lcd_param_bits = 8 };
     esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &s_io);
 
     esp_lcd_panel_dev_config_t panel_cfg = { .reset_gpio_num = LCD_RST,

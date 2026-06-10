@@ -1,7 +1,9 @@
 #include "purr_dos_ipc.h"
 #include "esp_log.h"
+#include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #ifdef PURR_HAS_LORA
 #include "lora_manager.h"
@@ -45,7 +47,7 @@ static inline void mem_write_buf(uint8_t *mem, uint16_t seg, uint16_t off,
 static void _lora_send(uint8_t *mem, uint16_t ds, uint16_t si, uint16_t cx)
 {
     uint8_t *payload = mem + seg_off(ds, si);
-    lora_send(payload, cx);
+    lora_manager_send(payload, cx);
 }
 
 static uint16_t _lora_recv(uint8_t *mem, uint16_t es, uint16_t di, uint16_t cx)
@@ -61,18 +63,26 @@ static uint16_t _lora_recv(uint8_t *mem, uint16_t es, uint16_t di, uint16_t cx)
 #ifdef PURR_HAS_WIFI
 static void _wifi_status(uint8_t *mem, uint16_t es, uint16_t di)
 {
-    wifi_status_t st = wifi_manager_get_status();
     purr_dos_wifi_status_t out = {0};
-    out.connected = st.connected ? 1 : 0;
-    strncpy(out.ssid, st.ssid, sizeof(out.ssid) - 1);
-    out.rssi = (int8_t)st.rssi;
+    out.connected = wifi_manager_connected() ? 1 : 0;
+    wifi_manager_get_ssid(out.ssid, sizeof(out.ssid));
+    out.rssi = (int8_t)wifi_manager_rssi();
     mem_write_buf(mem, es, di, &out, sizeof(out));
 }
 
 static void _wifi_scan(uint8_t *mem, uint16_t es, uint16_t di, uint16_t cx)
 {
     char *buf = (char *)(mem + seg_off(es, di));
-    wifi_manager_scan_json(buf, cx);
+    int n = wifi_manager_scan_count();
+    size_t pos = 0;
+    for (int i = 0; i < n && pos + 40 < cx; i++) {
+        char ssid[33] = {0};
+        wifi_manager_scan_get_ssid(i, ssid, sizeof(ssid));
+        int rssi = wifi_manager_scan_get_rssi(i);
+        int written = snprintf(buf + pos, cx - pos, "%s(%d)\n", ssid, rssi);
+        if (written > 0) pos += written;
+    }
+    if (pos < (size_t)cx) buf[pos] = '\0';
 }
 
 static void _wifi_connect(uint8_t *mem, uint16_t ds, uint16_t si)
@@ -87,7 +97,17 @@ static void _wifi_connect(uint8_t *mem, uint16_t ds, uint16_t si)
 static void _bt_list(uint8_t *mem, uint16_t es, uint16_t di, uint16_t cx)
 {
     char *buf = (char *)(mem + seg_off(es, di));
-    bt_manager_list_json(buf, cx);
+    int n = bt_manager_paired_count();
+    size_t pos = 0;
+    for (int i = 0; i < n && pos + 64 < cx; i++) {
+        char name[33] = {0};
+        char addr[18] = {0};
+        bt_manager_get_paired_name(i, name, sizeof(name));
+        bt_manager_get_paired_addr(i, addr, sizeof(addr));
+        int written = snprintf(buf + pos, cx - pos, "%s %s\n", name, addr);
+        if (written > 0) pos += written;
+    }
+    if (pos < (size_t)cx) buf[pos] = '\0';
 }
 #endif  // PURR_HAS_BT
 
@@ -137,7 +157,7 @@ void purr_dos_ipc_dispatch(uint8_t *mem)
     extern unsigned short *regs16;
 
     uint8_t  ah = regs8[1];         // AH (high byte of AX)
-    uint16_t ax = regs16[0];        // AX
+    (void)regs16[0];                // AX unused
     uint16_t ds = regs16[11];       // DS
     uint16_t si = regs16[6];        // SI
     uint16_t es = regs16[8];        // ES

@@ -4,6 +4,7 @@
 
 #include "kitten_ui.h"
 #include "../../system/kernel/kitt.h"
+#include "../../system/kernel/purr_version.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"

@@ -6,6 +6,8 @@
 #include "gl/gl.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include <stdio.h>
 
 #include "purr_app_catalog.h"
@@ -25,8 +27,8 @@
 #define SMENU_SEP_H 8
 #define SMENU_X     0
 
-// Top-level menu: "Programs >" + separator + "Restart"
-#define SMENU_TL_H  (2 * SMENU_IH + SMENU_SEP_H + 4)
+// Top-level menu: "Programs >" + separator + "Restart" + "Launcher"
+#define SMENU_TL_H  (3 * SMENU_IH + SMENU_SEP_H + 4)
 
 #define WCE_DESKTOP 0x008080
 #define WCE_BAR     0xC0C0C0
@@ -157,6 +159,8 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
         mw_gl_set_fg_colour(WCE_TXT);
         mw_gl_string(d, SMENU_X + 8,
                      (int16_t)(smy + 2 + SMENU_IH + SMENU_SEP_H + 4), "Restart");
+        mw_gl_string(d, SMENU_X + 8,
+                     (int16_t)(smy + 2 + SMENU_IH * 2 + SMENU_SEP_H + 4), "Launcher");
     } else {
         // Programs submenu: "< Back" + catalog entries
         int16_t smh = (int16_t)((purr_catalog_count + 1) * SMENU_IH + 4);
@@ -184,7 +188,7 @@ static void shell_message(const mw_message_t *msg)
             mw_post_message(MW_TOUCH_DOWN_MESSAGE,
                             MW_INVALID_HANDLE, shell_handle,
                             td, NULL,
-                            MW_MESSAGE_RECIPIENT_TYPE_WINDOW);
+                            MW_WINDOW_MESSAGE);
         }
 
         mw_paint_all();
@@ -204,10 +208,22 @@ static void shell_message(const mw_message_t *msg)
                 int rel_y = ty - smy - 2;
                 if (rel_y >= 0 && rel_y < SMENU_IH) {
                     smenu_folder = 0;  // open Programs submenu
-                } else if (rel_y >= SMENU_IH + SMENU_SEP_H) {
+                } else if (rel_y >= SMENU_IH + SMENU_SEP_H &&
+                           rel_y < SMENU_IH * 2 + SMENU_SEP_H) {
                     smenu_open   = false;
                     smenu_folder = -1;
                     esp_restart();
+                } else if (rel_y >= SMENU_IH * 2 + SMENU_SEP_H) {
+                    smenu_open   = false;
+                    smenu_folder = -1;
+                    // Boot into launcher (factory partition)
+                    const esp_partition_t *launcher = esp_partition_find_first(
+                        ESP_PARTITION_TYPE_APP,
+                        ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+                    if (launcher && esp_ota_set_boot_partition(launcher) == ESP_OK)
+                        esp_restart();
+                    else
+                        esp_restart();  // fallback: plain restart
                 }
             } else {
                 smenu_open   = false;

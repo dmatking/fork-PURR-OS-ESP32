@@ -159,7 +159,11 @@ extern void hook_vram_update(void);
 #endif
 
 // Global variable definitions
-unsigned char mem[RAM_SIZE], io_ports[IO_PORT_COUNT], *opcode_stream, *regs8, i_rm, i_w, i_reg, i_mod, i_mod_size, i_d, i_reg4bit, raw_opcode_id, xlat_opcode_id, extra, rep_mode, seg_override_en, rep_override_en, trap_flag, int8_asap, scratch_uchar, io_hi_lo, *vid_mem_base, spkr_en, bios_table_lookup[20][256];
+// mem[] pre-declared in drv_8086.c with EXT_RAM_BSS_ATTR to place in PSRAM on ESP32
+#ifndef MEM_DECLARED_EXTERNALLY
+unsigned char mem[RAM_SIZE];
+#endif
+unsigned char io_ports[IO_PORT_COUNT], *opcode_stream, *regs8, i_rm, i_w, i_reg, i_mod, i_mod_size, i_d, i_reg4bit, raw_opcode_id, xlat_opcode_id, extra, rep_mode, seg_override_en, rep_override_en, trap_flag, int8_asap, scratch_uchar, io_hi_lo, *vid_mem_base, spkr_en, bios_table_lookup[20][256];
 unsigned short *regs16, reg_ip, seg_override, file_index, wave_counter;
 unsigned int op_source, op_dest, rm_addr, op_to_addr, op_from_addr, i_data0, i_data1, i_data2, scratch_uint, scratch2_uint, inst_counter, set_flags_type, GRAPHICS_X, GRAPHICS_Y, pixel_colors[16], vmem_ctr;
 int op_result, disk[3], scratch_int;

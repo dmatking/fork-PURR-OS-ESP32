@@ -14,7 +14,7 @@ elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd")
     else()
         list(APPEND SRCS "touch_xpt2046.cpp")
     endif()
-elseif(TARGET_DEVICE STREQUAL "jc3248w535")
+elseif(TARGET_DEVICE STREQUAL "jc3248w535" OR TARGET_DEVICE STREQUAL "tdeck_plus")
     list(APPEND SRCS "touch_gt911.cpp")
 endif()
 

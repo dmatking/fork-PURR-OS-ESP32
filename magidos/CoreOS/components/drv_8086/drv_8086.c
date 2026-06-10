@@ -1,9 +1,10 @@
 #include "drv_8086.h"
-#include "lib_purr_dos_ipc.h"
+#include "purr_dos_ipc.h"
 #include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 static const char *TAG = "drv_8086";
 
@@ -11,20 +12,18 @@ static const char *TAG = "drv_8086";
 // 8086tiny emulator state
 // ────────────────────────────────────────────────────────────────────────────
 
-// We'll include 8086tiny.c directly to get its globals and functions
+// Include 8086tiny.c to get all its globals and definitions.
 // Define this so 8086tiny doesn't try to run main()
 #define INCLUDE_8086TINY_NO_MAIN
 
-// Forward declare 8086tiny's globals and functions
-extern unsigned char mem[];
-extern unsigned short *regs16;
-extern unsigned short reg_ip;
-extern unsigned char regs8[];
-extern unsigned char *opcode_stream;
+// Pre-declare mem[] in PSRAM so the 640KB buffer doesn't overflow DRAM.
+// MEM_DECLARED_EXTERNALLY tells 8086tiny.c to skip its own declaration.
+#include "esp_attr.h"
+#define MEM_DECLARED_EXTERNALLY
+EXT_RAM_BSS_ATTR unsigned char mem[0x10FFF0];
 
-// 8086tiny execution function (defined below after including 8086tiny)
-extern void bios_table_setup(void);
-extern int i8086_step(void);
+// Include 8086tiny first so its globals (mem, regs8, regs16, etc.) are available
+#include "8086tiny.c"
 
 static drv_8086_frame_cb_t s_frame_cb = NULL;
 static bool s_running = false;
@@ -36,51 +35,30 @@ static bool s_initialized = false;
 
 void hook_purr_int(void)
 {
-    // Dispatch INT 0xE0 to PURR IPC
     purr_dos_ipc_dispatch(mem);
 }
 
 void hook_vram_update(void)
 {
-    // CGA video RAM updated — notify callback
     if (s_frame_cb) {
         s_frame_cb(mem + CGA_VRAM_BASE, CGA_COLS, CGA_ROWS);
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// 8086tiny CPU execution (extracted and refactored for stepping)
-// ────────────────────────────────────────────────────────────────────────────
-
-// Include 8086tiny.c to get its definitions and globals
-// We need to include it after defining hooks but before calling it
-#include "8086tiny.c"
-
-// Initialize the CPU (replaces 8086tiny main() setup)
+// Initialize the CPU register file pointers.
+// bios_table_lookup is filled by drv_8086_load_com/exe after the program image
+// is in place (8086tiny reads it from the loaded image in its main loop setup).
 static void i8086_init_cpu(void)
 {
     if (s_initialized) return;
 
-    // regs16 and regs8 point to F000:0, start of memory-mapped registers
     regs16 = (unsigned short *)(regs8 = mem + REGS_BASE);
     regs16[REG_CS] = 0xF000;
-    regs8[FLAG_TF] = 0;  // Trap flag off
-
-    // Load BIOS image into F000:0100, set IP to 0100
-    // For now, use minimal stub BIOS
-    memcpy(mem + REGS_BASE + 0x100, &bios, sizeof(bios) > 0xFF00 ? 0xFF00 : sizeof(bios));
-    reg_ip = 0x100;
-
-    // Load instruction decoding helper table
-    for (int i = 0; i < 20; i++) {
-        for (int j = 0; j < 256; j++) {
-            bios_table_lookup[i][j] = regs8[regs16[0x81 + i] + j];
-        }
-    }
+    regs8[FLAG_TF] = 0;
 
     s_initialized = true;
-    s_running = true;
-    ESP_LOGI(TAG, "CPU initialized, CS:IP = %04X:%04X", regs16[REG_CS], reg_ip);
+    s_running = false;
+    ESP_LOGI(TAG, "CPU register file initialised");
 }
 
 // Public API
@@ -166,7 +144,7 @@ esp_err_t drv_8086_load_exe(const uint8_t *data, size_t len)
     uint32_t header_size = header_para * 16;
 
     if (header_size > len || (header_size + image_size) > len) {
-        ESP_LOGE(TAG, "MZ file truncated: header=%u, image=%u, actual=%zu",
+        ESP_LOGE(TAG, "MZ file truncated: header=%" PRIu32 ", image=%" PRIu32 ", actual=%zu",
                  header_size, image_size, len);
         return ESP_ERR_INVALID_ARG;
     }
@@ -179,7 +157,7 @@ esp_err_t drv_8086_load_exe(const uint8_t *data, size_t len)
     uint32_t load_addr = load_segment * 16;
     memcpy(mem + load_addr, data + header_size, image_size);
 
-    ESP_LOGI(TAG, "MZ: header=%u, image=%u, load_seg=%04X, relocs=%u",
+    ESP_LOGI(TAG, "MZ: header=%" PRIu32 ", image=%" PRIu32 ", load_seg=%04X, relocs=%u",
              header_size, image_size, load_segment, num_relocations);
 
     // Apply relocations

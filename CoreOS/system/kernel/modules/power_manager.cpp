@@ -40,13 +40,14 @@ static void adc_init() {
     };
     adc_oneshot_config_channel(s_adc, chan, &ch_cfg);
 
-    // Calibration
-    adc_cali_line_fitting_config_t cali_cfg = {
+    // Calibration (curve-fitting — required on ESP32-S3; line-fitting is ESP32 only)
+    adc_cali_curve_fitting_config_t cali_cfg = {
         .unit_id  = ADC_UNIT_1,
+        .chan     = (adc_channel_t)s_chan,
         .atten    = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_12,
     };
-    adc_cali_create_scheme_line_fitting(&cali_cfg, &s_cali);
+    adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_cali);
 }
 #endif
 

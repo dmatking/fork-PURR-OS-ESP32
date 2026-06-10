@@ -264,13 +264,25 @@ TARGETS = {
 
 # ── Module definitions ────────────────────────────────────────────────────────
 # inverted=True means cmake flag is BUILD_MINI and ON in cfg means the flag = 0
+_ALL_MINIWIN = ["cyd", "cyd_s028r", "cyd_s024c", "tdeck_plus", "jc3248w535", "waveshare169"]
+_ALL_TARGETS = ["heltec", "tembed_cc1101"] + _ALL_MINIWIN + ["tdeck"]
+
 MODULES = [
+    {
+        "key":      "wifi",
+        "cmake":    "PURR_ENABLE_WIFI",
+        "label":    "WiFi",
+        "desc":     "wifi_manager — WiFi stack + HTTP server (~150 KB flash)",
+        "targets":  _ALL_TARGETS,
+        "default":  True,
+        "inverted": False,
+    },
     {
         "key":      "bt",
         "cmake":    "PURR_ENABLE_BT",
         "label":    "Bluetooth",
         "desc":     "bt_manager — BLE + Classic stack (~200 KB flash)",
-        "targets":  ["heltec", "cyd", "tdeck"],
+        "targets":  _ALL_TARGETS,
         "default":  True,
         "inverted": False,
     },
@@ -279,7 +291,7 @@ MODULES = [
         "cmake":    "PURR_ENABLE_MTP",
         "label":    "MTP USB",
         "desc":     "mtp_manager — USB file transfer",
-        "targets":  ["heltec", "cyd", "tdeck"],
+        "targets":  _ALL_TARGETS,
         "default":  False,
         "inverted": False,
     },
@@ -288,7 +300,7 @@ MODULES = [
         "cmake":    "PURR_ENABLE_FLASHER",
         "label":    "OTA Flasher",
         "desc":     "flasher — OTA partition flasher",
-        "targets":  ["heltec", "cyd", "tdeck"],
+        "targets":  _ALL_TARGETS,
         "default":  False,
         "inverted": False,
     },
@@ -297,7 +309,7 @@ MODULES = [
         "cmake":    "PURR_ENABLE_LORA",
         "label":    "LoRa Radio",
         "desc":     "lora_manager — LoRa radio driver",
-        "targets":  ["heltec", "tdeck"],
+        "targets":  ["heltec", "tdeck", "tdeck_plus"],
         "default":  True,
         "inverted": False,
     },
@@ -306,7 +318,7 @@ MODULES = [
         "cmake":    "PURR_ENABLE_MESH",
         "label":    "Meshtastic",
         "desc":     "mesh_manager — Meshtastic co-resident stack (requires LoRa)",
-        "targets":  ["heltec", "tdeck"],
+        "targets":  ["heltec", "tdeck", "tdeck_plus"],
         "default":  False,
         "inverted": False,
     },
@@ -315,7 +327,7 @@ MODULES = [
         "cmake":    "BUILD_MINI",
         "label":    "MicroPython",
         "desc":     "mpython_runtime — .meow app interpreter",
-        "targets":  ["heltec", "cyd", "tdeck"],
+        "targets":  _ALL_TARGETS,
         "default":  True,
         "inverted": True,   # micropython ON  → BUILD_MINI=0
     },
@@ -324,7 +336,7 @@ MODULES = [
         "cmake":    "PURR_ENABLE_SHELL",
         "label":    "Debug Shell",
         "desc":     "drv_shell — USB serial REPL (gpio-set, display-color, reboot, ...)",
-        "targets":  ["heltec", "cyd", "cyd_s028r", "cyd_s024c", "tdeck", "tdeck_plus", "jc3248w535"],
+        "targets":  _ALL_TARGETS,
         "default":  True,
         "inverted": False,
     },
@@ -333,7 +345,7 @@ MODULES = [
         "cmake":    "PURR_ENABLE_LUA",
         "label":    "Lua Runtime",
         "desc":     "lib_lua — .paws/.claw script execution (~120 KB flash)",
-        "targets":  ["cyd", "cyd_s028r", "cyd_s024c", "tdeck_plus", "jc3248w535"],
+        "targets":  _ALL_MINIWIN,
         "default":  True,
         "inverted": False,
     },
@@ -352,6 +364,15 @@ MODULES = [
         "label":    "MagicMac",
         "desc":     "Mac Plus emulator app (WIP — compiled but stub)",
         "targets":  ["cyd", "cyd_s028r", "cyd_s024c", "tdeck_plus", "jc3248w535"],
+        "default":  False,
+        "inverted": False,
+    },
+    {
+        "key":      "gps",
+        "cmake":    "PURR_ENABLE_GPS",
+        "label":    "GPS",
+        "desc":     "gps_manager — u-blox MIA-M10Q UART (T-Deck Plus only)",
+        "targets":  ["tdeck_plus"],
         "default":  False,
         "inverted": False,
     },
@@ -406,6 +427,7 @@ DEFAULT_CFG = {
     "tdeck_plus":   False,
     "cyd_variant":  "s028r",
     "modules": {
+        "wifi":        True,
         "bt":          True,
         "mtp":         False,
         "flasher":     False,
@@ -415,6 +437,7 @@ DEFAULT_CFG = {
         "lua":         True,
         "magidos":     False,
         "magicmac":    False,
+        "gps":         False,
     },
     "ui_theme": "wce",
 }
@@ -453,8 +476,9 @@ def save_cfg(cfg):
 def _sanitize_cfg(cfg):
     """Enforce hard hardware constraints — call after any target change."""
     target = cfg["target"]
-    # CYD has no LoRa hardware — strip flags regardless of what config says
-    if target in ("cyd", "cyd_boot", "cyd_s028r", "cyd_s024c"):
+    # Devices with no LoRa hardware — strip flags regardless of what config says
+    _no_lora = ("cyd", "cyd_boot", "cyd_s028r", "cyd_s024c", "jc3248w535", "waveshare169", "tembed_cc1101")
+    if target in _no_lora:
         cfg["modules"]["lora"] = False
         cfg["modules"]["mesh"] = False
     # cyd_boot is fully fixed — wipe all optional module flags
@@ -569,10 +593,16 @@ def pick_modules(cfg):
     while True:
         div()
         print(f"\n  Kernel modules — {C_CYN}{target}{C_RST}\n")
-        print(f"  {C_GRY}Always compiled: wifi_manager  power_manager{C_RST}")
+        print(f"  {C_GRY}Always compiled: power_manager{C_RST}")
         if target in ("cyd", "cyd_s024c", "cyd_s028r"):
             print(f"  {C_GRY}                  display_ili9341  touch_cst816s  partition_manager{C_RST}")
-        else:
+        elif target == "jc3248w535":
+            print(f"  {C_GRY}                  display_st7796  touch_gt911{C_RST}")
+        elif target == "tdeck_plus":
+            print(f"  {C_GRY}                  display_st7789  touch_gt911  keyboard(I2C)  trackball(GPIO){C_RST}")
+        elif target == "waveshare169":
+            print(f"  {C_GRY}                  display_st7789  touch_cst816s{C_RST}")
+        elif target in ("heltec",):
             print(f"  {C_GRY}                  display_ssd1306{C_RST}")
         print(f"\n  {C_WHT}Optional (enter number to toggle):{C_RST}\n")
 
@@ -595,8 +625,8 @@ def pick_modules(cfg):
         if has_lora:
             print(f"\n        {C_GRY}+-- kernel: {cfg['lora_kernel']}  ([k] to change){C_RST}")
 
-        is_cyd = target in ("cyd", "cyd_s028r", "cyd_s024c")
-        if is_cyd:
+        is_miniwin = target in _ALL_MINIWIN
+        if is_miniwin:
             ui    = cfg.get("ui_kernel", TARGETS[target].get("default_ui", "none"))
             theme = cfg.get("ui_theme", "wce")
             if ui == "miniwin":
@@ -608,7 +638,7 @@ def pick_modules(cfg):
         prompt = f"  Toggle [1-{len(visible)}]"
         if has_lora:
             prompt += ", [k] LoRa kernel"
-        if is_cyd:
+        if is_miniwin:
             prompt += ", [u] UI kernel"
             if cfg.get("ui_kernel") == "miniwin":
                 prompt += ", [t] theme"
@@ -619,10 +649,10 @@ def pick_modules(cfg):
         if raw.lower() == "k" and has_lora:
             pick_lora_kernel(cfg)
             continue
-        if raw.lower() == "u" and is_cyd:
+        if raw.lower() == "u" and is_miniwin:
             pick_ui_kernel(cfg)
             continue
-        if raw.lower() == "t" and is_cyd and cfg.get("ui_kernel") == "miniwin":
+        if raw.lower() == "t" and is_miniwin and cfg.get("ui_kernel") == "miniwin":
             pick_ui_theme(cfg)
             continue
         try:
@@ -702,6 +732,7 @@ def _cmake_flags(cfg):
         mods["lora"] = False
         mods["mesh"] = False
 
+    _flag("PURR_ENABLE_WIFI",     "wifi",     True)
     _flag("PURR_ENABLE_BT",       "bt",       True)
     _flag("PURR_ENABLE_LORA",     "lora",     t["default_lora"])
     _flag("PURR_ENABLE_MESH",     "mesh",     False)
@@ -711,6 +742,7 @@ def _cmake_flags(cfg):
     _flag("PURR_ENABLE_LUA",      "lua",      True)
     _flag("PURR_ENABLE_MAGIDOS",  "magidos",  False)
     _flag("PURR_ENABLE_MAGICMAC", "magicmac", False)
+    _flag("PURR_ENABLE_GPS",      "gps",      False)
 
     flags.append(f"-DBUILD_TDECK_PLUS={1 if cfg.get('tdeck_plus') else 0}")
 
@@ -1063,13 +1095,17 @@ def show_banner(cfg):
     print(f"  Variant  : {'mini — no MicroPython' if mini else 'full — with MicroPython'}")
 
     mod_strs = []
+    if mods.get("wifi"):    mod_strs.append("wifi")
     if mods.get("bt"):      mod_strs.append("bt")
     if mods.get("lora"):    mod_strs.append(f"lora({cfg.get('lora_kernel','sx1262')})")
     if mods.get("mesh"):    mod_strs.append("mesh")
     if mods.get("mtp"):     mod_strs.append("mtp")
     if mods.get("flasher"): mod_strs.append("flasher")
+    if mods.get("gps"):     mod_strs.append("gps")
     ui = cfg.get("ui_kernel", TARGETS[target].get("default_ui", "none"))
-    if ui != "none":        mod_strs.append(f"ui({ui})")
+    if ui != "none":
+        theme = cfg.get("ui_theme", "wce") if ui == "miniwin" else ""
+        mod_strs.append(f"ui({ui}/{theme})" if theme else f"ui({ui})")
     print(f"  Modules  : {' '.join(mod_strs) if mod_strs else '(none)'}")
 
     if cfg.get("flash_port"):   print(f"  Flash    : {cfg['flash_port']}")
@@ -1259,6 +1295,8 @@ def _apply_cli(cfg, args):
         cfg["target"] = args.target
     if args.mini:
         cfg["modules"]["micropython"] = False
+    if args.no_wifi:
+        cfg["modules"]["wifi"] = False
     if args.no_bt:
         cfg["modules"]["bt"] = False
     if args.lora:
@@ -1271,6 +1309,8 @@ def _apply_cli(cfg, args):
         cfg["modules"]["mtp"] = True
     if args.flasher:
         cfg["modules"]["flasher"] = True
+    if args.gps:
+        cfg["modules"]["gps"] = True
     if args.lora_kernel:
         cfg["lora_kernel"] = args.lora_kernel
     if args.ui_kernel:
@@ -1303,12 +1343,14 @@ def main():
                    help="Scan for connected serial devices and exit")
     p.add_argument("--clean",       action="store_true")
     p.add_argument("--mini",        action="store_true")
+    p.add_argument("--no-wifi",     action="store_true", dest="no_wifi")
     p.add_argument("--no-bt",       action="store_true", dest="no_bt")
     p.add_argument("--lora",        action="store_true")
     p.add_argument("--no-lora",     action="store_true", dest="no_lora")
     p.add_argument("--mesh",        action="store_true")
     p.add_argument("--mtp",         action="store_true")
     p.add_argument("--flasher",     action="store_true")
+    p.add_argument("--gps",         action="store_true")
     p.add_argument("--lora-kernel", dest="lora_kernel", choices=list(LORA_KERNELS.keys()))
     p.add_argument("--ui-kernel",   dest="ui_kernel",   choices=list(UI_KERNELS.keys()))
     p.add_argument("--tdeck-plus",  action="store_true", dest="tdeck_plus")

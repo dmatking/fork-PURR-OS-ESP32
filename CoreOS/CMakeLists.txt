@@ -4,12 +4,6 @@ cmake_minimum_required(VERSION 3.16)
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../Shells")
 
 # MagiDOS emulator components (conditional)
-if(PURR_ENABLE_MAGIDOS)
-    list(APPEND EXTRA_COMPONENT_DIRS
-        "${CMAKE_CURRENT_SOURCE_DIR}/../magidos/CoreOS/components/drv_8086"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../magidos/CoreOS/components/lib_purr_dos_ipc"
-    )
-endif()
 
 # UI kernel: must be declared before component CMakeLists files are processed
 # so lib_miniwin and other components can read it unconditionally.

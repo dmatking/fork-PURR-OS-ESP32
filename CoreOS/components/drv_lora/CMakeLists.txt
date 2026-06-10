@@ -8,14 +8,14 @@ endif()
 
 set(PURR_LORA_KERNEL "sx1262" CACHE STRING "LoRa kernel: sx1262 | sx1276 | rak3172")
 
-set(SRCS "lora_manager.cpp")
-
+# lora_manager.cpp (root) IS the sx1262/RadioLib implementation.
+# rak3172 and sx1276 kernels replace it entirely via their own file.
 if(PURR_LORA_KERNEL STREQUAL "rak3172")
-    list(APPEND SRCS "kernels/rak3172/lora_manager.cpp")
+    set(SRCS "kernels/rak3172/lora_manager.cpp")
 elseif(PURR_LORA_KERNEL STREQUAL "sx1276")
-    list(APPEND SRCS "kernels/sx1276/lora_manager.cpp")
+    set(SRCS "kernels/sx1276/lora_manager.cpp")
 else()
-    list(APPEND SRCS "kernels/sx1262/lora_manager.cpp")
+    set(SRCS "lora_manager.cpp")
 endif()
 
 idf_component_register(

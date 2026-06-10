@@ -128,6 +128,7 @@ if(PURR_ENABLE_SHELL)
     list(APPEND REQUIRES drv_shell)
 endif()
 
+
 # ── Device-specific: Heltec ───────────────────────────────────────────────────
 if(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND SRCS "../apps/kitten_ui/kitten_ui.cpp")
