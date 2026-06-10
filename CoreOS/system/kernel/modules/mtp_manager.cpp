@@ -1,5 +1,7 @@
 #include "mtp_manager.h"
-#include "../purr_idf_compat.h"
+#include "esp_log.h"
+
+static const char *TAG = "mtp";
 
 // USB MTP mode — allows PC to browse and write to SPIFFS/LittleFS over USB.
 // Requires USB_MSC or a MTP library (e.g., ESP_MTP or tinyusb MTP class).
@@ -9,7 +11,7 @@
 static bool mtp_active = false;
 
 void mtp_manager_init() {
-    Serial.println("[mtp] MTP manager init (tinyusb integration pending)");
+    ESP_LOGI(TAG, "init (tinyusb integration pending)");
 }
 
 void mtp_manager_update() {
@@ -23,13 +25,13 @@ void mtp_manager_deinit() {
 bool mtp_manager_active() { return mtp_active; }
 
 void mtp_manager_enter() {
-    Serial.println("[mtp] entering MTP mode");
+    ESP_LOGI(TAG, "entering MTP mode");
     mtp_active = true;
     // TODO: tinyusb_mtp_start()
 }
 
 void mtp_manager_exit() {
-    Serial.println("[mtp] exiting MTP mode");
+    ESP_LOGI(TAG, "exiting MTP mode");
     mtp_active = false;
     // TODO: tinyusb_mtp_stop()
 }

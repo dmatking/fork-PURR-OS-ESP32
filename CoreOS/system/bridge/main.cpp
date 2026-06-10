@@ -2,10 +2,12 @@
 // and brokers radio handoff for /friends/ firmware.
 
 #include "../kernel/kitt.h"
-#include "../kernel/purr_idf_compat.h"
+#include "esp_log.h"
 #include <ArduinoJson.h>
 #include <stdio.h>
 #include <sys/stat.h>
+
+static const char *TAG = "bridge";
 
 extern KITT kitt;
 
@@ -36,7 +38,7 @@ static void load_keymap(const char* path) {
     keymap_count = 0;
     FILE* f = fopen(path, "r");
     if (!f) {
-        Serial.printf("[bridge] keymap not found: %s\n", path);
+        ESP_LOGW(TAG, "keymap not found: %s", path);
         return;
     }
     char buf[1024] = {};
@@ -44,7 +46,7 @@ static void load_keymap(const char* path) {
     fclose(f);
     JsonDocument doc;
     if (deserializeJson(doc, buf) != DeserializationError::Ok) {
-        Serial.println("[bridge] keymap parse error");
+        ESP_LOGE(TAG, "keymap parse error");
         return;
     }
 
@@ -55,7 +57,7 @@ static void load_keymap(const char* path) {
         keymap[keymap_count].key = string_to_key(kv.value().as<const char*>());
         keymap_count++;
     }
-    Serial.printf("[bridge] keymap loaded: %d entries\n", keymap_count);
+    ESP_LOGI(TAG, "keymap loaded: %d entries", keymap_count);
 }
 
 static KITT::generic_key_t pin_to_key(uint8_t pin) {
@@ -71,7 +73,7 @@ static bool yielding_lora  = false;
 
 static void on_reserved_combo() {
     // Power+Select pressed — reclaim all radios from firmware
-    Serial.println("[bridge] reserved combo: reclaiming radios");
+    ESP_LOGI(TAG, "reserved combo: reclaiming radios");
     if (yielding_wifi)  { kitt.wifi_reclaim();  yielding_wifi  = false; }
     if (yielding_bt)    { kitt.bt_reclaim();    yielding_bt    = false; }
     if (yielding_lora)  { kitt.lora_reclaim();  yielding_lora  = false; }
@@ -113,5 +115,5 @@ static void bridge_task(void*) {
 
 void bridge_start() {
     xTaskCreatePinnedToCore(bridge_task, "bridge", 4096, nullptr, 2, nullptr, 1);
-    Serial.println("[bridge] started");
+    ESP_LOGI(TAG, "started");
 }

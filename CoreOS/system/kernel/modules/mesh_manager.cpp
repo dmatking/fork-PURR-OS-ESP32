@@ -2,7 +2,7 @@
 
 #ifdef PURR_HAS_MESH
 
-#include "../purr_idf_compat.h"
+#include "esp_log.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -39,6 +39,8 @@ extern "C" {
     void lora_manager_yield();    // release SX1262 to mesh stack
     void lora_manager_reclaim();  // re-init SX1262 for PURR use
 }
+
+static const char *TAG = "mesh";
 
 // ── Internal state ────────────────────────────────────────────────────────────
 
@@ -83,17 +85,17 @@ static void on_mesh_receive(const meshtastic_MeshPacket* p) {
 
 bool mesh_manager_start() {
     if (s_running) {
-        Serial.println("[mesh] already running");
+        ESP_LOGW(TAG, "already running");
         return false;
     }
 
-    Serial.println("[mesh] starting — yielding radio from lora_manager");
+    ESP_LOGI(TAG, "starting - yielding radio from lora_manager");
     lora_manager_yield();
 
     if (!s_rx_queue) {
         s_rx_queue = xQueueCreate(RX_QUEUE_LEN, sizeof(mesh_packet_t));
         if (!s_rx_queue) {
-            Serial.println("[mesh] ERR: rx queue alloc failed");
+            ESP_LOGE(TAG, "rx queue alloc failed");
             lora_manager_reclaim();
             return false;
         }
@@ -117,18 +119,18 @@ bool mesh_manager_start() {
     //       See HOWTO.md §Meshtastic for patch instructions.
 
     s_running   = true;
-    s_start_ms  = (uint32_t)millis();
+    s_start_ms  = (uint32_t)(esp_timer_get_time() / 1000ULL);
     s_packets_rx = s_packets_tx = 0;
 
-    Serial.printf("[mesh] up — own ID 0x%08X  channel '%s'\n",
-                  mesh_manager_own_id(), s_channel_name);
+    ESP_LOGI(TAG, "up - own ID 0x%08lX  channel '%s'",
+             (unsigned long)mesh_manager_own_id(), s_channel_name);
     return true;
 }
 
 void mesh_manager_stop() {
     if (!s_running) return;
 
-    Serial.println("[mesh] stopping");
+    ESP_LOGI(TAG, "stopping");
     meshService.shutdown();
 
     // Give tasks a moment to exit before reclaiming the radio
@@ -136,7 +138,7 @@ void mesh_manager_stop() {
 
     lora_manager_reclaim();
     s_running = false;
-    Serial.println("[mesh] stopped — radio returned to lora_manager");
+    ESP_LOGI(TAG, "stopped - radio returned to lora_manager");
 }
 
 bool mesh_manager_running() {
@@ -210,7 +212,7 @@ uint32_t mesh_manager_own_id() {
 
 void mesh_manager_set_channel(const char* name, const uint8_t* psk_32bytes) {
     if (s_running) {
-        Serial.println("[mesh] WARN: set_channel called while running — restart required");
+        ESP_LOGW(TAG, "set_channel called while running - restart required");
         return;
     }
     if (name)        strncpy(s_channel_name, name, sizeof(s_channel_name) - 1);
@@ -232,7 +234,7 @@ void mesh_manager_get_status(mesh_status_t* out) {
     out->packets_tx = s_packets_tx;
     out->last_rssi  = s_last_rssi;
     out->last_snr   = s_last_snr;
-    out->uptime_ms  = s_running ? ((uint32_t)millis() - s_start_ms) : 0;
+    out->uptime_ms  = s_running ? ((uint32_t)(esp_timer_get_time() / 1000ULL) - s_start_ms) : 0;
 }
 
 #else  // !PURR_HAS_MESH — stub out everything so callers compile on all targets

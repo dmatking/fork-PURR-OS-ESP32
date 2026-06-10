@@ -1,9 +1,12 @@
 #include "mpython_runtime.h"
 #include "../kernel/kitt.h"
 
-#include "../kernel/purr_idf_compat.h"
-#include <SPIFFS.h>
+#include "esp_log.h"
+#include "esp_timer.h"
+#include <stdio.h>
 #include <freertos/FreeRTOS.h>
+
+static const char *TAG = "mpython";
 #include <freertos/task.h>
 #include <esp_heap_caps.h>
 
@@ -63,24 +66,31 @@ struct AppTaskArg {
 static void app_task(void* arg) {
     AppTaskArg* a = (AppTaskArg*)arg;
 
-    // Read main.py from SPIFFS
+    // Read main.py from SPIFFS (POSIX)
     char entry[140];
-    snprintf(entry, sizeof(entry), "%s/main.py", a->path);
+    snprintf(entry, sizeof(entry), "/spiffs%s/main.py", a->path);
 
-    File f = SPIFFS.open(entry, "r");
+    FILE* f = fopen(entry, "r");
     if (!f) {
-        Serial.printf("[mpython] ERR: %s not found\n", entry);
+        ESP_LOGE(TAG, "%s not found", entry);
         delete a;
         mpython_process_kill(a->path);
         vTaskDelete(nullptr);
         return;
     }
-    String src = f.readString();
-    f.close();
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    char* src = (char*)malloc((size_t)(sz + 1));
+    if (src) { fread(src, 1, (size_t)sz, f); src[sz] = '\0'; }
+    fclose(f);
 
-    Serial.printf("[mpython] exec: %s\n", entry);
-    mp_embed_exec_str(src.c_str());
-    Serial.printf("[mpython] done: %s\n", entry);
+    if (src) {
+        ESP_LOGI(TAG, "exec: %s", entry);
+        mp_embed_exec_str(src);
+        ESP_LOGI(TAG, "done: %s", entry);
+        free(src);
+    }
 
     // Mark process as no longer running
     AppProcess* p = find_proc(a->path);
@@ -98,7 +108,7 @@ void mpython_init() {
     if (mp_initialized) return;
     mp_embed_init(mp_heap, sizeof(mp_heap));
     mp_initialized = true;
-    Serial.println("[mpython] interpreter ready");
+    ESP_LOGI(TAG, "interpreter ready");
 }
 
 void mpython_deinit() {
@@ -111,13 +121,13 @@ bool mpython_exec_app(const char* meow_path) {
     if (!mp_initialized) mpython_init();
 
     if (find_proc(meow_path)) {
-        Serial.printf("[mpython] already running: %s\n", meow_path);
+        ESP_LOGW(TAG, "already running: %s", meow_path);
         return false;
     }
 
     AppProcess* p = alloc_proc(meow_path);
     if (!p) {
-        Serial.println("[mpython] process table full");
+        ESP_LOGE(TAG, "process table full");
         return false;
     }
 
@@ -131,13 +141,13 @@ bool mpython_exec_app(const char* meow_path) {
     );
 
     if (ok != pdPASS) {
-        Serial.println("[mpython] ERR: task create failed");
+        ESP_LOGE(TAG, "task create failed");
         delete arg;
         p->running = false;
         return false;
     }
 
-    Serial.printf("[mpython] launched: %s\n", meow_path);
+    ESP_LOGI(TAG, "launched: %s", meow_path);
     return true;
 }
 
@@ -151,7 +161,7 @@ void mpython_process_kill(const char* path) {
     if (p->task) vTaskDelete(p->task);
     p->running = false;
     p->task    = nullptr;
-    Serial.printf("[mpython] killed: %s\n", path);
+    ESP_LOGI(TAG, "killed: %s", path);
 }
 
 uint32_t mpython_process_ram_kb(const char* path) {
@@ -205,7 +215,7 @@ int    c_kitt_lora_rssi(void)                             { return kitt.lora_get
 uint32_t c_kitt_free_ram_kb(void) {
     KITT::memory_stats_t m; kitt.memory_get_stats(&m); return m.free_ram_kb;
 }
-uint32_t c_kitt_uptime_ms(void)    { return (uint32_t)millis(); }
+uint32_t c_kitt_uptime_ms(void)    { return (uint32_t)(esp_timer_get_time() / 1000ULL); }
 int      c_kitt_battery_percent(void) { return kitt.battery_percent(); }
 int      c_kitt_cpu_mhz(void)         { return kitt.cpu_get_freq_mhz(); }
 

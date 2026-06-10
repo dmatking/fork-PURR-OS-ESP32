@@ -3,7 +3,10 @@
 
 #include "miniwin.h"
 #include "miniwin_utilities.h"
+#include "miniwin_settings.h"
+#include "calibrate.h"
 #include "hal/hal_touch.h"
+#include "esp_log.h"
 #include "gl/gl.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -300,6 +303,21 @@ extern "C" {
 void mw_user_init(void)
 {
     hal_input_init();
+
+    // Seed identity calibration matrix for GT911 (capacitive — no interactive calibration).
+    // Must run here (after kitt.init() initializes NVS), not in mw_hal_touch_init().
+    mw_settings_load();
+    if (!mw_settings_is_initialised() || !mw_settings_is_calibrated()) {
+        MATRIX_CAL identity = {};
+        identity.Divider = 4096;
+        identity.An = (int32_t)mw_hal_lcd_get_display_width();
+        identity.En = (int32_t)mw_hal_lcd_get_display_height();
+        mw_settings_set_to_defaults();
+        mw_settings_set_calibration_matrix(&identity);
+        mw_settings_set_calibrated(true);
+        mw_settings_save();
+        ESP_LOGI("purr_app", "GT911 identity calibration seeded");
+    }
 
     mw_util_rect_t r;
     mw_util_set_rect(&r, 0, 0, SCR_W, SCR_H);

@@ -1,6 +1,5 @@
 #include "smol.h"
 #include "../../system/kernel/kitt.h"
-#include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 

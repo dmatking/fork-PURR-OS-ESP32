@@ -203,7 +203,7 @@ static void push_gen_key(KITT::generic_key_t key, bool pressed) {
 
 static void poll_gpio_inputs() {
     for (int i = 0; i < button_count; i++) {
-        bool state = !digitalRead(buttons[i].pin);  // active-low buttons
+        bool state = !gpio_get_level((gpio_num_t)buttons[i].pin);  // active-low buttons
         if (state != buttons[i].last_state) {
             buttons[i].last_state = state;
             push_raw_key(buttons[i].pin, state);
@@ -212,9 +212,9 @@ static void poll_gpio_inputs() {
 
 #ifdef PURR_HAS_ENCODER
     // Rotary encoder: poll CLK edge, read DT for direction
-    int8_t clk = (int8_t)digitalRead(PURR_ENCODER_CLK);
+    int8_t clk = (int8_t)gpio_get_level((gpio_num_t)PURR_ENCODER_CLK);
     if (clk != enc_last_clk && clk == 0) {
-        bool dt = (bool)digitalRead(PURR_ENCODER_DT);
+        bool dt = (bool)gpio_get_level((gpio_num_t)PURR_ENCODER_DT);
         KITT::generic_key_t dir = dt ? KITT::KEY_UP : KITT::KEY_DOWN;
         push_gen_key(dir, true);
         push_gen_key(dir, false);
@@ -222,7 +222,7 @@ static void poll_gpio_inputs() {
     enc_last_clk = clk;
 
     // Encoder switch (active-low)
-    bool sw = !digitalRead(PURR_ENCODER_SW);
+    bool sw = !gpio_get_level((gpio_num_t)PURR_ENCODER_SW);
     if (sw != enc_sw_last) {
         enc_sw_last = sw;
         push_raw_key(PURR_ENCODER_SW, sw);
@@ -403,10 +403,13 @@ bool KITT::init(const char* device_json_path) {
 
     // Step 14b: rotary encoder GPIO init
 #ifdef PURR_HAS_ENCODER
-    pinMode(PURR_ENCODER_CLK, INPUT_PULLUP);
-    pinMode(PURR_ENCODER_DT,  INPUT_PULLUP);
-    pinMode(PURR_ENCODER_SW,  INPUT_PULLUP);
-    enc_last_clk = (int8_t)digitalRead(PURR_ENCODER_CLK);
+    gpio_set_direction((gpio_num_t)PURR_ENCODER_CLK, GPIO_MODE_INPUT);
+    gpio_set_pull_mode((gpio_num_t)PURR_ENCODER_CLK, GPIO_PULLUP_ONLY);
+    gpio_set_direction((gpio_num_t)PURR_ENCODER_DT,  GPIO_MODE_INPUT);
+    gpio_set_pull_mode((gpio_num_t)PURR_ENCODER_DT,  GPIO_PULLUP_ONLY);
+    gpio_set_direction((gpio_num_t)PURR_ENCODER_SW,  GPIO_MODE_INPUT);
+    gpio_set_pull_mode((gpio_num_t)PURR_ENCODER_SW,  GPIO_PULLUP_ONLY);
+    enc_last_clk = (int8_t)gpio_get_level((gpio_num_t)PURR_ENCODER_CLK);
     enc_sw_last  = false;
     log("KITT", "encoder OK");
 #endif

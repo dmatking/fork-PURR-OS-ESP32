@@ -2,8 +2,6 @@
 // GT911 shares the I2C bus with the keyboard on T-Deck Plus; bus is init'd here.
 
 #include "hal/hal_touch.h"
-#include "miniwin_settings.h"
-#include "calibrate.h"
 #include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
@@ -75,22 +73,7 @@ void mw_hal_touch_init(void) {
     else
         ESP_LOGI(TAG, "GT911 no response at 0x%02X", GT_ADDR);
 
-    // Pre-seed identity calibration matrix so MiniWin skips the interactive calibration
-    // screen on first boot. GT911 is capacitive — no resistive calibration is needed.
-    // mw_hal_touch_init() runs before mw_init(), so writing to NVS here takes effect
-    // when mw_init() calls mw_settings_load().
-    mw_settings_load();
-    if (!mw_settings_is_initialised() || !mw_settings_is_calibrated()) {
-        MATRIX_CAL identity = {};
-        identity.Divider = 4096;
-        identity.An = TDECK_LCD_WIDTH;   // x: raw*320/4096 = pixel x
-        identity.En = TDECK_LCD_HEIGHT;  // y: raw*240/4096 = pixel y
-        mw_settings_set_to_defaults();
-        mw_settings_set_calibration_matrix(&identity);
-        mw_settings_set_calibrated(true);
-        mw_settings_save();
-        ESP_LOGI(TAG, "GT911 identity calibration seeded in NVS");
-    }
+
 }
 
 bool mw_hal_touch_is_recalibration_required(void) {

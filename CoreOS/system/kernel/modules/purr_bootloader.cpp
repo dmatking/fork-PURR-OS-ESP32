@@ -12,7 +12,9 @@
 #include "touch_cst816s.h"
 #include "partition_manager.h"
 #include "../kitt.h"
-#include "../purr_idf_compat.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "driver/gpio.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_app_desc.h"
@@ -618,7 +620,7 @@ static void handle_touch() {
     cst_touch_event_t ev;
     bool pressed = touch_cst816s_get_event(&ev) && ev.pressed;
     if (pressed && !s_prev_pressed) {
-        uint32_t now = millis();
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
         if (now - s_debounce_ms >= 300) {
             s_debounce_ms = now;
             int tag = hit_test(ev.x, ev.y);
@@ -634,14 +636,15 @@ static void handle_touch() {
 #define CYD_LED_B 17
 
 static void led_init() {
-    pinMode(CYD_LED_R, OUTPUT); digitalWrite(CYD_LED_R, HIGH);
-    pinMode(CYD_LED_G, OUTPUT); digitalWrite(CYD_LED_G, HIGH);
-    pinMode(CYD_LED_B, OUTPUT); digitalWrite(CYD_LED_B, HIGH);
+    gpio_set_direction((gpio_num_t)CYD_LED_R, GPIO_MODE_OUTPUT); gpio_set_level((gpio_num_t)CYD_LED_R, 1);
+    gpio_set_direction((gpio_num_t)CYD_LED_G, GPIO_MODE_OUTPUT); gpio_set_level((gpio_num_t)CYD_LED_G, 1);
+    gpio_set_direction((gpio_num_t)CYD_LED_B, GPIO_MODE_OUTPUT); gpio_set_level((gpio_num_t)CYD_LED_B, 1);
 }
 static void led_heartbeat() {
     static uint32_t ms = 0; static bool on = false;
-    if (millis() - ms >= 500) { ms = millis(); on = !on;
-        digitalWrite(CYD_LED_B, on ? LOW : HIGH); }
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    if (now - ms >= 500) { ms = now; on = !on;
+        gpio_set_level((gpio_num_t)CYD_LED_B, on ? 0 : 1); }
 }
 
 // ── Main task ─────────────────────────────────────────────────────────────────
@@ -671,7 +674,7 @@ static void purr_bootloader_task(void*) {
             }
         }
 
-        uint32_t now = millis();
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
         if (now - s_last_tick >= 2000) {
             s_last_tick = now;
             if (s_screen == PB_HOME) refresh_header_ram();

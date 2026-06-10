@@ -27,6 +27,7 @@
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdio.h>
@@ -53,21 +54,21 @@ static void write_crash_log(const char* app, const char* reason) {
 // Memory monitor callback (registered with KITT)
 static void on_memory_warning(int pct) {
     if (pct >= MEM_WARN_98 && last_mem_warn < MEM_WARN_98) {
-        ESP_LOGE(TAG, "MEM CRITICAL 98%");
+        ESP_LOGE(TAG, "MEM CRITICAL 98%%");
         kitt.process_kill("explorer");
         last_mem_warn = pct;
     } else if (pct >= MEM_WARN_95 && last_mem_warn < MEM_WARN_95) {
-        ESP_LOGW(TAG, "MEM WARN 95%");
+        ESP_LOGW(TAG, "MEM WARN 95%%");
         last_mem_warn = pct;
     } else if (pct >= MEM_WARN_90 && last_mem_warn < MEM_WARN_90) {
-        ESP_LOGW(TAG, "MEM WARN 90%");
+        ESP_LOGW(TAG, "MEM WARN 90%%");
         last_mem_warn = pct;
     }
 }
 
 // Crash report callback
 static void on_crash_report(const char* app, const char* reason) {
-    ESP_LOGE(TAG, "crash: %s — %s", app, reason);
+    ESP_LOGE(TAG, "crash: %s - %s", app, reason);
     write_crash_log(app, reason);
 }
 
@@ -109,9 +110,10 @@ static void system_task(void*) {
     //   3. Valid PURR firmware in ota_0 → fast-path chainload
     //   4. Anything else → bootloader UI
     {
-        pinMode(0, INPUT_PULLUP);
-        delay(20);
-        bool force_bl = (digitalRead(0) == LOW);
+        gpio_set_direction((gpio_num_t)0, GPIO_MODE_INPUT);
+        gpio_set_pull_mode((gpio_num_t)0, GPIO_PULLUP_ONLY);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        bool force_bl = (gpio_get_level((gpio_num_t)0) == 0);
 
         bool is_purr = !force_bl && ota0_is_purr();
 
@@ -129,18 +131,18 @@ static void system_task(void*) {
             nvs_set_u8(nvs, PURR_BL_NVS_KEY, (uint8_t)(boot_tries + 1));
             nvs_commit(nvs);
             nvs_close(nvs);
-            Serial.printf("[sys] PURR firmware OK (attempt %u/%u) — chainloading\n",
-                          boot_tries + 1, PURR_SOS_THRESHOLD);
+            ESP_LOGI(TAG, "PURR firmware OK (attempt %u/%u) - chainloading",
+                     boot_tries + 1, PURR_SOS_THRESHOLD);
             pm_launch(0);  // never returns
         }
         nvs_close(nvs);
 
         if (force_bl)
-            Serial.println("[sys] GPIO 0 held — forcing bootloader UI");
+            ESP_LOGI(TAG, "GPIO 0 held - forcing bootloader UI");
         else if (sos_mode)
-            Serial.printf("[sys] crash loop detected (%u failed boots) — SOS mode\n", boot_tries);
+            ESP_LOGI(TAG, "crash loop detected (%u failed boots) - SOS mode", boot_tries);
         else
-            Serial.println("[sys] ota_0 is not PURR firmware — bootloader UI");
+            ESP_LOGI(TAG, "ota_0 is not PURR firmware - bootloader UI");
 
         purr_bootloader_start(sos_mode, boot_tries);
     }
@@ -152,10 +154,11 @@ static void system_task(void*) {
     // GPIO 0 held at boot → reboot to factory recovery instead of launching OS
 #ifdef PURR_HAS_PARTITION_MGR
     {
-        pinMode(0, INPUT_PULLUP);
-        delay(10);
-        if (digitalRead(0) == LOW) {
-            Serial.println("[sys] GPIO 0 held — rebooting to factory");
+        gpio_set_direction((gpio_num_t)0, GPIO_MODE_INPUT);
+        gpio_set_pull_mode((gpio_num_t)0, GPIO_PULLUP_ONLY);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        if (gpio_get_level((gpio_num_t)0) == 0) {
+            ESP_LOGI(TAG, "GPIO 0 held - rebooting to factory");
             pm_boot_to_factory();  // never returns
         }
     }
@@ -170,19 +173,19 @@ static void system_task(void*) {
         ESP_LOGI("sys", "shells: TEMP disabled (linker symbol debug pending)");
         /* DISABLED PENDING LINKER DEBUG
 #ifdef PURR_HAS_BLACKBERRY_UI
-        Serial.println("[sys] registering BlackberryUI shell");
+        ESP_LOGI(TAG, "registering BlackberryUI shell");
         blackberry_ui_start();
 #endif
 #ifdef PURR_HAS_EXPLORER
-        Serial.println("[sys] registering Explorer shell");
+        ESP_LOGI(TAG, "registering Explorer shell");
         explorer_start();
 #endif
 #ifdef PURR_HAS_CLASSICMAC
-        Serial.println("[sys] registering ClassicMac shell");
+        ESP_LOGI(TAG, "registering ClassicMac shell");
         classicmac_start();
 #endif
 #if !defined(PURR_HAS_BLACKBERRY_UI) && !defined(PURR_HAS_EXPLORER)
-        Serial.println("[sys] ERR: no shell compiled");
+        ESP_LOGE(TAG, "no shell compiled");
         kitt.text_print(0, "PURR OS");
         kitt.text_print(1, kitt.device_name());
         kitt.text_print(2, "No shell");
@@ -197,7 +200,7 @@ static void system_task(void*) {
 
         KITT::memory_stats_t mem;
         kitt.memory_get_stats(&mem);
-        Serial.printf("[sys] RAM %lu/%lu KB free\n", mem.free_ram_kb, mem.total_ram_kb);
+        ESP_LOGI(TAG, "RAM %lu/%lu KB free", mem.free_ram_kb, mem.total_ram_kb);
     }
 #endif  // PURR_DISPLAY_SSD1306 || PURR_FORCE_KITTEN_UI
 #endif  // PURR_IS_BOOTLOADER_IMG

@@ -2,7 +2,6 @@
 // RadioLib component at CoreOS/components/radiolib/ — no Arduino dependency.
 
 #include "lora_manager.h"
-#include "Arduino.h"
 #include "RadioLib.h"
 #include "esp_log.h"
 

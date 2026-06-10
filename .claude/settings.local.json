@@ -266,7 +266,8 @@
       "Bash(idf.py -B build_tdeck_plus --sdkconfig-file sdkconfig_tdeck_plus -DTARGET_DEVICE=tdeck_plus -DPURR_UI_KERNEL=miniwin build)",
       "Bash(idf.py --help)",
       "Bash(ninja -C build_tdeck_plus)",
-      "Bash(python3 SDK/sdk_core.py --target tdeck_plus --clean --build)"
+      "Bash(python3 SDK/sdk_core.py --target tdeck_plus --clean --build)",
+      "Bash(git commit -m 'refactor\\(kernel\\): pure IDF kernel — remove Arduino from all owned source files *)"
     ],
     "additionalDirectories": [
       "/home/Catto/Documents/Projects/PURR-OS-ESP32"

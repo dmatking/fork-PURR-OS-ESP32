@@ -1,7 +1,6 @@
 #include "launcher.h"
 #include "../../system/kernel/modules/partition_manager.h"
 #include "../../system/kernel/kitt.h"
-#include <Arduino.h>
 #include <lvgl.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>

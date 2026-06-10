@@ -7,7 +7,8 @@
 #include "purr_mesh.h"
 #include "lora_manager.h"
 #include "../kitt.h"
-#include "../purr_idf_compat.h"
+#include "esp_log.h"
+#include "esp_timer.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <mbedtls/aes.h>
@@ -20,6 +21,8 @@
 #include <pb_decode.h>
 #include "meshtastic/mesh.pb.h"
 #include "meshtastic/portnums.pb.h"
+
+static const char *TAG = "mesh";
 
 extern KITT kitt;
 
@@ -80,12 +83,12 @@ static void node_touch(uint32_t id, int8_t rssi) {
     for (int i = 0; i < s_nnode; i++) {
         if (s_nodes[i].id == id) {
             s_nodes[i].rssi    = rssi;
-            s_nodes[i].last_ms = millis();
+            s_nodes[i].last_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
             return;
         }
     }
     if (s_nnode < MAX_NODES)
-        s_nodes[s_nnode++] = {id, rssi, (uint32_t)millis()};
+        s_nodes[s_nnode++] = {id, rssi, (uint32_t)(esp_timer_get_time() / 1000ULL)};
 }
 
 // ── Crypto ────────────────────────────────────────────────────────────────────
@@ -208,9 +211,9 @@ static void relay_packet(const uint8_t* raw, size_t raw_len) {
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
 
     lora_manager_send(relay_buf, os.bytes_written);
-    Serial.printf("[mesh] relay  from=%08lX id=%lu hops_left=%u delay=%lums\n",
-                  (unsigned long)pkt.from, (unsigned long)pkt.id,
-                  (unsigned)pkt.hop_limit, (unsigned long)delay_ms);
+    ESP_LOGI(TAG, "relay from=%08lX id=%lu hops_left=%u delay=%lums",
+             (unsigned long)pkt.from, (unsigned long)pkt.id,
+             (unsigned)pkt.hop_limit, (unsigned long)delay_ms);
 }
 
 // Decode + decrypt raw LoRa bytes.  Returns false on parse/crypto failure.
@@ -286,13 +289,13 @@ static void mesh_task(void*) {
     lora_manager_set_power(MESH_TX_DBM);
 
     s_ready = true;
-    Serial.printf("[mesh] ready  id=%08lX  %luHz  SF%d BW%dkHz\n",
-                  (unsigned long)s_node_id, (unsigned long)s_freq_hz,
-                  MESH_SF, MESH_BW_HZ / 1000);
+    ESP_LOGI(TAG, "ready id=%08lX  %luHz  SF%d BW%dkHz",
+             (unsigned long)s_node_id, (unsigned long)s_freq_hz,
+             MESH_SF, MESH_BW_HZ / 1000);
     refresh_display();
 
     // Announce ourselves on the mesh immediately, then every 15 minutes
-    uint32_t last_announce = millis() - 14 * 60 * 1000UL;
+    uint32_t last_announce = (uint32_t)(esp_timer_get_time() / 1000ULL) - 14 * 60 * 1000UL;
 
     while (true) {
         // ── RX ────────────────────────────────────────────────────────────────
@@ -315,9 +318,9 @@ static void mesh_task(void*) {
                         dedup_add(from, pkt_id);
                         node_touch(from, rssi);
 
-                        Serial.printf("[mesh] rx  from=%08lX to=%08lX port=%d len=%u rssi=%d snr=%.1f\n",
-                                      (unsigned long)from, (unsigned long)to,
-                                      portnum, (unsigned)payload_len, rssi, snr);
+                        ESP_LOGI(TAG, "rx from=%08lX to=%08lX port=%d len=%u rssi=%d snr=%.1f",
+                                 (unsigned long)from, (unsigned long)to,
+                                 portnum, (unsigned)payload_len, rssi, snr);
 
                         switch (portnum) {
                         case (int)meshtastic_PortNum_TEXT_MESSAGE_APP:
@@ -325,14 +328,14 @@ static void mesh_task(void*) {
                             snprintf(s_last_from, sizeof(s_last_from), "%08lX", (unsigned long)from);
                             strncpy(s_last_text, (const char*)payload, sizeof(s_last_text) - 1);
                             s_last_text[sizeof(s_last_text) - 1] = '\0';
-                            Serial.printf("[mesh] text: %s\n", s_last_text);
+                            ESP_LOGI(TAG, "text: %s", s_last_text);
                             break;
                         case (int)meshtastic_PortNum_NODEINFO_APP: {
                             meshtastic_User user = meshtastic_User_init_zero;
                             pb_istream_t us = pb_istream_from_buffer(payload, payload_len);
                             if (pb_decode(&us, meshtastic_User_fields, &user))
-                                Serial.printf("[mesh] nodeinfo: %s (%s)\n",
-                                              user.long_name, user.short_name);
+                                ESP_LOGI(TAG, "nodeinfo: %s (%s)",
+                                         user.long_name, user.short_name);
                             break;
                         }
                         default:
@@ -351,13 +354,13 @@ static void mesh_task(void*) {
         }
 
         // ── Periodic NodeInfo announcement ────────────────────────────────────
-        if (millis() - last_announce >= 15UL * 60UL * 1000UL) {
-            last_announce = millis();
+        if ((uint32_t)(esp_timer_get_time() / 1000ULL) - last_announce >= 15UL * 60UL * 1000UL) {
+            last_announce = (uint32_t)(esp_timer_get_time() / 1000ULL);
             uint8_t wire[256];
             size_t  len = encode_nodeinfo_packet(wire, sizeof(wire));
             if (len > 0) {
                 lora_manager_send(wire, len);
-                Serial.printf("[mesh] nodeinfo broadcast  id=%08lX\n", (unsigned long)s_node_id);
+                ESP_LOGI(TAG, "nodeinfo broadcast id=%08lX", (unsigned long)s_node_id);
             }
         }
 
@@ -383,9 +386,9 @@ bool purr_mesh_send_text(const char* text) {
     if (!s_ready) return false;
     uint8_t wire[256];
     size_t  len = encode_text_packet(wire, sizeof(wire), text);
-    if (len == 0) { Serial.println("[mesh] encode failed"); return false; }
+    if (len == 0) { ESP_LOGE(TAG, "encode failed"); return false; }
     bool ok = lora_manager_send(wire, len);
-    Serial.printf("[mesh] tx text len=%u ok=%d\n", (unsigned)len, ok);
+    ESP_LOGI(TAG, "tx text len=%u ok=%d", (unsigned)len, ok);
     return ok;
 }
 
