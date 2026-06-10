@@ -34,37 +34,39 @@ static magicmac_config_t config = {
 // Simple JSON string value extractor
 static bool json_get_string(const char* json, const char* key, char* value, size_t len)
 {
-    char search[256];
-    snprintf(search, sizeof(search), "\"%s\":%s*\"", key);
-    const char* p = json;
-    while ((p = strstr(p, search)) != NULL) {
-        p += strlen(key) + 3;  // Skip past "key":
-        while (*p && isspace(*p)) p++;
-        if (*p == '"') {
-            p++;
-            size_t i = 0;
-            while (*p && *p != '"' && i < len - 1) {
-                value[i++] = *p++;
-            }
-            value[i] = '\0';
-            return true;
-        }
+    char search_prefix[256];
+    snprintf(search_prefix, sizeof(search_prefix), "\"%s\":", key);
+
+    const char* p = strstr(json, search_prefix);
+    if (!p) return false;
+
+    p += strlen(search_prefix);
+    while (*p && isspace(*p)) p++;
+
+    if (*p == '"') {
         p++;
+        size_t i = 0;
+        while (*p && *p != '"' && i < len - 1) {
+            value[i++] = *p++;
+        }
+        value[i] = '\0';
+        return true;
     }
     return false;
 }
 
 static bool json_get_bool(const char* json, const char* key)
 {
-    char search[256];
-    snprintf(search, sizeof(search), "\"%s\":%s*", key);
-    const char* p = json;
-    while ((p = strstr(p, search)) != NULL) {
-        p += strlen(key) + 2;  // Skip past "key":
-        while (*p && isspace(*p)) p++;
-        return strncmp(p, "true", 4) == 0;
-    }
-    return false;
+    char search_prefix[256];
+    snprintf(search_prefix, sizeof(search_prefix), "\"%s\":", key);
+
+    const char* p = strstr(json, search_prefix);
+    if (!p) return false;
+
+    p += strlen(search_prefix);
+    while (*p && isspace(*p)) p++;
+
+    return strncmp(p, "true", 4) == 0;
 }
 
 static void load_config()
@@ -103,7 +105,7 @@ static void save_config()
     fclose(f);
 }
 
-static void get_disk_list(char** disks, int* count)
+static void __attribute__((unused)) get_disk_list(char** disks, int* count)
 {
     *count = 0;
     DIR* d = opendir(MAGICMAC_DIR);
