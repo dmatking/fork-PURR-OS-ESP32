@@ -7,10 +7,10 @@
 #include "gl/gl.h"
 #include "purr_apps_common.h"
 #include "purr_taskbar.h"
-#include <ArduinoJson.h>
 #include <stdio.h>
 #include <dirent.h>
 #include <string.h>
+#include <ctype.h>
 
 static const char* CONFIG_PATH = "/sdcard/magicmac/magicmac.json";
 static const char* MAGICMAC_DIR = "/sdcard/magicmac";
@@ -31,6 +31,42 @@ static magicmac_config_t config = {
     .autostart = false
 };
 
+// Simple JSON string value extractor
+static bool json_get_string(const char* json, const char* key, char* value, size_t len)
+{
+    char search[256];
+    snprintf(search, sizeof(search), "\"%s\":%s*\"", key);
+    const char* p = json;
+    while ((p = strstr(p, search)) != NULL) {
+        p += strlen(key) + 3;  // Skip past "key":
+        while (*p && isspace(*p)) p++;
+        if (*p == '"') {
+            p++;
+            size_t i = 0;
+            while (*p && *p != '"' && i < len - 1) {
+                value[i++] = *p++;
+            }
+            value[i] = '\0';
+            return true;
+        }
+        p++;
+    }
+    return false;
+}
+
+static bool json_get_bool(const char* json, const char* key)
+{
+    char search[256];
+    snprintf(search, sizeof(search), "\"%s\":%s*", key);
+    const char* p = json;
+    while ((p = strstr(p, search)) != NULL) {
+        p += strlen(key) + 2;  // Skip past "key":
+        while (*p && isspace(*p)) p++;
+        return strncmp(p, "true", 4) == 0;
+    }
+    return false;
+}
+
 static void load_config()
 {
     FILE* f = fopen(CONFIG_PATH, "r");
@@ -43,31 +79,27 @@ static void load_config()
     fclose(f);
     buf[n] = '\0';
 
-    JsonDocument doc;
-    if (deserializeJson(doc, buf) != DeserializationError::Ok) {
-        return;
+    // Simple string-based JSON parsing
+    if (!json_get_string(buf, "boot_disk", config.boot_disk, sizeof(config.boot_disk))) {
+        strlcpy(config.boot_disk, "/sdcard/magicmac/meow.dsk", sizeof(config.boot_disk));
     }
-
-    strlcpy(config.boot_disk, doc["boot_disk"] | "/sdcard/magicmac/meow.dsk", sizeof(config.boot_disk));
-    config.wifi_enabled = doc["wifi_enabled"] | false;
-    config.bt_enabled = doc["bt_enabled"] | false;
-    config.autostart = doc["autostart"] | false;
+    config.wifi_enabled = json_get_bool(buf, "wifi_enabled");
+    config.bt_enabled = json_get_bool(buf, "bt_enabled");
+    config.autostart = json_get_bool(buf, "autostart");
 }
 
 static void save_config()
 {
-    JsonDocument doc;
-    doc["boot_disk"] = config.boot_disk;
-    doc["wifi_enabled"] = config.wifi_enabled;
-    doc["bt_enabled"] = config.bt_enabled;
-    doc["autostart"] = config.autostart;
-
     FILE* f = fopen(CONFIG_PATH, "w");
     if (!f) return;
 
-    char buf[1024];
-    serializeJson(doc, buf, sizeof(buf));
-    fputs(buf, f);
+    // Generate JSON manually
+    fprintf(f, "{\n");
+    fprintf(f, "  \"boot_disk\": \"%s\",\n", config.boot_disk);
+    fprintf(f, "  \"wifi_enabled\": %s,\n", config.wifi_enabled ? "true" : "false");
+    fprintf(f, "  \"bt_enabled\": %s,\n", config.bt_enabled ? "true" : "false");
+    fprintf(f, "  \"autostart\": %s\n", config.autostart ? "true" : "false");
+    fprintf(f, "}\n");
     fclose(f);
 }
 
