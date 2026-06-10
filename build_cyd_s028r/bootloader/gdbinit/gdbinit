@@ -1,0 +1,2 @@
+source /home/Catto/Documents/Projects/PURR-OS-ESP32/build_cyd_s028r/bootloader/gdbinit/symbols
+source /home/Catto/Documents/Projects/PURR-OS-ESP32/build_cyd_s028r/bootloader/gdbinit/connect

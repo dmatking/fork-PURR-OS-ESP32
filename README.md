@@ -1,4 +1,4 @@
-# PURR OS — v0.9.5
+# PURR OS — v0.9.6
 
 > **MEGA DISCLAIMER:** This project is very much vibe-coded. It has gone from 0 to "Jesus Christ" at an alarming rate. It is fully open-source and humans are actively encouraged to help. Please.
 
