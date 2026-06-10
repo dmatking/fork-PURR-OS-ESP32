@@ -302,7 +302,8 @@
       "Bash(git commit -m 'feat: add full LoRa radio control API and client apps *)",
       "Bash(git commit -m 'feat: add boot mode infrastructure for MagicMac support *)",
       "Bash(git commit -m 'feat: add MagicMac settings app for WiFi/BT control *)",
-      "Bash(git commit -m 'feat: MagicMac settings app and kernel-protected NVS boot persistence *)"
+      "Bash(git commit -m 'feat: MagicMac settings app and kernel-protected NVS boot persistence *)",
+      "Bash(git commit -m 'feat: wire MagicMac boot flow into system startup *)"
     ],
     "additionalDirectories": [
       "/home/Catto/Documents/Projects/PURR-OS-ESP32"

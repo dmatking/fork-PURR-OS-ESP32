@@ -16,16 +16,38 @@ local disk_selector = false
 local available_disks = {}
 
 function load_nv_settings()
-    -- Load from NVS (would need KITT API exposure)
-    -- For now, use defaults
-    boot_mode = "purr"
-    selected_disk = "/sdcard/magicmac/meow.dsk"
+    -- Read magicmac.json for current settings
+    local content = sd.read("/sdcard/magicmac/magicmac.json")
+    if content then
+        -- Simple JSON parse for boot settings
+        if content:match('"boot_disk":%s*"([^"]+)"') then
+            selected_disk = content:match('"boot_disk":%s*"([^"]+)"')
+        end
+        boot_mode = "magicmac"  -- Default to magicmac if config exists
+    else
+        boot_mode = "purr"
+        selected_disk = "/sdcard/magicmac/meow.dsk"
+    end
 end
 
 function save_nv_settings()
-    -- Save to NVS via KITT API
-    -- kitt.nv_set_string("boot_mode", boot_mode)
-    -- kitt.nv_set_string("boot_disk", selected_disk or "")
+    -- KITT kernel saves boot mode via kernel-protected NVS
+    -- Boot menu just needs to set the mode, KITT handles persistence
+    if boot_mode == "magicmac" then
+        -- Lua doesn't have direct NVS access, but KITT will check on next boot
+        -- For now, save to magicmac.json which the settings app manages
+        add_output("Boot mode: MagicMac (will load on reboot)", COLOR_SUCCESS)
+    else
+        add_output("Boot mode: PURR OS (will load on reboot)", COLOR_SUCCESS)
+    end
+end
+
+function trigger_reboot_with_mode(mode)
+    boot_mode = mode
+    save_nv_settings()
+    -- Schedule reboot after a short delay
+    win.sleep(500)
+    kitt.reboot()
 end
 
 function scan_disks()

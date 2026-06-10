@@ -13,6 +13,9 @@
 #ifdef PURR_HAS_CLASSICMAC
 #  include "../kernel/modules/classicmac.h"
 #endif
+#ifdef PURR_HAS_MAGICMAC
+#  include "../../magicmac/Shells/purr_classic/purr_classic.h"
+#endif
 #ifdef PURR_HAS_BLACKBERRY_UI
 #  include "../kernel/modules/blackberry_ui.h"
 #endif
@@ -165,6 +168,15 @@ static void system_task(void*) {
 #endif
 
     // ── Launch shell ─────────────────────────────────────────────────────────
+
+    // Check boot mode — MagicMac takes priority if enabled
+#ifdef PURR_HAS_MAGICMAC
+    if (kitt.get_boot_mode() == BOOT_MAGICMAC) {
+        ESP_LOGI("sys", "launching MagicMac (Mac OS emulator)");
+        purr_classic_start();  // never returns
+    }
+#endif
+
 #if defined(PURR_DISPLAY_SSD1306) || defined(PURR_FORCE_KITTEN_UI)
     ESP_LOGI("sys", "launching KittenUI");
     kitten_ui_start();
