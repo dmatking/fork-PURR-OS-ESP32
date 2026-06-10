@@ -72,9 +72,9 @@ static bool slot_has_firmware(const esp_partition_t* part) {
 
 void pm_init() {
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI3_HOST;  // VSPI — pins 23/19/18; HSPI (SPI2) is taken by the display
+    host.slot = SPI2_HOST;  // HSPI — pins 23/19/18; SPI3 is used by the display
     sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
-    dev_cfg.host_id  = SPI3_HOST;
+    dev_cfg.host_id  = SPI2_HOST;
     dev_cfg.gpio_cs  = (gpio_num_t)PM_SD_CS;
 
     spi_bus_config_t bus_cfg = {

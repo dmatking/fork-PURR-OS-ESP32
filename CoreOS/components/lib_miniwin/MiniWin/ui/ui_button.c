@@ -108,10 +108,14 @@ static void button_paint_function(mw_handle_t control_handle, const mw_gl_draw_i
 	}
 
 	mw_gl_set_fg_colour(highlighted_colour);
+	mw_gl_vline(draw_info, 0, 0, mw_get_control_rect(control_handle).height);
 	mw_gl_vline(draw_info, 1, 1, mw_get_control_rect(control_handle).height - 2);
+	mw_gl_hline(draw_info, 0, mw_get_control_rect(control_handle).width, 0);
 	mw_gl_hline(draw_info, 1, mw_get_control_rect(control_handle).width - 2, 1);
 	mw_gl_set_fg_colour(lowlighted_colour);
+	mw_gl_vline(draw_info, mw_get_control_rect(control_handle).width - 1, 0, mw_get_control_rect(control_handle).height);
 	mw_gl_vline(draw_info, mw_get_control_rect(control_handle).width - 2, 1, mw_get_control_rect(control_handle).height - 2);
+	mw_gl_hline(draw_info, 0, mw_get_control_rect(control_handle).width, mw_get_control_rect(control_handle).height - 1);
 	mw_gl_hline(draw_info, 1, mw_get_control_rect(control_handle).width - 2, mw_get_control_rect(control_handle).height - 2);
 
  	mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);

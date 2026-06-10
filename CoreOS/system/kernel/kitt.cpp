@@ -252,14 +252,12 @@ bool KITT::init(const char* device_json_path) {
         .max_files              = 20,
         .format_if_mount_failed = true,
     };
-    if (esp_vfs_spiffs_register(&spiffs_cfg) != ESP_OK) {
-        ESP_LOGE("kitt", "ERR 0x01 SPIFFS mount failed");
-        purr_panic(PURR_STOP_HAL_FAIL, PURR_PANIC_BLUE, "SPIFFS mount failed");
-        return false;
-    }
+    bool spiffs_ok = (esp_vfs_spiffs_register(&spiffs_cfg) == ESP_OK);
+    if (!spiffs_ok)
+        ESP_LOGW("kitt", "SPIFFS not found — running without filesystem (launcher mode)");
 
-    // Step 3: parse device.json — fall back to compile-time defaults if missing
-    if (!device_config_load(device_json_path, &cfg)) {
+    // Step 3: parse device.json — fall back to compile-time defaults if missing or no SPIFFS
+    if (!spiffs_ok || !device_config_load(device_json_path, &cfg)) {
         ESP_LOGI(TAG, "device.json not found — trying compile-time defaults");
         if (!device_config_default(&cfg)) {
             ESP_LOGE(TAG, "ERR 0x01 no device config");

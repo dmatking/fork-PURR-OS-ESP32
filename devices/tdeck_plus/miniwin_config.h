@@ -43,8 +43,8 @@ extern "C" {
 #define MW_CONTROL_DOWN_COLOUR          MW_HAL_LCD_GREY4
 #define MW_CONTROL_DISABLED_COLOUR      MW_HAL_LCD_GREY5
 
-#define MW_TICK_PERIOD_MS               20
-#define MW_TICKS_PER_SECOND             50U
+#define MW_TICK_PERIOD_MS               67
+#define MW_TICKS_PER_SECOND             15U
 #define MW_CONTROL_DOWN_TIME            4U
 #define MW_KEY_DOWN_TIME                3U
 #define MW_WINDOW_MIN_MAX_EFFECT_TIME   5U
