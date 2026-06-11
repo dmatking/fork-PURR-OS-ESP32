@@ -23,9 +23,16 @@
 ---
 
 ## 1. Hardware Pin Verification
-- [ ] Cross-reference every device schematic/datasheet online and verify all pin assignments in `SDK/targets/*.defaults` and device HAL files
-  - heltec, tembed_cc1101, cyd / cyd_s028r / cyd_s024c / cyd_boot, tdeck / tdeck_plus, jc3248w535, waveshare169
-- [ ] Fix any mismatches found (display, touch, SD, RGB LED, buttons, backlight)
+- [x] Cross-reference every device schematic/datasheet online and verify all pin assignments
+  - Results dumped to CLAUDE_NOTES.md § Device Pin Reference
+  - heltec, cyd_s028r, cyd_s024c, tdeck_plus: verified correct
+  - jc3248w535, waveshare169, tembed_cc1101: significant mismatches corrected
+- [x] Fix pin mismatches:
+  - tembed_cc1101: all display pins corrected (MOSI=9 SCLK=11 CS=41 DC=16 BL=21); CC1101 pins corrected; GPIO15 PowerEN added
+  - waveshare169: all display pins corrected; touch CST816S SDA=11 SCL=10 INT=46 RST=-1
+  - jc3248w535: GT911 SDA=4 SCL=8 INT=3 corrected; display is QSPI (driver TODO)
+  - cyd_s028r: RST=-1 (GPIO4 is RGB LED); XPT2046 already correct (software SPI)
+  - cyd_s024c: chip name CST820 noted in CLAUDE_NOTES; code is functionally compatible
 
 ---
 
@@ -45,9 +52,12 @@
 ---
 
 ## 4. Core OS Bug Audit
-- [ ] Read through kernel modules and system components for bugs, dead guards, bad flags
+- [x] Read through kernel modules and system components for bugs — 3 fixed:
+  - kitt.cpp get_touch_event(): NULL guard on out pointer
+  - system/main.cpp: nvs_close called with uninitialized handle if nvs_open fails — fixed
+  - display_st7789.cpp deinit(): NULL guard on s_panel
 - [ ] Verify PURR_DEFS propagation across all targets post-strip
-- [ ] Audit drv_touch, drv_display, drv_shell for correctness across all targets
+- [ ] Audit drv_touch, drv_shell for correctness across all targets
 
 ---
 
@@ -74,18 +84,22 @@
 ---
 
 ## 8. Luna / Windows XP Theme
-- [ ] Add PURR_THEME_LUNA alongside wce and blackberry
-- [ ] Title bar: blue/silver gradient + rounded close/min/max buttons
-- [ ] Start button: green pill, taskbar at bottom
-- [ ] Extend MiniWin theme hooks to support gradient fills
+- [x] Add PURR_THEME_LUNA alongside wce and blackberry
+  - miniwin_config_luna.h with Luna blue (#0049CD active, #7B96C2 inactive)
+  - purr_miniwin_colors.h shared theme header across all devices
+  - sdk_core.py UI_THEMES updated; CMakeLists PURR_THEME_LUNA=1 flag
+- [ ] Title bar gradient (MiniWin has no gradient API yet — needs mw_gl extension)
+- [ ] Start button green pill + rounded buttons
 
 ---
 
 ## 9. Hardware Input — Trackball + Keyboard
-- [ ] Trackball → arrow key mapping (UP/DOWN/LEFT/RIGHT fed into MiniWin input queue)
-- [ ] Keyboard: full audit of T-Deck keyboard driver — keys not registering
-- [ ] Enter key: wire to MiniWin button/dialog confirm
-- [ ] Unified `purr_input_event_t` queue — all hardware feeds one queue MiniWin consumes
+- [x] Trackball → arrow key mapping: fires NAV_UP/DOWN/LEFT/RIGHT on press edge always (was debug-only)
+- [x] Keyboard ANSI escape sequences: \e[A/B/C/D translated to nav codes for arrow keys
+- [x] Enter key wired (both trackball click and \r from keyboard)
+- [x] Unified `purr_input_event_t` queue implemented (purr_input.h / purr_input.cpp)
+  - KEY, TOUCH_DN/UP/MV, SCROLL event types; post from task or ISR
+- [ ] Wire existing HAL drivers to post into purr_input queue (currently separate)
 
 ---
 
@@ -104,11 +118,12 @@
 ---
 
 ## 12. Desktop Icons — Modular + Configurable
-- [ ] Make desktop icons moveable/repositionable (drag or config-driven layout)
-- [ ] Support per-app custom icon bitmaps
-- [ ] Change default app icon from blank to "P", "pp", or "mew" glyph
-- [ ] Icon config: load layout + icon paths from JSON on SPIFFS
-- [ ] New app icon registration: one-line, not hardcoded coordinates
+- [x] Registration-based icon system: desktop_icon_register(label, x, y, draw_fn, launch_fn)
+- [x] Auto-position at right edge when x==0 && y==0
+- [x] Per-icon custom draw callback; generic "P" glyph draw_fn available
+- [x] desktop_icons_register_defaults() wired in mw_user_init (tdeck_plus)
+- [ ] Drag/reposition support
+- [ ] Icon config from JSON on SPIFFS
 
 ---
 

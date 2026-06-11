@@ -1,4 +1,4 @@
-# PURR OS — v0.9.6
+# PURR OS — v0.10.1
 
 > **MEGA DISCLAIMER:** This project is very much vibe-coded. It has gone from 0 to "Jesus Christ" at an alarming rate. It is fully open-source and humans are actively encouraged to help. Please.
 
@@ -42,8 +42,8 @@ For more details, see **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
 
 | Component | Version | Release Date |
 |-----------|---------|--------------|
-| PURR OS   | v0.9.6  | 2026-06-09   |
-| KITT      | v0.6.1  | 2026-06-09   |
+| PURR OS   | v0.10.1 | 2026-06-11   |
+| KITT      | v0.6.9  | 2026-06-11   |
 
 Version strings are defined in [CoreOS/system/kernel/purr_version.h](CoreOS/system/kernel/purr_version.h) and automatically embedded into the firmware image via `esp_app_desc_t` — visible in the bootloader's slot card and on the homescreen.
 
@@ -123,39 +123,52 @@ Notable subsystems:
 
 ## Supported Targets
 
-| Target | Chip | Display | Touch | Status | Notes |
-|--------|------|---------|-------|--------|-------|
-| `cyd_s028r` | ESP32-2432S028R | ILI9341 2.4" 320x240 | XPT2046 SPI | Active | Original CYD variant |
-| `cyd_s024c` | ESP32-2432S024C | ILI9341 2.4" 320x240 | CST816S I2C | Active | Newer CYD variant |
-| `cyd_boot` | ESP32-2432S024C | ILI9341 2.4" 320x240 | CST816S I2C | Active | PURR Kernel — flashed to factory partition |
-| `heltec` | ESP32-S3 | SSD1306 OLED 128x64 | — | Working | WiFi + LoRa, Smol shell |
-| `tdeck` | ESP32-S3 | ST7789 | trackball | WIP | Shell pending |
-| `jc3248w535` | ESP32-S3 | ST7796 3.5" 480x320 | GT911 cap | WIP | Verify pins before flashing |
-| `waveshare169` | ESP32-S3 | ST7789 1.69" 240x280 | CST816S cap | WIP | Verify pins before flashing |
+| Target | Chip | Flash | Display | Touch | Input | Status |
+|--------|------|-------|---------|-------|-------|--------|
+| `cyd_s028r` | ESP32 | 4 MB | ILI9341 2.4" 320×240 | XPT2046 SPI | Touch | Active |
+| `cyd_s024c` | ESP32 | 4 MB | ST7789 2.4" 320×240 | CST820 I2C | Touch | Active |
+| `cyd_boot` | ESP32 | 4 MB | ILI9341 2.4" | CST820 I2C | Touch | Active — factory kernel only |
+| `tdeck_plus` | ESP32-S3 | 16 MB | ST7789 3.5" 320×240 | GT911 cap | Touch + KB + trackball | Active |
+| `jc3248w535` | ESP32-S3 | 16 MB | ST7796 3.5" 480×320 | GT911 cap | Touch | WIP |
+| `waveshare169` | ESP32-S3 | 4 MB | ST7789 1.69" 240×280 | CST816S cap | Touch | WIP |
+| `heltec` | ESP32-S3 | 8 MB | SSD1306 OLED 128×64 | — | UART shell | Working |
+| `tembed_cc1101` | ESP32-S3 | 16 MB | ST7789 170×320 | — | Rotary encoder | Working |
+| `tdeck` | ESP32-S3 | 16 MB | ST7789 320×240 | — | Trackball + KB | WIP |
+
+**Note:** `cyd_s028r` and `cyd_s024c` are the primary fully-featured targets. `tdeck_plus` is actively developed. All others build cleanly but may have pin or driver issues pending hardware verification.
 
 ---
 
-## Partition Layout (CYD, 4MB)
+## Partition Layout
 
+### CYD / Waveshare169 (4 MB)
 ```
-0x1000   IDF second-stage bootloader   ~27 KB   (immutable, flashed by esptool)
-0x8000   Partition table                2 KB
-0xe000   OTA data                       8 KB    (tracks active boot slot)
-0x10000  factory   — PURR Kernel        1.0625 MB  (OTA-immune, chainloads ota_0)
-0x120000 ota_0     — PURR Userland      1.4375 MB  (OTA-updatable)
-0x290000 ota_1     — spare slot         1 MB       (third-party firmware / testing)
-0x390000 spiffs    — filesystem         448 KB  (device config, app data, logs)
+0x1000   IDF bootloader       ~27 KB
+0x8000   Partition table        2 KB
+0x9000   nvs                   20 KB   (key-value store)
+0x10000  factory — PURR OS      3 MB   (entire app image)
+0x300000 spiffs — filesystem    1 MB   (scripts, device config, app data)
 ```
+
+### T-Deck Plus / JC3248W535 / T-Deck / T-Embed (16 MB)
+```
+0x9000   nvs                   20 KB
+0x10000  factory — PURR OS     14 MB
+0xE00000 spiffs — filesystem    2 MB
+```
+
+### Heltec (8 MB)
+```
+0x9000   nvs                   20 KB
+0x10000  factory — PURR OS      7 MB
+0x700000 spiffs — filesystem    1 MB
+```
+
+**No OTA partition.** As of v0.10.1, OTA slots have been removed — the factory partition uses all available flash. SD card flashing handles firmware updates instead of OTA.
 
 ### Boot sequence
-
-1. IDF bootloader reads OTA data -> jumps to factory (PURR Kernel)
-2. PURR Kernel reads `esp_app_desc_t` from ota_0 — if it is a PURR image, chainloads in ~20ms
-3. If **GPIO 0 is held** at power-on -> forces bootloader UI
-4. If ota_0 has crashed 3 times in a row without clearing the counter -> **SOS mode**
-5. If ota_0 is empty or non-PURR firmware -> bootloader UI (pure passthrough)
-
-The PURR Kernel is **OTA-immune** — it can only be updated by flashing over USB. This means the device always has a recovery path regardless of what is in the OTA slots.
+1. IDF bootloader jumps to factory
+2. PURR OS boots, mounts SD card, runs KITT kernel init, launches UI shell
 
 ---
 
