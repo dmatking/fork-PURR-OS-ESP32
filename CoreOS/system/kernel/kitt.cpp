@@ -808,6 +808,7 @@ void KITT::inject_key(generic_key_t key, bool pressed) {
 }
 
 bool KITT::get_touch_event(touch_event_t* out) {
+    if (!out) return false;
     if (strcmp(cfg.touch, "mxt336t") != 0) return false;
     *out = last_touch;
     return last_touch.pressed;

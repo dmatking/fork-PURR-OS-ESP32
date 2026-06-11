@@ -123,23 +123,28 @@ static void system_task(void*) {
 
         // Read crash-loop counter from NVS
         nvs_flash_init();
-        nvs_handle_t nvs;
+        nvs_handle_t nvs = 0;
+        bool nvs_ok = false;
         uint8_t boot_tries = 0;
         if (nvs_open(PURR_BL_NVS_NS, NVS_READWRITE, &nvs) == ESP_OK) {
+            nvs_ok = true;
             nvs_get_u8(nvs, PURR_BL_NVS_KEY, &boot_tries);
         }
 
         bool sos_mode = is_purr && (boot_tries >= PURR_SOS_THRESHOLD);
 
         if (is_purr && !sos_mode) {
-            nvs_set_u8(nvs, PURR_BL_NVS_KEY, (uint8_t)(boot_tries + 1));
-            nvs_commit(nvs);
-            nvs_close(nvs);
+            if (nvs_ok) {
+                nvs_set_u8(nvs, PURR_BL_NVS_KEY, (uint8_t)(boot_tries + 1));
+                nvs_commit(nvs);
+                nvs_close(nvs);
+                nvs_ok = false;
+            }
             ESP_LOGI(TAG, "PURR firmware OK (attempt %u/%u) - chainloading",
                      boot_tries + 1, PURR_SOS_THRESHOLD);
             pm_launch(0);  // never returns
         }
-        nvs_close(nvs);
+        if (nvs_ok) nvs_close(nvs);
 
         if (force_bl)
             ESP_LOGI(TAG, "GPIO 0 held - forcing bootloader UI");

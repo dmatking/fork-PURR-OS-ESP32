@@ -106,7 +106,7 @@ void display_st7789_init() {
 }
 
 void display_st7789_update()  {}
-void display_st7789_deinit()  { bl_set(0); esp_lcd_panel_disp_on_off(s_panel, false); }
+void display_st7789_deinit()  { bl_set(0); if (s_panel) esp_lcd_panel_disp_on_off(s_panel, false); }
 void display_st7789_set_brightness(uint8_t v) { bl_set(v); }
 void display_st7789_set_text_colors(uint16_t, uint16_t bg) { _text_bg = bg; }
 
