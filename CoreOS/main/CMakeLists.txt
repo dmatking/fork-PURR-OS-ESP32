@@ -56,7 +56,6 @@ set(SRCS
     "../system/kernel/idf_compat.c"
     "../system/kernel/modules/power_manager.cpp"
     "../system/kernel/modules/purr_input.cpp"
-    "../system/kernel/modules/purr_script.cpp"
     "../system/bridge/main.cpp"
     "../system/system/main.cpp"
 )
@@ -184,6 +183,7 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
         "../system/kernel/modules/partition_manager.cpp"
         "../system/kernel/modules/purr_bootloader.cpp"
         "../system/kernel/modules/stub_managers.cpp"
+        "../system/kernel/modules/purr_input.cpp"
     )
     set(REQUIRES
         bblanchon__arduinojson

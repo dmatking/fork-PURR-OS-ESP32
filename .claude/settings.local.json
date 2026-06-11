@@ -325,7 +325,8 @@
       "Bash(mv devices/tdeck_plus/desktop_icons.* devices/apps/)",
       "Bash(git commit -m 'fix: desktop icons and cursor integration, build successful *)",
       "Bash(git commit -m 'feat: add --flash-full command for T-Deck Plus *)",
-      "Bash(git commit -m 'fix: SD card pins, trackball cursor, start menu, MagicMac app *)"
+      "Bash(git commit -m 'fix: SD card pins, trackball cursor, start menu, MagicMac app *)",
+      "Bash(grep -v \".c$\")"
     ],
     "additionalDirectories": [
       "/home/Catto/Documents/Projects/PURR-OS-ESP32",

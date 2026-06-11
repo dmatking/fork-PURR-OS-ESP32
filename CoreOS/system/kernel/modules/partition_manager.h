@@ -6,7 +6,7 @@
 // Maximum OTA slots scanned (ota_0 … ota_3)
 #define PM_MAX_SLOTS    4
 #define PM_NAME_LEN     48
-#define PM_PATH_LEN     128
+#define PM_PATH_LEN     264
 #define PM_SD_MAX_FILES 16
 
 // SD card SPI pins — device specific

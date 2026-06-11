@@ -22,6 +22,7 @@ idf_component_register(
         "shell_cmds_miniwin.cpp"
         "shell_cmds_conman.cpp"
         "shell_cmds_script.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel/modules/purr_script.cpp"
     INCLUDE_DIRS "."
     REQUIRES ${_shell_requires}
 )
@@ -29,6 +30,7 @@ idf_component_register(
 # Kernel headers (purr_panic.h etc.)
 target_include_directories(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel/modules"
 )
 
 if(PURR_ENABLE_BT)

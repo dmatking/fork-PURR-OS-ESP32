@@ -65,7 +65,7 @@ endif()
 set(PURR_MW_APPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../devices/apps")
 file(GLOB PURR_MW_APP_SRCS "${PURR_MW_APPS_DIR}/*.cpp")
 
-set(_mw_requires nvs_flash esp_timer esp_lcd log driver drv_shell)
+set(_mw_requires nvs_flash esp_timer esp_lcd log driver drv_shell drv_display)
 if(PURR_ENABLE_LUA)
     list(APPEND _mw_requires lib_lua)
 endif()
@@ -113,6 +113,14 @@ idf_component_register(
                  "${CMAKE_CURRENT_SOURCE_DIR}/../drv_shell"
     REQUIRES     ${_mw_requires}
 )
+
+# Device HAL (hal_lcd.cpp) may call esp_lcd_* or display_st7796/st7789_* depending
+# on the target. Force-link both after lib_miniwin to fix link-order issues:
+# IDF topological sort puts dependencies before lib_miniwin, but GNU ld needs them after.
+idf_component_get_property(esp_lcd_lib esp_lcd COMPONENT_LIB)
+target_link_libraries(${COMPONENT_LIB} PUBLIC ${esp_lcd_lib})
+idf_component_get_property(drv_display_lib drv_display COMPONENT_LIB)
+target_link_libraries(${COMPONENT_LIB} PUBLIC ${drv_display_lib})
 
 # Advertise MiniWin presence to consumers (drv_shell etc.)
 target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_HAS_MINIWIN=1)

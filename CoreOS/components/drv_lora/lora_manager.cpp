@@ -3,13 +3,15 @@
 
 #include "lora_manager.h"
 #include "RadioLib.h"
+#include "hal/EspIdf/EspIdfHal.h"
 #include "esp_log.h"
 
 static const char* TAG = "lora";
 
-// RadioLib IDF HAL — uses ESP-IDF SPI master directly
 // SX1262 on Heltec V3: CS=8, DIO1=14, RST=12, BUSY=13, SCK=9, MOSI=10, MISO=11
-static SX1262 radio = new Module(LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
+// SPI2_HOST=1
+static EspIdfHal s_hal(1, LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS, 4000000);
+static SX1262 radio = new Module(&s_hal, LORA_CS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
 static bool     lora_ready      = false;
 static bool     lora_yield_flag = false;
