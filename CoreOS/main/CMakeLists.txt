@@ -55,6 +55,8 @@ set(SRCS
     "../system/kernel/device_config.cpp"
     "../system/kernel/idf_compat.c"
     "../system/kernel/modules/power_manager.cpp"
+    "../system/kernel/modules/purr_input.cpp"
+    "../system/kernel/modules/purr_script.cpp"
     "../system/bridge/main.cpp"
     "../system/system/main.cpp"
 )

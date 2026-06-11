@@ -21,6 +21,7 @@ idf_component_register(
         "shell_cmds_sys.c"
         "shell_cmds_miniwin.cpp"
         "shell_cmds_conman.cpp"
+        "shell_cmds_script.cpp"
     INCLUDE_DIRS "."
     REQUIRES ${_shell_requires}
 )

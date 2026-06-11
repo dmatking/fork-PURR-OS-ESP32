@@ -49,6 +49,7 @@ void cmd_mw_tick  (int argc, char **argv);
 void cmd_mw_rect  (int argc, char **argv);
 void cmd_mw_init  (int argc, char **argv);
 void cmd_mw_touch (int argc, char **argv);
+void cmd_script_run(int argc, char **argv);
 
 // Declared in shell_cmds_conman.cpp
 void cmd_wifi_status    (int argc, char **argv);
@@ -84,6 +85,7 @@ static const shell_cmd_t s_cmds[] = {
     { "mw-rect",           "mw-rect x y w h 0xRRGGBB    Draw rect via HAL directly",             cmd_mw_rect        },
     { "mw-init",           "mw-init                     Re-run mw_init()",                        cmd_mw_init        },
     { "mw-touch",          "mw-touch [N]                Poll touch N ticks (20ms, default 150)",  cmd_mw_touch       },
+    { "run",               "run <path>                  Run a script (.lua/.py/.wasm by ext)",   cmd_script_run     },
     { "wifi-status",       "wifi-status                 Show WiFi state and SSID",                cmd_wifi_status    },
     { "wifi-scan",         "wifi-scan                   Scan for nearby networks",                cmd_wifi_scan      },
     { "wifi-connect",      "wifi-connect <ssid> [pass]  Connect to a network",                   cmd_wifi_connect   },
