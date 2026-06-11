@@ -13,6 +13,7 @@ static const char *TAG = "app_main";
 #ifdef PURR_HAS_LUA
 #include "modules/lua_runtime.h"
 #endif
+#include "modules/purr_input.h"
 #ifdef PURR_HAS_MINIWIN
 #include "miniwin.h"
 #endif
@@ -31,6 +32,7 @@ void setup() {
 #ifdef PURR_HAS_LUA
     lua_runtime_init();
 #endif
+    purr_input_init(32);
 #ifdef PURR_HAS_MINIWIN
     mw_init();
 #endif
