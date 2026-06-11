@@ -233,6 +233,65 @@ void lua_module_system_register(bool restricted) {
     lua_setglobal(L, "system");
 }
 
+// ── KITT Module ───────────────────────────────────────────────────────────────
+
+static int lua_kitt_log(lua_State *L) {
+    const char *msg = luaL_checkstring(L, 1);
+    kitt.log("lua", msg);
+    return 0;
+}
+
+static int lua_kitt_display_width(lua_State *L) {
+    lua_pushinteger(L, kitt.display_width());
+    return 1;
+}
+
+static int lua_kitt_display_height(lua_State *L) {
+    lua_pushinteger(L, kitt.display_height());
+    return 1;
+}
+
+static int lua_kitt_is_ready(lua_State *L) {
+    lua_pushboolean(L, kitt.is_ready());
+    return 1;
+}
+
+static int lua_kitt_text_print(lua_State *L) {
+    uint8_t row = (uint8_t)luaL_checkinteger(L, 1);
+    const char *text = luaL_checkstring(L, 2);
+    kitt.text_print(row, text);
+    return 0;
+}
+
+static int lua_kitt_text_clear(lua_State *L) {
+    (void)L;
+    kitt.text_clear();
+    return 0;
+}
+
+static int lua_kitt_get_touch(lua_State *L) {
+    KITT::touch_event_t ev;
+    if (!kitt.get_touch_event(&ev)) { lua_pushnil(L); return 1; }
+    lua_newtable(L);
+    lua_pushinteger(L, ev.x);     lua_setfield(L, -2, "x");
+    lua_pushinteger(L, ev.y);     lua_setfield(L, -2, "y");
+    lua_pushboolean(L, ev.pressed); lua_setfield(L, -2, "pressed");
+    return 1;
+}
+
+void lua_module_kitt_register() {
+    if (!L) return;
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_kitt_log);           lua_setfield(L, -2, "log");
+    lua_pushcfunction(L, lua_kitt_display_width);  lua_setfield(L, -2, "display_width");
+    lua_pushcfunction(L, lua_kitt_display_height); lua_setfield(L, -2, "display_height");
+    lua_pushcfunction(L, lua_kitt_is_ready);       lua_setfield(L, -2, "is_ready");
+    lua_pushcfunction(L, lua_kitt_text_print);     lua_setfield(L, -2, "text_print");
+    lua_pushcfunction(L, lua_kitt_text_clear);     lua_setfield(L, -2, "text_clear");
+    lua_pushcfunction(L, lua_kitt_get_touch);      lua_setfield(L, -2, "get_touch");
+    lua_setglobal(L, "kitt");
+}
+
 // ── Lua Runtime ──────────────────────────────────────────────────────────────
 
 void lua_runtime_init() {
@@ -247,6 +306,7 @@ void lua_runtime_init() {
     luaL_openlibs(L);
 
     // Register KITT API modules
+    lua_module_kitt_register();
     lua_module_display_register();
     lua_module_sd_register();
     lua_module_touch_register();

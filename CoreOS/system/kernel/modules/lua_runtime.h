@@ -23,6 +23,9 @@ void lua_runtime_deinit();
 
 // ── Lua Module Registration (internal use) ────────────────────────────────────
 
+// Register kitt.* — maps directly to the KITT singleton
+void lua_module_kitt_register();
+
 // Register all display.* functions
 void lua_module_display_register();
 
