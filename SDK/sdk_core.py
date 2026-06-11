@@ -406,11 +406,13 @@ UI_KERNEL_DESCS = {
 UI_THEMES = {
     "wce":        "WCE Classic",
     "blackberry": "Blackberry (green-on-black terminal theme)",
+    "luna":       "Luna (Windows XP blue theme)",
 }
 
 UI_THEME_DESCS = {
     "wce":        "Windows CE-style gray shell with Start menu and taskbar",
     "blackberry": "Phosphor green-on-black shell — terminal aesthetic, tap wallpaper for app drawer",
+    "luna":       "Windows XP-inspired blue title bars and silver controls",
 }
 
 SHELL_DESCS = {

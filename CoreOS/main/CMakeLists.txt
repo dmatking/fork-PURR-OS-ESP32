@@ -435,6 +435,8 @@ if(PURR_ENABLE_GPS)
 endif()
 if(PURR_UI_THEME STREQUAL "blackberry")
     list(APPEND PURR_DEFS PURR_THEME_BLACKBERRY=1)
+elseif(PURR_UI_THEME STREQUAL "luna")
+    list(APPEND PURR_DEFS PURR_THEME_LUNA=1)
 endif()
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC ${PURR_DEFS})

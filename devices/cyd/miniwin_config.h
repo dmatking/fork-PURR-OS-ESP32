@@ -1,10 +1,12 @@
 #pragma once
 
 // PURR OS — MiniWin configuration dispatcher for CYD (ESP32-2432S024C)
-// Pulls in the theme-specific config based on PURR_THEME_BLACKBERRY.
+// Theme selected at build time via -DPURR_THEME_* compile flag.
 
-#ifdef PURR_THEME_BLACKBERRY
+#if defined(PURR_THEME_BLACKBERRY)
 #  include "miniwin_config_blackberry.h"
+#elif defined(PURR_THEME_LUNA)
+#  include "miniwin_config_luna.h"
 #else
 #  include "miniwin_config_wce.h"
 #endif

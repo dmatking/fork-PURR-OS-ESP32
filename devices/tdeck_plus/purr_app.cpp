@@ -345,6 +345,7 @@ extern "C" {
 void mw_user_init(void)
 {
     hal_input_init();
+    desktop_icons_register_defaults();
 
     // Seed identity calibration matrix for GT911 (capacitive — no interactive calibration).
     // Must run here (after kitt.init() initializes NVS), not in mw_hal_touch_init().
