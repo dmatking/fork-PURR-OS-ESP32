@@ -15,9 +15,31 @@ extern KITT kitt;
 typedef enum { TAB_USER, TAB_ADMIN, TAB_COUNT } app_tab_t;
 
 static mw_handle_t s_handle = MW_INVALID_HANDLE;
-static mw_handle_t s_script_win = MW_INVALID_HANDLE;
-static app_lua_window_t *s_script = NULL;
 static app_tab_t s_tab = TAB_USER;
+
+// Per-running-script slot
+#define MAX_SCRIPTS 4
+typedef struct {
+    mw_handle_t    win;
+    app_lua_window_t *script;
+} script_slot_t;
+static script_slot_t s_slots[MAX_SCRIPTS];
+static int s_slot_count = 0;
+
+static script_slot_t *slot_for_win(mw_handle_t win) {
+    for (int i = 0; i < s_slot_count; i++)
+        if (s_slots[i].win == win) return &s_slots[i];
+    return NULL;
+}
+static void slot_remove(mw_handle_t win) {
+    for (int i = 0; i < s_slot_count; i++) {
+        if (s_slots[i].win == win) {
+            s_slots[i] = s_slots[--s_slot_count];
+            return;
+        }
+    }
+}
+
 
 // Background task tracking
 #define MAX_BACKGROUND_TASKS 8
@@ -129,40 +151,41 @@ static void scan_apps(void)
 
 static void script_paint(mw_handle_t h, const mw_gl_draw_info_t *d)
 {
-    if (!s_script) return;
+    script_slot_t *sl = slot_for_win(h);
+    if (!sl) return;
     mw_util_rect_t cr = mw_get_window_client_rect(h);
-    app_lua_window_paint(s_script, cr.width, cr.height, (const void *)d);
+    app_lua_window_paint(sl->script, cr.width, cr.height, (const void *)d);
 }
 
 static void script_message(const mw_message_t *msg)
 {
-    if (!s_script) return;
+    mw_handle_t h = msg->recipient_handle;
+    script_slot_t *sl = slot_for_win(h);
 
     switch (msg->message_id) {
     case MW_WINDOW_CREATED_MESSAGE:
-        mw_paint_window_frame(msg->recipient_handle, MW_WINDOW_FRAME_COMPONENT_ALL);
-        mw_paint_window_client(msg->recipient_handle);
-        mw_set_timer(MW_TICKS_PER_SECOND / 10, msg->recipient_handle, MW_WINDOW_MESSAGE);
+        mw_paint_window_frame(h, MW_WINDOW_FRAME_COMPONENT_ALL);
+        mw_paint_window_client(h);
+        mw_set_timer(MW_TICKS_PER_SECOND / 10, h, MW_WINDOW_MESSAGE);
         break;
     case MW_TIMER_MESSAGE:
-        mw_paint_window_client(msg->recipient_handle);
-        if (app_lua_window_is_running(s_script))
-            mw_set_timer(MW_TICKS_PER_SECOND / 10, msg->recipient_handle, MW_WINDOW_MESSAGE);
+        mw_paint_window_client(h);
+        if (sl && app_lua_window_is_running(sl->script))
+            mw_set_timer(MW_TICKS_PER_SECOND / 10, h, MW_WINDOW_MESSAGE);
         break;
     case MW_TOUCH_DOWN_MESSAGE:
-        app_lua_window_on_message(s_script, msg->message_id, msg->message_data);
+        if (sl) app_lua_window_on_message(sl->script, msg->message_id, msg->message_data);
         break;
     case MW_WINDOW_REMOVED_MESSAGE:
-        if (s_script) {
-            if (app_lua_window_get_background(s_script)) {
-                add_background_task(s_script);
+        if (sl) {
+            if (app_lua_window_get_background(sl->script)) {
+                add_background_task(sl->script);
             } else {
-                app_lua_window_free(s_script);
+                app_lua_window_free(sl->script);
             }
+            slot_remove(h);
         }
-        s_script = NULL;
-        s_script_win = MW_INVALID_HANDLE;
-        taskbar_unregister(s_script_win);
+        taskbar_unregister(h);
         break;
     default:
         break;
@@ -273,34 +296,38 @@ static void message(const mw_message_t *msg)
 
         if (clicked_idx < 0) break;
 
-        if (s_script_win != MW_INVALID_HANDLE) {
-            if (mw_get_window_flags(s_script_win) & MW_WINDOW_FLAG_IS_MINIMISED)
-                mw_set_window_minimised(s_script_win, false);
-            mw_bring_window_to_front(s_script_win);
-            taskbar_set_focus(s_script_win);
+        if (s_slot_count >= MAX_SCRIPTS) {
+            // All slots full — just focus the most recently launched one
+            mw_bring_window_to_front(s_slots[s_slot_count - 1].win);
+            taskbar_set_focus(s_slots[s_slot_count - 1].win);
             mw_paint_all();
             break;
         }
 
         app_entry_t *app = &s_apps[clicked_idx];
-
-        s_script = app_lua_window_create(app->path, app->is_admin);
-        if (!s_script || !app_lua_window_is_running(s_script)) {
+        app_lua_window_t *scr = app_lua_window_create(app->path, app->is_admin);
+        if (!scr || !app_lua_window_is_running(scr)) {
             mw_paint_window_client(msg->recipient_handle);
             break;
         }
 
         mw_util_rect_t r;
-        mw_util_set_rect(&r, APP_WIN_X(WIN_W), 12, WIN_W, WIN_H);
-        s_script_win = mw_add_window(&r, app->name,
+        // Offset each new window slightly so they don't perfectly overlap
+        int16_t off = (int16_t)(s_slot_count * 12);
+        mw_util_set_rect(&r, (int16_t)(APP_WIN_X(WIN_W) + off), (int16_t)(12 + off), WIN_W, WIN_H);
+        mw_handle_t win = mw_add_window(&r, app->name,
             script_paint, script_message, NULL, 0, APP_WIN_FLAGS_TOUCH, NULL);
-        taskbar_register(s_script_win, app->name);
+
+        if (s_slot_count < MAX_SCRIPTS) {
+            s_slots[s_slot_count].win    = win;
+            s_slots[s_slot_count].script = scr;
+            s_slot_count++;
+        }
+        taskbar_register(win, app->name);
         break;
     }
 
     case MW_WINDOW_REMOVED_MESSAGE:
-        if (s_script) app_lua_window_free(s_script);
-        s_script = NULL;
         taskbar_unregister(s_handle);
         s_handle = MW_INVALID_HANDLE;
         break;
