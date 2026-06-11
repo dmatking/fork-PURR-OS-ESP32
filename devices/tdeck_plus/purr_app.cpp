@@ -95,11 +95,8 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
 {
     (void)handle;
 
-    mw_gl_set_fill(MW_GL_FILL); mw_gl_set_border(MW_GL_BORDER_OFF);
-    mw_gl_set_solid_fill_colour(WCE_DESKTOP);
-    mw_gl_rectangle(d, 0, 0, SCR_W, TASKBAR_Y);
-
-    // Draw desktop icons (SD card, Apps folder, etc.)
+    // Layer 1: taskbar + desktop icons only — no background fill so the root
+    // wallpaper layer shows through the rest of the screen.
     desktop_icons_paint(d);
 
     mw_gl_set_solid_fill_colour(WCE_BAR);
@@ -376,7 +373,11 @@ void mw_user_init(void)
 
 void mw_user_root_paint_function(const mw_gl_draw_info_t *draw_info)
 {
-    (void)draw_info;
+    // Layer 0: wallpaper — painted first, everything else composites on top
+    mw_gl_set_fill(MW_GL_FILL);
+    mw_gl_set_border(MW_GL_BORDER_OFF);
+    mw_gl_set_solid_fill_colour(WCE_DESKTOP);
+    mw_gl_rectangle(draw_info, 0, 0, (int16_t)SCR_W, (int16_t)SCR_H);
 }
 
 void mw_user_root_message_function(const mw_message_t *message)

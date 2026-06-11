@@ -9,11 +9,13 @@ static const gpio_num_t T_SCLK = GPIO_NUM_25;
 static const gpio_num_t T_CS   = GPIO_NUM_33;
 static const gpio_num_t T_IRQ  = GPIO_NUM_36;  // input-only GPIO
 
-// Raw ADC calibration for CYD 320x240 landscape
-static const uint16_t X_RAW_MIN = 200;
-static const uint16_t X_RAW_MAX = 3900;
-static const uint16_t Y_RAW_MIN = 200;
-static const uint16_t Y_RAW_MAX = 3900;
+// Raw ADC calibration for CYD 320x240 landscape.
+// Wider than the true edge values so extrapolation handles the last few pixels
+// instead of clamping early (which caused coordinate drift near screen edges).
+static const int32_t X_RAW_MIN = 150;
+static const int32_t X_RAW_MAX = 3950;
+static const int32_t Y_RAW_MIN = 150;
+static const int32_t Y_RAW_MAX = 3950;
 
 // XPT2046 channel commands (12-bit, differential, power down between conversions)
 static const uint8_t CMD_X  = 0xD0;
@@ -62,10 +64,14 @@ static uint16_t xpt_read_channel(uint8_t cmd) {
 
 // ── Coordinate mapping ────────────────────────────────────────────────────────
 
-static uint16_t map_clamp(uint16_t raw, uint16_t raw_min, uint16_t raw_max, uint16_t out_max) {
-    if (raw <= raw_min) return 0;
-    if (raw >= raw_max) return out_max;
-    return (uint16_t)((uint32_t)(raw - raw_min) * out_max / (raw_max - raw_min));
+// Signed linear map with post-clamp — allows extrapolation past the calibration
+// endpoints so edge pixels are reachable even if the raw ADC never quite hits
+// X_RAW_MIN/MAX on this particular panel.
+static uint16_t map_range(int32_t raw, int32_t raw_min, int32_t raw_max, uint16_t out_max) {
+    int32_t v = (raw - raw_min) * (int32_t)out_max / (raw_max - raw_min);
+    if (v < 0)              v = 0;
+    if (v > (int32_t)out_max) v = (int32_t)out_max;
+    return (uint16_t)v;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -110,17 +116,17 @@ bool touch_xpt2046_get_event(xpt_touch_event_t *out) {
         return false;
     }
 
-    uint32_t rx = 0, ry = 0;
-    for (int i = 0; i < 4; i++) {
+    int32_t rx = 0, ry = 0;
+    for (int i = 0; i < 8; i++) {
         rx += xpt_read_channel(CMD_X);
         ry += xpt_read_channel(CMD_Y);
     }
-    rx /= 4;
-    ry /= 4;
+    rx /= 8;
+    ry /= 8;
 
     // CYD landscape: raw X → screen Y, raw Y → screen X (rotated 90°)
-    out->x       = map_clamp((uint16_t)ry, Y_RAW_MIN, Y_RAW_MAX, 319);
-    out->y       = map_clamp((uint16_t)rx, X_RAW_MIN, X_RAW_MAX, 239);
+    out->x       = map_range(ry, Y_RAW_MIN, Y_RAW_MAX, 319);
+    out->y       = map_range(rx, X_RAW_MIN, X_RAW_MAX, 239);
     out->pressed = true;
     return true;
 }
