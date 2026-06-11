@@ -46,15 +46,9 @@ pip install pyserial    # optional but enables auto port detection
 
 `esptool` is bundled with ESP-IDF and is invoked automatically during flash.
 
-### Arduino-ESP32 managed component
+### No Arduino dependency
 
-Declared in `CoreOS/idf_component.yml`. The IDF Component Manager fetches it automatically on first build. To force a refresh:
-
-```bash
-cd CoreOS && idf.py update-dependencies
-```
-
-Minimum version: `espressif/arduino-esp32 >= 3.0.0`
+As of v0.10.1, Arduino-ESP32 has been fully stripped. PURR OS runs on **pure ESP-IDF 5.3+**. No `espressif__arduino-esp32` managed component is needed or fetched. All drivers use native IDF APIs.
 
 ---
 
