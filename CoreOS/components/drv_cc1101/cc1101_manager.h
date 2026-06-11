@@ -4,16 +4,42 @@
 #include <stdbool.h>
 
 // CC1101 sub-GHz FSK radio driver (RadioLib)
-// T-Embed CC1101 default wiring (SPI2):
-//   MOSI=6  MISO=5  SCK=7  CS=4  GDO0=3  GDO2=8
+// T-Embed CC1101 verified wiring (SPI2, shared with display):
+//   MOSI=9  MISO=10  SCK=11  CS=12  GDO0=38  GDO2=39
+// Override with PURR_CC1101_* compile definitions if needed.
 
 #define CC1101_SPI_HOST  1      // SPI2_HOST
-#define CC1101_MOSI      6
-#define CC1101_MISO      5
-#define CC1101_SCK       7
-#define CC1101_CS        4
-#define CC1101_GDO0      3
-#define CC1101_GDO2      8
+
+#ifdef PURR_CC1101_MOSI
+#  define CC1101_MOSI    PURR_CC1101_MOSI
+#else
+#  define CC1101_MOSI    9
+#endif
+#ifdef PURR_CC1101_MISO
+#  define CC1101_MISO    PURR_CC1101_MISO
+#else
+#  define CC1101_MISO    10
+#endif
+#ifdef PURR_CC1101_SCK
+#  define CC1101_SCK     PURR_CC1101_SCK
+#else
+#  define CC1101_SCK     11
+#endif
+#ifdef PURR_CC1101_CS
+#  define CC1101_CS      PURR_CC1101_CS
+#else
+#  define CC1101_CS      12
+#endif
+#ifdef PURR_CC1101_GDO0
+#  define CC1101_GDO0    PURR_CC1101_GDO0
+#else
+#  define CC1101_GDO0    38
+#endif
+#ifdef PURR_CC1101_GDO2
+#  define CC1101_GDO2    PURR_CC1101_GDO2
+#else
+#  define CC1101_GDO2    39
+#endif
 
 // Default: 433.92 MHz, 4.8 kbps FSK (POCSAG-compatible bandwidth)
 void   cc1101_manager_init(float freq_mhz, float bitrate_kbps, float freq_dev_khz,

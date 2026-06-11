@@ -8,12 +8,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-// Waveshare ESP32-S3 1.69" CST816S wiring — verify against hardware
+// Waveshare ESP32-S3 1.69" CST816S wiring — verified against schematic
 #define WS_CST_ADDR  0x15
-#define WS_CST_SDA   6
-#define WS_CST_SCL   7
-#define WS_CST_INT   9
-#define WS_CST_RST   8
+#define WS_CST_SDA   11
+#define WS_CST_SCL   10
+#define WS_CST_INT   46
+#define WS_CST_RST   -1  // no RST pin exposed on this board
 #define WS_CST_REG   0x01
 
 static i2c_master_bus_handle_t s_bus = NULL;
@@ -24,9 +24,13 @@ static int16_t s_x = 0, s_y = 0;
 extern "C" {
 
 void mw_hal_touch_init(void) {
+#if WS_CST_RST >= 0
     gpio_set_direction((gpio_num_t)WS_CST_RST, GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)WS_CST_RST, 0); vTaskDelay(pdMS_TO_TICKS(10));
     gpio_set_level((gpio_num_t)WS_CST_RST, 1); vTaskDelay(pdMS_TO_TICKS(50));
+#else
+    vTaskDelay(pdMS_TO_TICKS(50));
+#endif
 
     i2c_master_bus_config_t bus_cfg = {};
     bus_cfg.i2c_port      = I2C_NUM_0;

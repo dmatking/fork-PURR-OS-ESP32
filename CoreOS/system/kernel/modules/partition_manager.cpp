@@ -114,9 +114,12 @@ void pm_init() {
     dev_cfg.host_id = SPI3_HOST;
     dev_cfg.gpio_cs = (gpio_num_t)PM_SD_CS;
 #else
-    host.slot = SPI2_HOST;
+    // CYD / generic: SD card is on SPI3 (VSPI, pins 23/19/18/CS=5).
+    // SPI2 is already claimed by the ILI9341 display — using SPI2 here would
+    // silently attach the SD device to the display bus and cause mount failure.
+    host.slot = SPI3_HOST;
     sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
-    dev_cfg.host_id  = SPI2_HOST;
+    dev_cfg.host_id  = SPI3_HOST;
     dev_cfg.gpio_cs  = (gpio_num_t)PM_SD_CS;
 
     spi_bus_config_t bus_cfg = {
@@ -127,9 +130,9 @@ void pm_init() {
         .quadhd_io_num = -1,
         .max_transfer_sz = 4096,
     };
-    esp_err_t bus_err = spi_bus_initialize((spi_host_device_t)host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
+    esp_err_t bus_err = spi_bus_initialize(SPI3_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
     if (bus_err != ESP_OK && bus_err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(bus_err));
+        ESP_LOGE(TAG, "SPI3 bus init failed: %s", esp_err_to_name(bus_err));
     }
 #endif
 
@@ -215,11 +218,11 @@ int pm_sd_list(pm_sd_file_t* files, int max) {
         size_t len = strlen(name);
         bool is_bin  = len > 4 && strcmp(name + len - 4, ".bin")  == 0;
         bool is_purr = len > 5 && strcmp(name + len - 5, ".purr") == 0;
-        if (is_bin || is_purr) {
+        bool is_lua  = len > 4 && strcmp(name + len - 4, ".lua")  == 0;
+        if (is_bin || is_purr || is_lua) {
             strncpy(files[count].name, name, PM_NAME_LEN - 1);
             files[count].name[PM_NAME_LEN - 1] = '\0';
-            strncpy(files[count].path, name, PM_PATH_LEN - 1);
-            files[count].path[PM_PATH_LEN - 1] = '\0';
+            snprintf(files[count].path, PM_PATH_LEN, "%s/%s", SD_MOUNT, name);
             struct stat st; stat(files[count].path, &st);
             files[count].size_bytes = (size_t)st.st_size;
             count++;

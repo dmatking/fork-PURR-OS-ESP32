@@ -19,13 +19,13 @@
 static const char* TAG = "ili9341";
 
 // ── Pin map ───────────────────────────────────────────────────────────────────
+// S024C: BL=27, no RST pin. S028R: BL=21, GPIO4 is also RGB-RED LED — don't toggle it.
 #ifdef CYD_VARIANT_S024C
 #  define LCD_BL     27
-#  define LCD_RST    (-1)
 #else
 #  define LCD_BL     21
-#  define LCD_RST    4
 #endif
+#define LCD_RST    (-1)
 #define LCD_HOST     SPI2_HOST
 #define LCD_MOSI     13
 #define LCD_MISO     12

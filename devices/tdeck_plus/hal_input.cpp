@@ -1,11 +1,11 @@
-// T-Deck Plus input HAL — keyboard (I2C 0x55) + trackball (GPIO, debug only)
+// T-Deck Plus input HAL — keyboard (I2C 0x55) + trackball (GPIO)
 //
 // Keyboard:  ESP32-C3 co-processor, I2C 0x55, SDA=18, SCL=8, INT=46
-//            Printable chars + Enter forwarded to MiniWin as MW_KEY_PRESSED_MESSAGE.
+//            Printable chars forwarded to MiniWin as MW_KEY_PRESSED_MESSAGE.
+//            ANSI escape sequences (\e[A/B/C/D) translated to nav codes 0x01-0x04.
 //
 // Trackball: UP=3 DOWN=15 LEFT=1 RIGHT=2 CLICK=0 (active LOW, pull-up)
-//            When PURR_DEBUG_INPUT is defined: prints every press/release to serial.
-//            Does NOT generate nav events (removed).
+//            Fires MiniWin nav events on every press edge.
 //
 // Enable debug: add -DPURR_DEBUG_INPUT=1 to your build, or use --debug-input flag.
 
@@ -44,7 +44,12 @@ static inline void kb_push(uint8_t c) {
     if (next != s_kb_head) { s_kb_buf[s_kb_tail] = c; s_kb_tail = next; }
 }
 
+#define NAV_UP     0x01
+#define NAV_DOWN   0x02
+#define NAV_LEFT   0x03
+#define NAV_RIGHT  0x04
 #define NAV_ENTER  0x0D
+#define NAV_ESC    0x1B
 
 static mw_handle_t s_shell_handle = MW_INVALID_HANDLE;
 void hal_input_set_shell_handle(mw_handle_t h) { s_shell_handle = h; }
@@ -57,6 +62,33 @@ static void fire_key(uint8_t code)
     mw_post_message(MW_KEY_PRESSED_MESSAGE,
                     MW_INVALID_HANDLE, target,
                     (uint32_t)code, NULL, MW_WINDOW_MESSAGE);
+}
+
+// ANSI escape state machine for keyboard arrow keys (\e[A/B/C/D)
+static uint8_t s_ansi = 0;  // 0=normal 1=got-ESC 2=got-ESC[
+
+static void handle_kb_char(uint8_t c)
+{
+    kb_push(c);
+    switch (s_ansi) {
+    case 0:
+        if      (c == 0x1B)             { s_ansi = 1; }
+        else if (c == '\r' || c == '\n') fire_key(NAV_ENTER);
+        else if (c == '\b' || c == 0x7F) fire_key(c);
+        else if (c >= 0x20 && c < 0x7F) fire_key(c);
+        break;
+    case 1:
+        if (c == '[') { s_ansi = 2; }
+        else { fire_key(NAV_ESC); s_ansi = 0; handle_kb_char(c); }
+        break;
+    case 2:
+        s_ansi = 0;
+        if      (c == 'A') fire_key(NAV_UP);
+        else if (c == 'B') fire_key(NAV_DOWN);
+        else if (c == 'D') fire_key(NAV_LEFT);
+        else if (c == 'C') fire_key(NAV_RIGHT);
+        break;
+    }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -127,43 +159,32 @@ void hal_input_tick(void)
             else
                 ESP_LOGI(TAG, "[KB] 0x%02X (ctrl)", c);
 #endif
-
-            kb_push(c);
-
-            if (c == '\r' || c == '\n')      fire_key(NAV_ENTER);
-            else if (c == '\b' || c == 0x7F) fire_key(c);
-            else if (c >= 0x20 && c < 0x7F)  fire_key(c);
+            handle_kb_char(c);
         }
     }
 
-    // ── Trackball — debug serial only ─────────────────────────────────────────
-#ifdef PURR_DEBUG_INPUT
-    static uint8_t tb_prev = 0xFF;  // 0xFF = uninitialised
+    // ── Trackball — fires nav events; debug logging if PURR_DEBUG_INPUT ────────
+    {
+        static uint8_t tb_prev = 0xFF;  // 0xFF = uninitialised
 
-    uint8_t tb_now = 0;
-    if (!gpio_get_level((gpio_num_t)TB_UP))    tb_now |= 0x01;
-    if (!gpio_get_level((gpio_num_t)TB_DOWN))  tb_now |= 0x02;
-    if (!gpio_get_level((gpio_num_t)TB_LEFT))  tb_now |= 0x04;
-    if (!gpio_get_level((gpio_num_t)TB_RIGHT)) tb_now |= 0x08;
-    if (!gpio_get_level((gpio_num_t)TB_CLICK)) tb_now |= 0x10;
+        uint8_t tb_now = 0;
+        if (!gpio_get_level((gpio_num_t)TB_UP))    tb_now |= 0x01;
+        if (!gpio_get_level((gpio_num_t)TB_DOWN))  tb_now |= 0x02;
+        if (!gpio_get_level((gpio_num_t)TB_LEFT))  tb_now |= 0x04;
+        if (!gpio_get_level((gpio_num_t)TB_RIGHT)) tb_now |= 0x08;
+        if (!gpio_get_level((gpio_num_t)TB_CLICK)) tb_now |= 0x10;
 
-    uint8_t pressed  = tb_now & ~tb_prev;
-    uint8_t released = tb_prev & ~tb_now;
+        if (tb_prev == 0xFF) tb_prev = tb_now;  // initialise without firing
+        uint8_t pressed = tb_now & ~tb_prev;
 
-    if (pressed & 0x01) ESP_LOGI(TAG, "[TB] UP pressed");
-    if (pressed & 0x02) ESP_LOGI(TAG, "[TB] DOWN pressed");
-    if (pressed & 0x04) ESP_LOGI(TAG, "[TB] LEFT pressed");
-    if (pressed & 0x08) ESP_LOGI(TAG, "[TB] RIGHT pressed");
-    if (pressed & 0x10) ESP_LOGI(TAG, "[TB] CLICK pressed");
+        if (pressed & 0x01) { fire_key(NAV_UP);    ESP_LOGD(TAG, "[TB] UP");    }
+        if (pressed & 0x02) { fire_key(NAV_DOWN);  ESP_LOGD(TAG, "[TB] DOWN");  }
+        if (pressed & 0x04) { fire_key(NAV_LEFT);  ESP_LOGD(TAG, "[TB] LEFT");  }
+        if (pressed & 0x08) { fire_key(NAV_RIGHT); ESP_LOGD(TAG, "[TB] RIGHT"); }
+        if (pressed & 0x10) { fire_key(NAV_ENTER); ESP_LOGD(TAG, "[TB] CLICK"); }
 
-    if (released & 0x01) ESP_LOGI(TAG, "[TB] UP released");
-    if (released & 0x02) ESP_LOGI(TAG, "[TB] DOWN released");
-    if (released & 0x04) ESP_LOGI(TAG, "[TB] LEFT released");
-    if (released & 0x08) ESP_LOGI(TAG, "[TB] RIGHT released");
-    if (released & 0x10) ESP_LOGI(TAG, "[TB] CLICK released");
-
-    tb_prev = tb_now;
-#endif
+        tb_prev = tb_now;
+    }
 }
 
 // ── Key buffer ────────────────────────────────────────────────────────────────

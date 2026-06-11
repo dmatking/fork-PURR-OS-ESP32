@@ -5,11 +5,14 @@
 #include "display_font5x7.h"
 
 #include "driver/spi_master.h"
+#include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 
 static const char* TAG = "st7789";
@@ -69,6 +72,13 @@ static void bl_set(uint8_t v) {
 void display_st7789_init() {
     if (_ready) return;
     _ready = true;
+
+#ifdef PURR_TEMBED_POWER_EN
+    // T-Embed CC1101: GPIO15 powers display + CC1101 rail; must be HIGH before SPI.
+    gpio_set_direction((gpio_num_t)PURR_TEMBED_POWER_EN, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)PURR_TEMBED_POWER_EN, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+#endif
 
     spi_bus_config_t bus = { .mosi_io_num = LCD_MOSI, .miso_io_num = LCD_MISO,
                               .sclk_io_num = LCD_SCLK, .quadwp_io_num = -1,

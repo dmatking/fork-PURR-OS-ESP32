@@ -1,21 +1,9 @@
-# PURR OS CYD (ESP32-2432S024C / S028R) partition table — 4MB flash
-# Flash: 4194304 bytes (0x400000)
+# PURR OS CYD (ESP32-2432S024C / S028R) — 4MB flash, no OTA
+# nvs      20 KB   @ 0x9000
+# factory   3 MB   @ 0x10000  (binary ~1.1MB, headroom for growth)
+# spiffs    1 MB   @ 0x300000
 #
-# factory = Full OS (flashed directly; no separate recovery bootloader)
-# ota_0   = OTA update slot (firmware received over-the-air or from SD)
-# ota_1   = Secondary OTA slot
-# spiffs  = App config, keymap, crash logs
-#
-# Address map:
-#   0x10000  .. 0x18FFFF  factory  (1.5 MB — comfortably fits full OS)
-#   0x190000 .. 0x28FFFF  ota_0    (1.0 MB)
-#   0x290000 .. 0x38FFFF  ota_1    (1.0 MB)
-#   0x390000 .. 0x3FFFFF  spiffs   (448 KB)
-#
-# Name,    Type, SubType,  Offset,   Size,    Flags
-nvs,       data, nvs,      0x9000,   0x5000,
-otadata,   data, ota,      0xe000,   0x2000,
-factory,   app,  factory,  0x10000,  0x180000,
-ota_0,     app,  ota_0,    0x190000, 0x100000,
-ota_1,     app,  ota_1,    0x290000, 0x100000,
-spiffs,    data, spiffs,   0x390000, 0x70000,
+# Name,    Type, SubType,  Offset,   Size
+nvs,       data, nvs,      0x9000,   0x5000
+factory,   app,  factory,  0x10000,  0x2F0000
+spiffs,    data, spiffs,   0x300000, 0x100000
