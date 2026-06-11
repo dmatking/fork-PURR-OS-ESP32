@@ -3,6 +3,7 @@
 #include "app_settings.h"
 #include "app_files.h"
 #include "app_launcher.h"
+#include "app_terminal.h"
 #ifdef PURR_HAS_MAGIDOS
 #  include "app_magidos.h"
 #endif
@@ -15,6 +16,7 @@ const purr_catalog_entry_t purr_catalog[] = {
     { "Settings", app_settings_launch  },
     { "Files",    app_files_launch     },
     { "Apps",     app_launcher_launch  },
+    { "Terminal", app_terminal_launch  },
 #ifdef PURR_HAS_MAGIDOS
     { "MagiDOS",  app_magidos_launch   },
 #endif

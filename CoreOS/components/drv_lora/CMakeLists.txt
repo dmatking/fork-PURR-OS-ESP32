@@ -21,7 +21,7 @@ endif()
 idf_component_register(
     SRCS         ${SRCS}
     INCLUDE_DIRS "." "kernels/${PURR_LORA_KERNEL}"
-    REQUIRES     lib_radiolib lib_arduino driver
+    REQUIRES     lib_radiolib driver
 )
 
 message(STATUS "drv_lora: kernel=${PURR_LORA_KERNEL}")

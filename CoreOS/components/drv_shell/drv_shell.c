@@ -1,12 +1,21 @@
 #include "drv_shell.h"
 #include "esp_log.h"
-#include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <stdarg.h>
+
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+#  include "driver/usb_serial_jtag.h"
+#  define SHELL_USE_USB_JTAG 1
+#else
+#  include "driver/uart.h"
+#  define SHELL_USE_USB_JTAG 0
+#endif
 
 static const char *TAG = "drv_shell";
 
@@ -104,17 +113,43 @@ static int tokenize(char *line, char **argv, int max_argv)
     return argc;
 }
 
-// ── UART0 driver RX init ──────────────────────────────────────────────────────
+// ── Serial I/O init ───────────────────────────────────────────────────────────
 
-static void _uart_rx_init(void)
+static void _serial_init(void)
 {
-    // Install UART driver for RX ring-buffer so uart_read_bytes() blocks correctly.
-    // TX buffer = 0: we keep using the ROM UART path for printf/ESP_LOGI output.
-    // ESP_ERR_INVALID_STATE means the driver is already installed; treat as success.
-    esp_err_t err = uart_driver_install(UART_NUM_0, 256, 0, 0, NULL, 0);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "uart_driver_install: %s", esp_err_to_name(err));
+#if SHELL_USE_USB_JTAG
+    if (!usb_serial_jtag_is_driver_installed()) {
+        usb_serial_jtag_driver_config_t cfg = {
+            .rx_buffer_size = 256,
+            .tx_buffer_size = 512,
+        };
+        esp_err_t err = usb_serial_jtag_driver_install(&cfg);
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "usb_serial_jtag_driver_install: %s", esp_err_to_name(err));
     }
+#else
+    esp_err_t err = uart_driver_install(UART_NUM_0, 256, 0, 0, NULL, 0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+        ESP_LOGW(TAG, "uart_driver_install: %s", esp_err_to_name(err));
+#endif
+}
+
+static void _serial_write(const char *s, int len)
+{
+#if SHELL_USE_USB_JTAG
+    usb_serial_jtag_write_bytes(s, len, pdMS_TO_TICKS(20));
+#else
+    uart_write_bytes(UART_NUM_0, s, len);
+#endif
+}
+
+static int _serial_read_byte(uint8_t *ch, TickType_t timeout)
+{
+#if SHELL_USE_USB_JTAG
+    return usb_serial_jtag_read_bytes(ch, 1, timeout);
+#else
+    return uart_read_bytes(UART_NUM_0, ch, 1, timeout);
+#endif
 }
 
 // ── Line reader (blocking, with echo + backspace) ─────────────────────────────
@@ -124,29 +159,22 @@ static int _read_line(char *buf, int maxlen)
     int pos = 0;
     for (;;) {
         uint8_t ch = 0;
-        if (uart_read_bytes(UART_NUM_0, &ch, 1, portMAX_DELAY) <= 0)
+        if (_serial_read_byte(&ch, portMAX_DELAY) <= 0)
             continue;
 
         if (ch == '\r' || ch == '\n') {
-            uart_write_bytes(UART_NUM_0, "\r\n", 2);
+            _serial_write("\r\n", 2);
             break;
         }
 
-        // Backspace / DEL
         if (ch == 0x7f || ch == '\b') {
-            if (pos > 0) {
-                pos--;
-                uart_write_bytes(UART_NUM_0, "\b \b", 3);
-            }
+            if (pos > 0) { pos--; _serial_write("\b \b", 3); }
             continue;
         }
 
-        // Ignore other control characters
-        if (ch < 0x20 || pos >= maxlen - 1)
-            continue;
+        if (ch < 0x20 || pos >= maxlen - 1) continue;
 
-        // Echo and store
-        uart_write_bytes(UART_NUM_0, (const char *)&ch, 1);
+        _serial_write((const char *)&ch, 1);
         buf[pos++] = (char)ch;
     }
     buf[pos] = '\0';
@@ -173,14 +201,14 @@ static void _shell_task(void *arg)
     char *argv[16];
 
     vTaskDelay(pdMS_TO_TICKS(500));
-    _uart_rx_init();
+    _serial_init();
 
     printf("\n\n  PURR OS kernel shell  (type 'help' for commands)\n");
     printf("  -------------------------------------------------\n\n");
+    fflush(stdout);
 
     while (1) {
-        printf("purr> ");
-        fflush(stdout);
+        _serial_write("purr> ", 6);
 
         if (_read_line(line, sizeof(line)) == 0)
             continue;
@@ -209,6 +237,78 @@ static void _shell_task(void *arg)
 
 void purr_shell_start(void)
 {
+#if SHELL_USE_USB_JTAG
+    ESP_LOGI(TAG, "starting shell on USB-Serial/JTAG");
+#else
     ESP_LOGI(TAG, "starting shell on UART0");
+#endif
     xTaskCreatePinnedToCore(_shell_task, "purr_shell", 4096, NULL, 1, NULL, 1);
+}
+
+// ── purr_shell_run — capture output into buffer ───────────────────────────────
+
+static SemaphoreHandle_t s_run_mutex = NULL;
+static char             *s_cap_buf   = NULL;
+static size_t            s_cap_max   = 0;
+static size_t            s_cap_len   = 0;
+
+static int _cap_vprintf(const char *fmt, va_list args)
+{
+    if (!s_cap_buf) return 0;
+    size_t remaining = s_cap_max - s_cap_len - 1;
+    if (remaining == 0) return 0;
+    int written = vsnprintf(s_cap_buf + s_cap_len, remaining + 1, fmt, args);
+    if (written > 0) {
+        s_cap_len += (written > (int)remaining) ? remaining : (size_t)written;
+        s_cap_buf[s_cap_len] = '\0';
+    }
+    return written;
+}
+
+int purr_shell_run(const char *line, char *out_buf, size_t out_max)
+{
+    if (!s_run_mutex) s_run_mutex = xSemaphoreCreateMutex();
+    xSemaphoreTake(s_run_mutex, portMAX_DELAY);
+
+    s_cap_buf = out_buf;
+    s_cap_max = out_max;
+    s_cap_len = 0;
+    if (out_buf && out_max > 0) out_buf[0] = '\0';
+
+    // esp_log_set_vprintf covers both ESP_LOG* and printf on ESP-IDF
+    esp_log_set_vprintf(_cap_vprintf);
+
+    char tmp[256];
+    strncpy(tmp, line, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    char *argv[16];
+    int argc = tokenize(tmp, argv, 16);
+    int found = 0;
+
+    if (argc > 0) {
+        if (strcmp(argv[0], "help") == 0 || strcmp(argv[0], "?") == 0) {
+            print_help();
+            found = 1;
+        } else {
+            for (int i = 0; i < s_ncmds; i++) {
+                if (strcmp(argv[0], s_cmds[i].name) == 0) {
+                    s_cmds[i].fn(argc, argv);
+                    found = 1;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            snprintf(out_buf + s_cap_len, out_max - s_cap_len - 1,
+                     "Unknown: '%s'\n", argv[0]);
+            s_cap_len = strlen(out_buf);
+        }
+    }
+
+    esp_log_set_vprintf(vprintf);
+    s_cap_buf = NULL;
+    int ret = (int)s_cap_len;
+    xSemaphoreGive(s_run_mutex);
+    return ret;
 }

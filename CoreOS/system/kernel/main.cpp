@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+
 static const char *TAG = "app_main";
 #ifdef PURR_HAS_SHELL
 #include "drv_shell.h"

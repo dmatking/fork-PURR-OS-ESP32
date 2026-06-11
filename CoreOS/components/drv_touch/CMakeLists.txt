@@ -35,5 +35,12 @@ idf_component_get_property(spi_lib    esp_driver_spi  COMPONENT_LIB)
 target_link_libraries(${COMPONENT_LIB} PRIVATE ${gpio_lib} ${i2c_lib} ${spi_lib})
 
 if(PURR_TOUCH_CST816S)
-    target_compile_definitions(${COMPONENT_LIB} INTERFACE PURR_HAS_CST816S_TOUCH=1)
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_HAS_CST816S_TOUCH=1 PURR_HAS_TOUCH_CST816S=1)
+else()
+    # XPT2046 or GT911 — advertise which one so consumers (drv_shell etc.) can branch
+    if(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd")
+        target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_HAS_TOUCH_XPT2046=1)
+    elseif(TARGET_DEVICE STREQUAL "jc3248w535" OR TARGET_DEVICE STREQUAL "tdeck_plus")
+        target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_HAS_TOUCH_GT911=1)
+    endif()
 endif()

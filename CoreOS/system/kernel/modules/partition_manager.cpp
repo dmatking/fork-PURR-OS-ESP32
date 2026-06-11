@@ -9,6 +9,8 @@
 #include <esp_vfs_fat.h>
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
+#include "driver/spi_master.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -71,15 +73,46 @@ static bool slot_has_firmware(const esp_partition_t* part) {
 // ── SD card init ──────────────────────────────────────────────────────────────
 
 void pm_init() {
+    ESP_LOGI(TAG, "SD init CS=%d MOSI=%d MISO=%d CLK=%d",
+             PM_SD_CS, PM_SD_MOSI, PM_SD_MISO, PM_SD_SCLK);
+
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
 
 #ifdef PURR_DEVICE_TDECK_PLUS
-    // T-Deck Plus: SD card shares SPI3 with display — add device to existing bus
+    // T-Deck Plus: SD card shares SPI3 with the display.
+    // Initialise the bus here (MOSI=41, MISO=38, CLK=40). If the display HAL
+    // has already done it we get ESP_ERR_INVALID_STATE — that is fine, the bus
+    // is still usable. If we run first the display HAL will also see that code
+    // and continue correctly.
+    // GPIO 10 is the T-Deck Plus peripheral power enable (display + SD card).
+    // Drive it HIGH here so the SD card is powered even if pm_init runs before
+    // the display HAL. hal_lcd.cpp will set it again — that is harmless.
+    gpio_set_direction((gpio_num_t)10, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)10, 1);
+    vTaskDelay(pdMS_TO_TICKS(50));  // allow card power rail to stabilise
+
+    ESP_LOGI(TAG, "T-Deck Plus: ensuring SPI3 bus is up, then attaching SD CS=%d", PM_SD_CS);
+    {
+        spi_bus_config_t bus_cfg = {
+            .mosi_io_num   = PM_SD_MOSI,
+            .miso_io_num   = PM_SD_MISO,
+            .sclk_io_num   = PM_SD_SCLK,
+            .quadwp_io_num = -1,
+            .quadhd_io_num = -1,
+            .max_transfer_sz = 4096,
+        };
+        esp_err_t bus_err = spi_bus_initialize(SPI3_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
+        if (bus_err == ESP_OK)
+            ESP_LOGI(TAG, "SPI3 initialized by pm_init");
+        else if (bus_err == ESP_ERR_INVALID_STATE)
+            ESP_LOGI(TAG, "SPI3 already initialized (display HAL ran first) — OK");
+        else
+            ESP_LOGE(TAG, "SPI3 init error: %s", esp_err_to_name(bus_err));
+    }
     host.slot = SPI3_HOST;
     sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
     dev_cfg.host_id = SPI3_HOST;
     dev_cfg.gpio_cs = (gpio_num_t)PM_SD_CS;
-    // Bus already initialized by display HAL — do NOT call spi_bus_initialize again
 #else
     host.slot = SPI2_HOST;
     sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
@@ -92,9 +125,12 @@ void pm_init() {
         .sclk_io_num = PM_SD_SCLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = 512,
+        .max_transfer_sz = 4096,
     };
-    spi_bus_initialize((spi_host_device_t)host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
+    esp_err_t bus_err = spi_bus_initialize((spi_host_device_t)host.slot, &bus_cfg, SPI_DMA_CH_AUTO);
+    if (bus_err != ESP_OK && bus_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(bus_err));
+    }
 #endif
 
     esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
@@ -103,11 +139,17 @@ void pm_init() {
         .allocation_unit_size = 16 * 1024,
     };
 
-    if (esp_vfs_fat_sdspi_mount(SD_MOUNT, &host, &dev_cfg, &mount_cfg, &s_card) == ESP_OK) {
+    ESP_LOGI(TAG, "mounting SD at %s ...", SD_MOUNT);
+    esp_err_t ret = esp_vfs_fat_sdspi_mount(SD_MOUNT, &host, &dev_cfg, &mount_cfg, &s_card);
+    if (ret == ESP_OK) {
         sd_mounted = true;
-        ESP_LOGI(TAG, "SD mounted: %lluMB", ((uint64_t)s_card->csd.capacity) * s_card->csd.sector_size / (1024 * 1024));
+        ESP_LOGI(TAG, "SD mounted OK: %lluMB  name=%s",
+                 ((uint64_t)s_card->csd.capacity) * s_card->csd.sector_size / (1024*1024),
+                 s_card->cid.name);
+        sdmmc_card_print_info(stdout, s_card);
     } else {
-        ESP_LOGW(TAG, "SD not found (CS=%d)", PM_SD_CS);
+        ESP_LOGE(TAG, "SD mount FAILED: %s (0x%x)", esp_err_to_name(ret), ret);
+        ESP_LOGE(TAG, "  Check: card inserted? CS=%d correct? SPI bus ready?", PM_SD_CS);
     }
 }
 

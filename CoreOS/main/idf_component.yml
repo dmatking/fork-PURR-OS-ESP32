@@ -16,10 +16,6 @@ dependencies:
   bblanchon/arduinojson:
     version: "~7.0.0"
 
-  ## arduino-esp32 — required for TFT_eSPI (SPIClass, Arduino SPI bus init).
-  espressif/arduino-esp32:
-    version: "~3.1.0"
-
   ## Meshtastic co-resident mesh stack (PURR_ENABLE_MESH=1 builds only)
   ## NOT available in the IDF component registry.
   ## Must be added as a git submodule:

@@ -1,7 +1,4 @@
-# lib_arduino — passthrough to real Arduino-ESP32
-# The hand-written shim in CoreOS/system/ is superseded by espressif/arduino-esp32.
-# Components that REQUIRE lib_arduino now get the full Arduino API.
-
-idf_component_register(
-    REQUIRES espressif__arduino-esp32
-)
+# lib_arduino — empty stub post Arduino strip-out.
+# Previously a passthrough to espressif/arduino-esp32; now unused.
+# Kept so any remaining REQUIRES references don't cause cmake errors.
+idf_component_register()

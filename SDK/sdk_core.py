@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PURR OS SDK v0.9.5 — interactive build / flash / monitor tool.
+"""PURR OS SDK v0.10.1 — interactive build / flash / monitor tool.
 Invoked by SDK.ps1 (or directly: python sdk_core.py [flags]).
 """
 
@@ -23,8 +23,8 @@ C_YLW  = "\033[93m"
 C_CYN  = "\033[96m"
 C_WHT  = "\033[97m"
 
-PURROS_VERSION = "0.9.5"
-KITT_VERSION   = "0.6.0"
+PURROS_VERSION = "0.10.1"
+KITT_VERSION   = "0.6.9"
 
 def info(msg):            print(f"{C_GRN}[purr]{C_RST} {msg}")
 def warn(msg):            print(f"{C_YLW}[warn]{C_RST} {msg}")
@@ -747,6 +747,10 @@ def _cmake_flags(cfg):
     _flag("PURR_ENABLE_MAGICMAC", "magicmac", False)
     _flag("PURR_ENABLE_GPS",      "gps",      False)
 
+    # Debug flags — opt-in, never on by default
+    debug_input = mods.get("debug_input", False)
+    flags.append(f"-DPURR_DEBUG_INPUT={1 if debug_input else 0}")
+
     flags.append(f"-DBUILD_TDECK_PLUS={1 if cfg.get('tdeck_plus') else 0}")
 
     # CYD display variant (s028r=original XPT2046, s024c=newer CST816S)
@@ -766,81 +770,6 @@ def _cmake_flags(cfg):
     return flags
 
 
-# ── Arduino patches ───────────────────────────────────────────────────────────
-
-def _arduino_patches(coreos_dir):
-    cores = os.path.join(coreos_dir, "managed_components",
-                         "espressif__arduino-esp32", "cores", "esp32")
-    if not os.path.isdir(cores):
-        warn(f"arduino patches: managed_components not found at {cores} — skipping")
-        return
-
-    # Patch 1: adc_continuous_data_t rename
-    adc_h = os.path.join(cores, "esp32-hal-adc.h")
-    adc_c = os.path.join(cores, "esp32-hal-adc.c")
-    if os.path.exists(adc_h):
-        txt = open(adc_h, "r", encoding="utf-8").read()
-        if re.search(r'\badc_continuous_data_t\b', txt):
-            info("arduino patch: adc_continuous_data_t rename")
-            def _rename(t):
-                return re.sub(r'\badc_continuous_data_t\b', 'arduino_adc_cont_data_t', t)
-            _write(adc_h, _rename(txt))
-            if os.path.exists(adc_c):
-                _write(adc_c, _rename(open(adc_c, "r", encoding="utf-8").read()))
-
-    # Patch 2: I2C slave LL stubs
-    i2c_s = os.path.join(cores, "esp32-hal-i2c-slave.c")
-    if os.path.exists(i2c_s):
-        txt = open(i2c_s, "r", encoding="utf-8").read()
-        if "i2c_ll_slave_init" not in txt or "do {} while" not in txt:
-            info("arduino patch: I2C slave LL stubs")
-            stub = (
-                '\n#include "esp_idf_version.h"\n'
-                '#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)\n'
-                '#define i2c_ll_slave_init(dev)           do {} while (0)\n'
-                '#define i2c_ll_set_fifo_mode(dev, mode)  do {} while (0)\n'
-                '#define i2c_ll_cal_bus_clk(a, b, c)      do {} while (0)\n'
-                '#define i2c_ll_set_bus_timing(dev, cfg)  do {} while (0)\n'
-                '#define i2c_ll_set_filter(dev, n)        do {} while (0)\n'
-                '#endif'
-            )
-            _write(i2c_s, re.sub(
-                r'(#include "esp_private/periph_ctrl\.h")',
-                r'\1' + stub, txt
-            ))
-
-    # Patch 3: ESP_SR missing ESP_I2S.h
-    sr_src  = os.path.join(coreos_dir, "managed_components", "espressif__arduino-esp32",
-                           "libraries", "ESP_SR", "src", "ESP_I2S.h")
-    i2s_src = os.path.join(coreos_dir, "managed_components", "espressif__arduino-esp32",
-                           "libraries", "ESP_I2S", "src", "ESP_I2S.h")
-    if not os.path.exists(sr_src) and os.path.exists(i2s_src):
-        info("arduino patch: ESP_SR missing ESP_I2S.h stub")
-        shutil.copy2(i2s_src, sr_src)
-
-    # Patch 4: add esp_timer + esp_driver_gpio to arduino-esp32 REQUIRES
-    # esp32-hal-log.h needs esp_timer.h; esp32-hal-gpio.h needs driver/gpio.h
-    # from esp_driver_gpio (IDF 5.x split the driver component).
-    arduino_cmake = os.path.join(coreos_dir, "managed_components",
-                                 "espressif__arduino-esp32", "CMakeLists.txt")
-    if os.path.exists(arduino_cmake):
-        txt = open(arduino_cmake, "r", encoding="utf-8").read()
-        needs_patch = re.search(r'set\(requires spi_flash', txt) and \
-                      (not re.search(r'set\(requires[^)]*esp_timer', txt) or
-                       not re.search(r'set\(requires[^)]*esp_driver_gpio', txt))
-        if needs_patch:
-            info("arduino patch: add esp_timer + esp_driver_gpio to arduino-esp32 REQUIRES")
-            # First add esp_timer if missing
-            if not re.search(r'set\(requires[^)]*esp_timer', txt):
-                txt = re.sub(r'(set\(requires spi_flash[^)]*)(driver\))',
-                             r'\1driver esp_timer)', txt)
-            # Then add esp_driver_gpio if missing
-            if not re.search(r'set\(requires[^)]*esp_driver_gpio', txt):
-                txt = re.sub(r'(set\(requires spi_flash[^)]*)(esp_timer\))',
-                             r'\1esp_timer esp_driver_gpio)', txt)
-            _write(arduino_cmake, txt)
-
-
 def _write(path, text):
     with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(text)
@@ -856,6 +785,14 @@ def _install_lora_kernel(cfg):
     if not folder:
         warn(f"Unknown LoRa kernel '{cfg.get('lora_kernel')}'")
         return
+
+    # drv_lora component already bundles kernels in components/drv_lora/kernels/<name>/
+    # If that directory exists, nothing needs to be copied — the component CMakeLists
+    # handles kernel selection via PURR_LORA_KERNEL. Skip silently.
+    bundled = os.path.join(COREOS_DIR, "components", "drv_lora", "kernels", folder)
+    if os.path.isdir(bundled):
+        return
+
     src = os.path.join(LORA_DIR, folder)
     dst = os.path.join(COREOS_DIR, "system", "kernel", "modules")
     if not os.path.isdir(src):
@@ -967,12 +904,12 @@ def do_build(cfg, clean=False):
     # sdkconfig.defaults: cyd_boot falls back to cyd (same hardware)
     defaults_target = "cyd" if target == "cyd_boot" else target
     defaults_src = os.path.join(SCRIPT_DIR, "targets", f"{defaults_target}.defaults")
+    defaults_dst = os.path.join(COREOS_DIR, "sdkconfig.defaults")
     if os.path.exists(defaults_src):
         info(f"{defaults_target}.defaults → sdkconfig.defaults")
-        shutil.copy2(defaults_src, os.path.join(COREOS_DIR, "sdkconfig.defaults"))
+        shutil.copy2(defaults_src, defaults_dst)
     else:
         warn(f"targets/{defaults_target}.defaults not found, keeping existing sdkconfig.defaults")
-
     bdir     = _build_dir(cfg)
     bdn      = os.path.basename(bdir)
     sdkcfg   = _sdkconfig(cfg)
@@ -985,12 +922,6 @@ def do_build(cfg, clean=False):
         if os.path.exists(sdkcfg):
             os.remove(sdkcfg)
 
-    # Prevent the IDF component manager from re-downloading and overwriting managed
-    # components during the cmake configure step inside idf.py build. Without this,
-    # cmake triggers the component manager on every fresh build dir, restoring the
-    # original (unpatched) arduino-esp32 files after we've already patched them.
-    os.environ["IDF_COMPONENT_OVERWRITE_MANAGED_COMPONENTS"] = "0"
-
     _install_lora_kernel(cfg)
 
     info(f"set-target {chip}  [{bdn}]")
@@ -998,20 +929,12 @@ def do_build(cfg, clean=False):
     if rc != 0:
         err(f"idf.py set-target exited {rc}")
 
-    # Apply patches after set-target populates managed_components
-    _arduino_patches(COREOS_DIR)
-
     mini = 0 if mods.get("micropython", True) else 1
     if TARGETS[target]["fixed"]:
         mini = 1
     info(f"build  TARGET={target}  BT={int(mods.get('bt',True))}  "
          f"MTP={int(mods.get('mtp',False))}  FLASHER={int(mods.get('flasher',False))}  "
          f"LORA={int(mods.get('lora',TARGETS[target]['default_lora']))}  MINI={mini}")
-
-    # Apply patches a second time immediately before build starts — insurance in case
-    # cmake did a partial reconfigure during set-target and scheduled another one.
-    # Second call is a no-op if patches already applied (idempotent check in _arduino_patches).
-    _arduino_patches(COREOS_DIR)
 
     rc = run_live(_idf_py() + idf_args + flags + ["build"], cwd=COREOS_DIR)
     if rc != 0:
@@ -1675,6 +1598,8 @@ def _apply_cli(cfg, args):
         cfg["modules"]["flasher"] = True
     if args.gps:
         cfg["modules"]["gps"] = True
+    if args.debug_input:
+        cfg["modules"]["debug_input"] = True
     if args.magidos:
         cfg["modules"]["magidos"] = True
     if args.magicmac:
@@ -1719,6 +1644,8 @@ def main():
     p.add_argument("--mtp",         action="store_true")
     p.add_argument("--flasher",     action="store_true")
     p.add_argument("--gps",         action="store_true")
+    p.add_argument("--debug-input", action="store_true", dest="debug_input",
+                   help="Enable HID serial debug logging (keyboard keypresses + trackball events)")
     p.add_argument("--magidos",     action="store_true",
                    help="Enable MagiDOS 8086 emulator (requires 8MB PSRAM: tdeck_plus, jc3248w535)")
     p.add_argument("--magicmac",    action="store_true",

@@ -65,9 +65,29 @@ endif()
 set(PURR_MW_APPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../devices/apps")
 file(GLOB PURR_MW_APP_SRCS "${PURR_MW_APPS_DIR}/*.cpp")
 
-set(_mw_requires nvs_flash esp_timer esp_lcd log driver)
+set(_mw_requires nvs_flash esp_timer esp_lcd log driver drv_shell)
 if(PURR_ENABLE_LUA)
     list(APPEND _mw_requires lib_lua)
+endif()
+
+# Touch driver: compile the source directly into lib_miniwin (same pattern as
+# MagiDOS drv_8086) to avoid cross-archive link-order issues where drv_touch
+# is resolved before lib_miniwin in the final executable link command.
+set(_drv_touch_dir "${CMAKE_CURRENT_SOURCE_DIR}/../drv_touch")
+set(_mw_touch_src "")
+if(TARGET_DEVICE STREQUAL "cyd_boot" OR TARGET_DEVICE STREQUAL "waveshare169"
+   OR TARGET_DEVICE STREQUAL "cyd_s024c")
+    set(_mw_touch_src "${_drv_touch_dir}/touch_cst816s.cpp")
+    set(_mw_has_cst816s ON)
+elseif(TARGET_DEVICE MATCHES "^cyd")
+    if(CYD_DISPLAY_VARIANT STREQUAL "s024c")
+        set(_mw_touch_src "${_drv_touch_dir}/touch_cst816s.cpp")
+        set(_mw_has_cst816s ON)
+    else()
+        set(_mw_touch_src "${_drv_touch_dir}/touch_xpt2046.cpp")
+    endif()
+elseif(TARGET_DEVICE STREQUAL "jc3248w535" OR TARGET_DEVICE STREQUAL "tdeck_plus")
+    set(_mw_touch_src "${_drv_touch_dir}/touch_gt911.cpp")
 endif()
 
 # MagiDOS: compile drv_8086.c (which #includes 8086tiny.c) directly into
@@ -84,14 +104,23 @@ if(PURR_ENABLE_MAGIDOS)
 endif()
 
 idf_component_register(
-    SRCS         ${MINIWIN_CORE_SRCS} ${MINIWIN_HAL_SRCS} ${PURR_MW_APP_SRCS} ${_mw_magidos_srcs}
+    SRCS         ${MINIWIN_CORE_SRCS} ${MINIWIN_HAL_SRCS} ${PURR_MW_APP_SRCS} ${_mw_magidos_srcs} ${_mw_touch_src}
     INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/hal"
                  "${PURR_MW_HAL_DIR}"
                  "${PURR_MW_APPS_DIR}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/gl/fonts/truetype/mcufont"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/../drv_shell"
     REQUIRES     ${_mw_requires}
 )
+
+# Advertise MiniWin presence to consumers (drv_shell etc.)
+target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_HAS_MINIWIN=1)
+
+# Touch driver flag
+if(_mw_has_cst816s)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_HAS_CST816S_TOUCH=1)
+endif()
 
 # Feature flag propagation — lib_miniwin compiles devices/apps/ so it needs these defines
 if(PURR_ENABLE_LUA)
@@ -112,6 +141,10 @@ if(PURR_ENABLE_MAGICMAC)
 endif()
 if(PURR_UI_THEME STREQUAL "blackberry")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_THEME_BLACKBERRY=1)
+endif()
+if(PURR_DEBUG_INPUT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PURR_DEBUG_INPUT=1)
+    message(STATUS "[purr] PURR_DEBUG_INPUT enabled — HID serial logging active")
 endif()
 
 # IDF 5.3.x does not propagate include dirs through managed-component REQUIRES chains.

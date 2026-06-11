@@ -8,7 +8,6 @@
 
 set(TARGET_DEVICE  "heltec" CACHE STRING "Target: heltec | tembed_cc1101 | cyd | cyd_s028r | cyd_s024c | cyd_boot | tdeck | tdeck_plus | jc3248w535 | waveshare169")
 set(BUILD_MINI     0        CACHE STRING "1 = strip MicroPython runtime")
-
 # CYD display variant (cyd target only)
 #   s028r  — ESP32-2432S028R (original) with XPT2046 touch
 #   s024c  — ESP32-2432S024C (newer) with CST816S I2C touch
@@ -21,8 +20,10 @@ set(PURR_ENABLE_FLASHER  0 CACHE STRING "Include OTA partition flasher")
 set(PURR_ENABLE_LTE      0 CACHE STRING "Include LTE manager (experimental)")
 set(PURR_ENABLE_SHELL    1 CACHE STRING "Include USB serial debug shell (esp_console)")
 set(PURR_ENABLE_LUA      1 CACHE STRING "Include Lua 5.4 runtime (.paws/.claw scripts)")
+set(BUILD_TDECK_PLUS     0 CACHE STRING "T-Deck variant: 0=original, 1=Plus (GPS/keyboard)")
 set(PURR_ENABLE_MAGIDOS  0 CACHE STRING "Include MagiDOS 8086 emulator app")
 set(PURR_ENABLE_MAGICMAC 0 CACHE STRING "Include MagicMac Plus emulator app")
+set(PURR_ENABLE_GPS      0 CACHE STRING "Include GPS manager (T-Deck Plus)")
 set(PURR_UI_THEME        "wce" CACHE STRING "MiniWin shell theme: wce | blackberry")
 
 # LoRa: auto-enabled for heltec/tdeck, off for cyd/cyd_boot.
@@ -76,7 +77,6 @@ set(REQUIRES
     esp_adc
     app_update
     esp_timer
-    lib_tftespi
     driver
     drv_display
     drv_touch
@@ -174,6 +174,7 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
     set(SRCS
         "../system/kernel/main.cpp"
         "../system/kernel/kitt.cpp"
+        "../system/kernel/purr_panic.cpp"
         "../system/kernel/device_config.cpp"
         "../system/kernel/idf_compat.c"
         "../system/bridge/main.cpp"
@@ -200,7 +201,6 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
 
 # ── Device-specific: T-Deck ───────────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "tdeck")
-    set(BUILD_TDECK_PLUS 0 CACHE STRING "T-Deck variant: 0=original, 1=Plus (GPS)")
     list(APPEND SRCS "../apps/kitten_ui/kitten_ui.cpp")
     list(APPEND INCLUDE_DIRS "../apps/kitten_ui")
     if(BUILD_TDECK_PLUS)
@@ -214,13 +214,16 @@ elseif(TARGET_DEVICE STREQUAL "tdeck")
 
 # ── Device-specific: T-Deck Plus (touch screen, GT911) ───────────────────────
 elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
-    list(APPEND SRCS "../apps/kitten_ui/kitten_ui.cpp")
+    list(APPEND SRCS
+        "../apps/kitten_ui/kitten_ui.cpp"
+        "../system/kernel/modules/partition_manager.cpp"
+    )
     list(APPEND INCLUDE_DIRS "../apps/kitten_ui")
     if(PURR_UI_KERNEL STREQUAL "miniwin")
         list(APPEND REQUIRES lib_miniwin)
     endif()
     set(PURR_HAS_PSRAM 1 CACHE STRING "" FORCE)
-    message(STATUS "T-Deck Plus: ST7789 320x240 + GT911 touch (SPI3 MOSI=41 SCK=40).")
+    message(STATUS "T-Deck Plus: ST7789 320x240 + GT911 touch + SD card (SPI3).")
 
 # ── Device-specific: JC3248W535 ───────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "jc3248w535")
@@ -278,7 +281,16 @@ idf_component_register(
 )
 
 # ── IDF include propagation workarounds ───────────────────────────────────────
-# IDF 5.3 does not propagate include dirs through REQUIRES chains.
+# IDF 5.3 does not propagate include dirs through REQUIRES chains to main.
+# drv_display and drv_cc1101 headers are included by kernel files — expose them here.
+target_include_directories(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_display"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_cc1101"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_lora"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_touch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_shell"
+)
+
 if(PURR_UI_KERNEL STREQUAL "miniwin")
     if(TARGET_DEVICE STREQUAL "cyd_s028r")
         set(_mw_dev "cyd_s028r")
@@ -343,10 +355,14 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
 elseif(TARGET_DEVICE STREQUAL "tdeck")
     list(APPEND PURR_DEFS PURR_DISPLAY_ST7789=1)
 elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
-    list(APPEND PURR_DEFS PURR_DISPLAY_ST7789=1 PURR_HAS_TOUCH_GT911=1 PURR_HAS_PSRAM=1 PURR_TARGET_TDECK_PLUS=1)
-    if(BUILD_TDECK_PLUS)
-        list(APPEND PURR_DEFS PURR_IS_TDECK_PLUS=1)
-    endif()
+    list(APPEND PURR_DEFS
+        PURR_DISPLAY_ST7789=1
+        PURR_HAS_TOUCH_GT911=1
+        PURR_HAS_PSRAM=1
+        PURR_TARGET_TDECK_PLUS=1
+        PURR_HAS_PARTITION_MGR=1
+        PURR_DEVICE_TDECK_PLUS=1
+    )
 elseif(TARGET_DEVICE STREQUAL "jc3248w535")
     list(APPEND PURR_DEFS PURR_DISPLAY_ST7796=1 PURR_HAS_TOUCH_GT911=1 PURR_TARGET_WIP=1 PURR_HAS_PSRAM=1)
 elseif(TARGET_DEVICE STREQUAL "waveshare169")
@@ -393,6 +409,9 @@ if(PURR_ENABLE_MAGIDOS)
 endif()
 if(PURR_ENABLE_MAGICMAC)
     list(APPEND PURR_DEFS PURR_HAS_MAGICMAC=1)
+endif()
+if(PURR_ENABLE_GPS)
+    list(APPEND PURR_DEFS PURR_HAS_GPS=1)
 endif()
 if(PURR_UI_THEME STREQUAL "blackberry")
     list(APPEND PURR_DEFS PURR_THEME_BLACKBERRY=1)

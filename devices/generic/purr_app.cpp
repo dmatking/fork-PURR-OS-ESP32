@@ -211,9 +211,10 @@ static void shell_message(const mw_message_t *msg)
                     int idx = item - 1;
                     smenu_open   = false;
                     smenu_folder = -1;
-                    if (idx >= 0 && idx < purr_catalog_count)
+                    if (idx >= 0 && idx < purr_catalog_count) {
                         purr_catalog[idx].launch();
                         mw_paint_all();
+                    }
                 }
             } else {
                 smenu_open   = false;

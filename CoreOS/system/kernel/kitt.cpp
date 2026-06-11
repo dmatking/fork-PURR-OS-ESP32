@@ -5,6 +5,10 @@
 #include <ArduinoJson.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "kitt";
 #ifdef PURR_DISPLAY_SSD1306

@@ -6,6 +6,8 @@
 #include <ArduinoJson.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "bridge";
 

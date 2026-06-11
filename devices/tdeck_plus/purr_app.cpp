@@ -43,9 +43,10 @@
 #define WCE_MBKG    0xD4D0C8
 
 static mw_handle_t shell_handle;
-static bool smenu_open   = false;
-static int  smenu_folder = -1;  // -1 = top level, 0 = programs
-static int  s_desktop_tick = 0; // desktop repaints once per second
+static bool smenu_open    = false;
+static int  smenu_folder  = -1;  // -1 = top level, 0 = programs
+static int  smenu_sel     = 0;   // highlighted item index
+static bool smenu_pressed = false; // item is being activated (flash feedback)
 
 static void draw_raised(const mw_gl_draw_info_t *d,
                         int16_t x, int16_t y, int16_t w, int16_t h,
@@ -156,15 +157,31 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
 
     if (!smenu_open) return;
 
+    auto draw_sel = [&](int16_t x, int16_t y, int16_t w, int16_t h, bool selected) {
+        if (selected && smenu_pressed) {
+            // Pressed flash: bright white background, dark text
+            mw_gl_set_solid_fill_colour(0xFFFFFF);
+            mw_gl_rectangle(d, x, y, w, h);
+            mw_gl_set_fg_colour(0x000080);
+        } else if (selected) {
+            mw_gl_set_solid_fill_colour(0x000080);
+            mw_gl_rectangle(d, x, y, w, h);
+            mw_gl_set_fg_colour(0xFFFFFF);
+        } else {
+            mw_gl_set_fg_colour(WCE_TXT);
+        }
+    };
+
     if (smenu_folder < 0) {
         // Top-level: "Programs >" + separator + "Restart"
         int16_t smy = (int16_t)(TASKBAR_Y - SMENU_TL_H);
         draw_smenu_box(d, smy, SMENU_TL_H);
+        draw_sel(SMENU_X + 1, smy + 2, SMENU_W - 2, SMENU_IH, smenu_sel == 0);
         mw_gl_string(d, SMENU_X + 8, smy + 2 + 4, "Programs >");
         mw_gl_set_fg_colour(WCE_SHD);
         mw_gl_hline(d, SMENU_X + 4, SMENU_X + SMENU_W - 4,
                     (int16_t)(smy + 2 + SMENU_IH + SMENU_SEP_H / 2));
-        mw_gl_set_fg_colour(WCE_TXT);
+        draw_sel(SMENU_X + 1, smy + 2 + SMENU_IH + SMENU_SEP_H, SMENU_W - 2, SMENU_IH, smenu_sel == 1);
         mw_gl_string(d, SMENU_X + 8,
                      (int16_t)(smy + 2 + SMENU_IH + SMENU_SEP_H + 4), "Restart / Boot");
     } else {
@@ -172,9 +189,11 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
         int16_t smh = (int16_t)((purr_catalog_count + 1) * SMENU_IH + 4);
         int16_t smy = (int16_t)(TASKBAR_Y - smh);
         draw_smenu_box(d, smy, smh);
+        draw_sel(SMENU_X + 1, smy + 2, SMENU_W - 2, SMENU_IH, smenu_sel == 0);
         mw_gl_string(d, SMENU_X + 8, smy + 2 + 4, "< Back");
         for (int i = 0; i < purr_catalog_count; i++) {
             int16_t iy = smy + 2 + (int16_t)((i + 1) * SMENU_IH);
+            draw_sel(SMENU_X + 1, iy, SMENU_W - 2, SMENU_IH, smenu_sel == i + 1);
             mw_gl_string(d, SMENU_X + 8, iy + 4, purr_catalog[i].name);
         }
     }
@@ -184,34 +203,52 @@ static void shell_message(const mw_message_t *msg)
 {
     if (msg->message_id == MW_WINDOW_CREATED_MESSAGE ||
         msg->message_id == MW_TIMER_MESSAGE) {
+        // Keyboard tick — forwards keys to focused window
         hal_input_tick();
 
-        // If the touch IC reports a real finger touch, hide the trackball cursor
-        // so touch takes over. Cursor reappears on next trackball movement.
-        if (mw_hal_touch_get_state() == MW_HAL_TOUCH_STATE_DOWN) {
-            hal_input_notify_touch();
-        }
-
-        // Synthesize a touch-down event if the trackball click was pressed
-        if (hal_input_click_pending()) {
-            int16_t cx, cy;
-            hal_input_get_cursor(&cx, &cy);
-            uint32_t td = ((uint32_t)(uint16_t)cx << 16) | (uint16_t)cy;
-            mw_post_message(MW_TOUCH_DOWN_MESSAGE,
-                            MW_INVALID_HANDLE, shell_handle,
-                            td, NULL,
-                            MW_WINDOW_MESSAGE);
-        }
-
-        // Full desktop repaint once per second; cursor drawn by root paint every tick
-        s_desktop_tick++;
-        if (s_desktop_tick >= MW_TICKS_PER_SECOND) {
-            s_desktop_tick = 0;
-            mw_paint_all();
-        }
-        mw_set_timer(1, shell_handle, MW_WINDOW_MESSAGE);
+        mw_paint_all();
+        mw_set_timer(MW_TICKS_PER_SECOND / 2, shell_handle, MW_WINDOW_MESSAGE);
         return;
     }
+    if (msg->message_id == MW_KEY_PRESSED_MESSAGE) {
+        uint8_t code = (uint8_t)msg->message_data;
+        // NAV_UP=1 NAV_DOWN=2 NAV_LEFT=3 NAV_RIGHT=4 NAV_ENTER=0x0D
+        if (!smenu_open) {
+            if (code == 0x0D) { smenu_open = true; smenu_sel = 0; }
+        } else if (smenu_folder < 0) {
+            int max_items = 2;  // "Programs >" and "Restart / Boot"
+            if (code == 0x01 || code == 0x03) smenu_sel = (smenu_sel - 1 + max_items) % max_items;
+            if (code == 0x02 || code == 0x04) smenu_sel = (smenu_sel + 1) % max_items;
+            if (code == 0x0D) {
+                // Flash pressed state, then act
+                smenu_pressed = true;
+                mw_paint_window_client(shell_handle);
+                smenu_pressed = false;
+                if (smenu_sel == 0) { smenu_folder = 0; smenu_sel = 0; }
+                else { smenu_open = false; smenu_folder = -1; app_restart_menu_launch(); }
+            }
+            if (code == 0x1B /* Esc */ || code == 0x03) { smenu_open = false; smenu_folder = -1; }
+        } else {
+            int max_items = purr_catalog_count + 1;  // "< Back" + apps
+            if (code == 0x01) smenu_sel = (smenu_sel - 1 + max_items) % max_items;
+            if (code == 0x02) smenu_sel = (smenu_sel + 1) % max_items;
+            if (code == 0x0D) {
+                smenu_pressed = true;
+                mw_paint_window_client(shell_handle);
+                smenu_pressed = false;
+                if (smenu_sel == 0) { smenu_folder = -1; smenu_sel = 0; }
+                else {
+                    int idx = smenu_sel - 1;
+                    smenu_open = false; smenu_folder = -1;
+                    if (idx >= 0 && idx < purr_catalog_count) purr_catalog[idx].launch();
+                }
+            }
+            if (code == 0x1B || code == 0x03) { smenu_folder = -1; smenu_sel = 0; }
+        }
+        mw_paint_window_client(shell_handle);
+        return;
+    }
+
     if (msg->message_id != MW_TOUCH_DOWN_MESSAGE) return;
 
     int16_t tx = (int16_t)(msg->message_data >> 16);
@@ -331,13 +368,14 @@ void mw_user_init(void)
         MW_WINDOW_FLAG_IS_VISIBLE | MW_WINDOW_FLAG_TOUCH_FOCUS_AND_EVENT,
         NULL);
 
+    hal_input_set_shell_handle(shell_handle);
+
     mw_paint_all();
 }
 
 void mw_user_root_paint_function(const mw_gl_draw_info_t *draw_info)
 {
-    // Draw cursor last — on top of all windows
-    hal_input_draw_cursor(draw_info);
+    (void)draw_info;
 }
 
 void mw_user_root_message_function(const mw_message_t *message)

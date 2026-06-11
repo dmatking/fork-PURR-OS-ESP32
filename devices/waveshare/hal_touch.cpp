@@ -30,8 +30,8 @@ void mw_hal_touch_init(void) {
 
     i2c_master_bus_config_t bus_cfg = {};
     bus_cfg.i2c_port      = I2C_NUM_0;
-    bus_cfg.sda_io_num    = WS_CST_SDA;
-    bus_cfg.scl_io_num    = WS_CST_SCL;
+    bus_cfg.sda_io_num    = (gpio_num_t)WS_CST_SDA;
+    bus_cfg.scl_io_num    = (gpio_num_t)WS_CST_SCL;
     bus_cfg.clk_source    = I2C_CLK_SRC_DEFAULT;
     bus_cfg.glitch_ignore_cnt = 7;
     i2c_new_master_bus(&bus_cfg, &s_bus);

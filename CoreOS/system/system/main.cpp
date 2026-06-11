@@ -1,5 +1,6 @@
 // Sits between KITT and userland apps. Spawns the appropriate shell at boot.
 
+#include <string.h>
 #include "../kernel/kitt.h"
 #if defined(PURR_DISPLAY_SSD1306) || defined(PURR_FORCE_KITTEN_UI)
 #  include "../../apps/kitten_ui/kitten_ui.h"

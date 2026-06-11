@@ -15,7 +15,7 @@ void wifi_manager_deinit()                              {}
 bool wifi_manager_enabled()                             { return false; }
 void wifi_manager_enable()                              {}
 void wifi_manager_disable()                             {}
-void wifi_manager_scan_start()                          {}
+bool wifi_manager_scan_start()                          { return false; }
 bool wifi_manager_scan_done()                           { return false; }
 int  wifi_manager_scan_count()                          { return 0; }
 void wifi_manager_scan_get_ssid(int, char* b, size_t l) { if (l) b[0] = '\0'; }

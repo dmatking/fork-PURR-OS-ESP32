@@ -5,7 +5,8 @@ if(TARGET_DEVICE STREQUAL "cyd" OR TARGET_DEVICE STREQUAL "cyd_boot"
     list(APPEND SRCS "display_ili9341.cpp")
 elseif(TARGET_DEVICE STREQUAL "jc3248w535")
     list(APPEND SRCS "display_st7796.cpp")
-elseif(TARGET_DEVICE STREQUAL "waveshare169" OR TARGET_DEVICE STREQUAL "tdeck_plus" OR TARGET_DEVICE STREQUAL "tdeck")
+elseif(TARGET_DEVICE STREQUAL "waveshare169" OR TARGET_DEVICE STREQUAL "tdeck_plus"
+       OR TARGET_DEVICE STREQUAL "tdeck" OR TARGET_DEVICE STREQUAL "tembed_cc1101")
     list(APPEND SRCS "display_st7789.cpp")
 elseif(TARGET_DEVICE STREQUAL "heltec")
     list(APPEND SRCS "display_ssd1306.cpp")
@@ -19,15 +20,29 @@ endif()
 idf_component_register(
     SRCS         ${SRCS}
     INCLUDE_DIRS "."
-    REQUIRES     driver esp_lcd esp_timer esp_driver_ledc lib_tftespi
+    REQUIRES     driver esp_lcd esp_timer esp_driver_ledc
 )
 
-# Propagate CYD_VARIANT_S024C into drv_display and lib_tftespi.
-# main/CMakeLists.txt sets this in PURR_DEFS but that only reaches main's consumers,
-# not its dependencies. We re-apply it here so User_Setup.h and display_ili9341.h
-# both compile with the correct pin assignments.
+# Propagate display-type defines as PUBLIC so consumers (drv_shell etc.) know
+# which display driver is active — main's PURR_DEFS only reaches main's own
+# compilation unit, not its dependencies.
+if(TARGET_DEVICE STREQUAL "cyd" OR TARGET_DEVICE STREQUAL "cyd_boot"
+   OR TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c")
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_DISPLAY_ILI9341=1)
+endif()
+if(TARGET_DEVICE STREQUAL "jc3248w535")
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_DISPLAY_ST7796=1)
+endif()
+if(TARGET_DEVICE STREQUAL "waveshare169" OR TARGET_DEVICE STREQUAL "tdeck_plus"
+   OR TARGET_DEVICE STREQUAL "tdeck" OR TARGET_DEVICE STREQUAL "tembed_cc1101")
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_DISPLAY_ST7789=1)
+endif()
+if(TARGET_DEVICE STREQUAL "heltec")
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC PURR_DISPLAY_SSD1306=1)
+endif()
+
+# CYD S024C variant pin select — re-applied here so User_Setup.h and
+# display_ili9341.h compile with the correct BL/RST assignments.
 if(CYD_DISPLAY_VARIANT STREQUAL "s024c" OR TARGET_DEVICE STREQUAL "cyd_s024c")
     target_compile_definitions(${COMPONENT_LIB} PUBLIC CYD_VARIANT_S024C=1)
-    idf_component_get_property(tftespi_lib lib_tftespi COMPONENT_LIB)
-    target_compile_definitions(${tftespi_lib} PUBLIC CYD_VARIANT_S024C=1)
 endif()

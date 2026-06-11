@@ -1,46 +1,42 @@
+// usb_hid.cpp — USB HID keyboard driver (pure ESP-IDF tinyUSB, no Arduino)
+// USB D+/D- are hardware-fixed inside the S2/S3 die.
+
 #include "usb_hid.h"
-#include <Arduino.h>
+#include "esp_log.h"
+#include "tinyusb.h"
+#include "tusb_hid_keyboard.h"
+#include <string.h>
 
-// ESP32-S2 native USB HID via Arduino-ESP32 USB stack (tinyUSB wrapper).
-// USB D+/D- are hardware-fixed on GPIO19/GPIO20 inside the S2 die.
-// The schematic labels them as module pins IO22/IO23 on the WROVER connector —
-// these route internally to the same USB pads.
+static const char* TAG = "usb_hid";
 
-#include "USB.h"
-#include "USBHIDKeyboard.h"
-
-static USBHIDKeyboard hid_kb;
-static bool hid_ready_flag = false;
-
-static hid_keyboard_report_t last_report = {};
+static bool s_ready = false;
+static hid_keyboard_report_t s_last_report = {};
 
 void usb_hid_init() {
-    USB.manufacturerName("PURR OS");
-    USB.productName("CattoHID Keyboard");
-    USB.serialNumber("CATTOHID-001");
-    USB.begin();
-    hid_kb.begin();
-    hid_ready_flag = true;
-    Serial.println("[hid] USB HID keyboard started");
+    const tinyusb_config_t cfg = {
+        .device_descriptor = NULL,  // use default
+        .string_descriptor = NULL,
+        .external_phy = false,
+        .configuration_descriptor = NULL,
+    };
+    esp_err_t err = tinyusb_driver_install(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "tinyUSB install failed: %s", esp_err_to_name(err));
+        return;
+    }
+    s_ready = true;
+    ESP_LOGI(TAG, "USB HID keyboard ready");
 }
 
 bool usb_hid_ready() {
-    return hid_ready_flag;
+    return s_ready && tud_mounted();
 }
 
 void usb_hid_send_report(const hid_keyboard_report_t* report) {
-    if (!hid_ready_flag) return;
-
-    // Only send if report changed — avoids flooding the USB bus
-    if (memcmp(report, &last_report, sizeof(*report)) == 0) return;
-    last_report = *report;
-
-    // USBHIDKeyboard exposes sendReport directly
-    KeyReport kr;
-    kr.modifiers = report->modifiers;
-    kr.reserved  = 0;
-    memcpy(kr.keys, report->keys, 6);
-    hid_kb.sendReport(&kr);
+    if (!usb_hid_ready()) return;
+    if (memcmp(report, &s_last_report, sizeof(*report)) == 0) return;
+    s_last_report = *report;
+    tud_hid_keyboard_report(0, report->modifiers, report->keys);
 }
 
 void usb_hid_release_all() {

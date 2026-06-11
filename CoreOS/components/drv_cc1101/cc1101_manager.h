@@ -7,7 +7,7 @@
 // T-Embed CC1101 default wiring (SPI2):
 //   MOSI=6  MISO=5  SCK=7  CS=4  GDO0=3  GDO2=8
 
-#define CC1101_SPI_HOST  SPI2_HOST
+#define CC1101_SPI_HOST  1      // SPI2_HOST
 #define CC1101_MOSI      6
 #define CC1101_MISO      5
 #define CC1101_SCK       7

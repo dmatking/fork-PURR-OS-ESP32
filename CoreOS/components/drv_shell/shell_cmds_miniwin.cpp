@@ -2,14 +2,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef PURR_CYD
+#ifdef PURR_HAS_MINIWIN
 #include "miniwin.h"
 #include "miniwin_touch.h"
 #include "miniwin_settings.h"
 #include "hal/hal_lcd.h"
 #include "hal/hal_touch.h"
-#include "display_ili9341.h"
-#include "touch_cst816s.h"
+#ifdef PURR_DISPLAY_ILI9341
+#  include "display_ili9341.h"
+#endif
+#ifdef PURR_HAS_TOUCH_XPT2046
+#  include "touch_xpt2046.h"
+#elif defined(PURR_HAS_TOUCH_GT911)
+#  include "touch_gt911.h"
+#elif defined(PURR_HAS_TOUCH_CST816S)
+#  include "touch_cst816s.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -56,7 +64,12 @@ void cmd_mw_rect(int argc, char **argv)
     uint16_t rgb565 = ((uint16_t)(r & 0xF8) << 8) | ((uint16_t)(g & 0xFC) << 3) | (b >> 3);
 
     printf("HAL rect %d,%d %dx%d rgb565=0x%04X\n", x, y, w, h, rgb565);
+#ifdef PURR_DISPLAY_ILI9341
     display_ili9341_push_block(x, y, w, h, rgb565);
+#else
+    (void)rgb565;
+    printf("mw-rect: direct push not supported on this display\n");
+#endif
     printf("Done.\n");
 }
 
@@ -80,22 +93,35 @@ void cmd_mw_touch(int argc, char **argv)
            mw_settings_is_initialised() ? 1 : 0,
            n);
 
+#if !defined(PURR_HAS_TOUCH_XPT2046) && !defined(PURR_HAS_TOUCH_GT911) && !defined(PURR_HAS_TOUCH_CST816S)
+    printf("No touch controller on this target.\n");
+    return;
+#endif
     for (int i = 0; i < n; i++) {
+#ifdef PURR_HAS_TOUCH_XPT2046
+        xpt_touch_event_t ev = {};
+        touch_xpt2046_get_event(&ev);
+        int raw_x = ev.x, raw_y = ev.y;
+#elif defined(PURR_HAS_TOUCH_GT911)
+        gt911_touch_event_t ev = {};
+        touch_gt911_get_event(&ev);
+        int raw_x = ev.x, raw_y = ev.y;
+#elif defined(PURR_HAS_TOUCH_CST816S)
         cst_touch_event_t ev = {};
         touch_cst816s_get_event(&ev);
+        int raw_x = ev.x, raw_y = ev.y;
+#else
+        struct { bool pressed; int x, y; } ev = {};
+        int raw_x = 0, raw_y = 0;
+#endif
 
         if (ev.pressed) {
-            uint16_t sx = (uint16_t)((int32_t)ev.x * 4096 / CYD_TFT_WIDTH);
-            uint16_t sy = (uint16_t)((int32_t)ev.y * 4096 / CYD_TFT_HEIGHT);
-
-            // Sync the shared s_ev in hal_touch so mw_touch_get_display_touch can read it
             mw_hal_touch_get_state();
 
             int16_t dx = 0, dy = 0;
             mw_touch_get_display_touch(&dx, &dy);
 
-            printf("TOUCH raw_cst=%d,%d  scaled=%u,%u  display=%d,%d\n",
-                   ev.x, ev.y, sx, sy, dx, dy);
+            printf("TOUCH raw=%d,%d  display=%d,%d\n", raw_x, raw_y, dx, dy);
         }
 
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -115,4 +141,4 @@ void cmd_mw_init  (int argc, char **argv) { (void)argc; (void)argv; printf("Mini
 void cmd_mw_touch (int argc, char **argv) { (void)argc; (void)argv; printf("MiniWin not active on this target.\n"); }
 }
 
-#endif // PURR_CYD
+#endif // PURR_HAS_MINIWIN
