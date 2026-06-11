@@ -2,8 +2,7 @@
 
 // PURR OS — MiniWin configuration for Waveshare 1.69" ESP32-S3
 // Display: ST7789 240x280 (portrait-native)
-// Touch:   CST816S I2C — verify pins against hardware before use
-//          Common wiring: SDA=6  SCL=7  INT=9  RST=8
+// Touch:   CST816S I2C — verified: SDA=11 SCL=10 INT=46 RST=none
 
 #ifdef __cplusplus
 extern "C" {

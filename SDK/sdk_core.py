@@ -194,7 +194,7 @@ TARGETS = {
     "cyd_s028r": {
         "chip":         "esp32",
         "desc":         "CYD S028R (ESP32-2432S028R, original)",
-        "spec":         "ESP32  4MB  ILI9341 2.4\"  XPT2046 SPI touch  MiniWin WM — full OS (ota_0)",
+        "spec":         "ESP32  4MB  ILI9341 2.4\" 320x240  XPT2046 SPI touch  MiniWin WM",
         "shells":       [],
         "default_lora": False,
         "default_ui":   "miniwin",
@@ -203,7 +203,7 @@ TARGETS = {
     "cyd_s024c": {
         "chip":         "esp32",
         "desc":         "CYD S024C (ESP32-2432S024C, newer)",
-        "spec":         "ESP32  4MB  ILI9341 2.4\"  CST816S I2C touch  MiniWin WM — full OS (ota_0)",
+        "spec":         "ESP32  4MB  ST7789 2.4\" 320x240  CST820 I2C touch  MiniWin WM",
         "shells":       [],
         "default_lora": False,
         "default_ui":   "miniwin",

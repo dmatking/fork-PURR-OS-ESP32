@@ -2,7 +2,7 @@
 
 // PURR OS — MiniWin configuration for JC3248W535
 // Display: ST7796 3.5" 480x320 landscape
-// Touch:   GT911 I2C (SDA=19 SCL=20 INT=18 RST=38)  addr=0x5D
+// Touch:   GT911 I2C (SDA=4 SCL=8 INT=3 RST=38)  addr=0x5D
 
 #ifdef __cplusplus
 extern "C" {
