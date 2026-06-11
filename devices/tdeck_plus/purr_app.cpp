@@ -373,11 +373,34 @@ void mw_user_init(void)
 
 void mw_user_root_paint_function(const mw_gl_draw_info_t *draw_info)
 {
-    // Layer 0: wallpaper — painted first, everything else composites on top
+    // Layer 0: wallpaper
+    const int16_t W = (int16_t)SCR_W;
+    const int16_t H = (int16_t)SCR_H;
+
+    // Teal background
     mw_gl_set_fill(MW_GL_FILL);
     mw_gl_set_border(MW_GL_BORDER_OFF);
     mw_gl_set_solid_fill_colour(WCE_DESKTOP);
-    mw_gl_rectangle(draw_info, 0, 0, (int16_t)SCR_W, (int16_t)SCR_H);
+    mw_gl_rectangle(draw_info, 0, 0, W, H);
+
+    // Thin horizontal rule across center
+    mw_gl_set_fg_colour(0x006060);
+    mw_gl_hline(draw_info, 20, W - 21, H / 2 - 20);
+    mw_gl_hline(draw_info, 20, W - 21, H / 2 + 22);
+
+    mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
+
+    // "PURR OS" centered — measure first for pixel-perfect placement
+    mw_gl_set_font(MW_GL_FONT_24);
+    int16_t title_w = mw_gl_get_string_width_pixels("PURR OS");
+    mw_gl_set_fg_colour(0xFFFFFF);
+    mw_gl_string(draw_info, (int16_t)((W - title_w) / 2), (int16_t)(H / 2 - 18), "PURR OS");
+
+    // Version subtitle centered
+    mw_gl_set_font(MW_GL_FONT_9);
+    int16_t ver_w = mw_gl_get_string_width_pixels("v0.10.1");
+    mw_gl_set_fg_colour(0xA0D0D0);
+    mw_gl_string(draw_info, (int16_t)((W - ver_w) / 2), (int16_t)(H / 2 + 26), "v0.10.1");
 }
 
 void mw_user_root_message_function(const mw_message_t *message)
