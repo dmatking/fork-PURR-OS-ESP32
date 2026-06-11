@@ -200,15 +200,28 @@ static void shell_message(const mw_message_t *msg)
 {
     if (msg->message_id == MW_WINDOW_CREATED_MESSAGE ||
         msg->message_id == MW_TIMER_MESSAGE) {
-        // Keyboard tick — forwards keys to focused window
+        // Poll input every tick (100ms); do a full display refresh once per second
         hal_input_tick();
 
-        mw_paint_all();
-        mw_set_timer(MW_TICKS_PER_SECOND / 2, shell_handle, MW_WINDOW_MESSAGE);
+        static uint8_t repaint_counter = 0;
+        if (++repaint_counter >= 10) {
+            mw_paint_all();
+            repaint_counter = 0;
+        }
+        // 5 ticks = 100ms at MW_TICK_PERIOD_MS=20 — keeps input responsive
+        mw_set_timer(MW_TICKS_PER_SECOND / 10, shell_handle, MW_WINDOW_MESSAGE);
         return;
     }
     if (msg->message_id == MW_KEY_PRESSED_MESSAGE) {
         uint8_t code = (uint8_t)msg->message_data;
+        // If an app window is active and the start menu is closed, all key input
+        // belongs to the app — the shell background must not silently eat it.
+        if (!smenu_open && taskbar_focused_handle != MW_INVALID_HANDLE) {
+            mw_post_message(MW_KEY_PRESSED_MESSAGE,
+                            MW_INVALID_HANDLE, taskbar_focused_handle,
+                            (uint32_t)code, NULL, MW_WINDOW_MESSAGE);
+            return;
+        }
         // NAV_UP=1 NAV_DOWN=2 NAV_LEFT=3 NAV_RIGHT=4 NAV_ENTER=0x0D
         if (!smenu_open) {
             if (code == 0x0D) { smenu_open = true; smenu_sel = 0; }

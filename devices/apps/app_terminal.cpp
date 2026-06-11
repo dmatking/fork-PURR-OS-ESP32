@@ -137,7 +137,13 @@ static void message(const mw_message_t *msg)
         push_line("Type command + Enter (trackball click)");
         push_line("Type 'help' for commands");
         push_line("---");
+        mw_set_timer(MW_TICKS_PER_SECOND, s_handle, MW_WINDOW_MESSAGE);
         mw_paint_window_client(s_handle);
+        break;
+
+    case MW_TIMER_MESSAGE:
+        mw_paint_window_client(s_handle);
+        mw_set_timer(MW_TICKS_PER_SECOND, s_handle, MW_WINDOW_MESSAGE);
         break;
 
     case MW_KEY_PRESSED_MESSAGE: {
@@ -177,6 +183,6 @@ void app_terminal_launch(void)
     mw_util_rect_t r;
     mw_util_set_rect(&r, 10, 10, 300, 200);
     s_handle = mw_add_window(&r, "Terminal",
-        paint, message, NULL, 0, APP_WIN_FLAGS, NULL);
+        paint, message, NULL, 0, APP_WIN_FLAGS_TOUCH, NULL);
     taskbar_register(s_handle, "Terminal");
 }
