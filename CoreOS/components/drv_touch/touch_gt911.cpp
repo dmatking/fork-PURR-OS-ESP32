@@ -1,5 +1,6 @@
 // touch_gt911.cpp — GT911 5-point I2C capacitive touch driver (pure ESP-IDF)
 // Used on JC3248W535 (ESP32-S3, 3.5" 480x320).
+// Verified wiring: SDA=4 SCL=8 INT=3 RST=38
 
 
 #include "touch_gt911.h"
@@ -10,9 +11,9 @@
 #include "freertos/task.h"
 
 #define GT911_ADDR       0x5D
-#define GT911_SDA        19
-#define GT911_SCL        20
-#define GT911_INT        18
+#define GT911_SDA        4
+#define GT911_SCL        8
+#define GT911_INT        3
 #define GT911_RST        38
 
 #define GT911_REG_STATUS 0x814E
