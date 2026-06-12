@@ -116,7 +116,7 @@ bool device_config_default(device_config_t* out) {
     strlcpy(out->display, "ili9341", sizeof(out->display));
     strlcpy(out->touch,   "xpt2046", sizeof(out->touch));
     out->display_w = 320; out->display_h = 240;
-    out->flash_mb = 4;
+    out->flash_mb = 4; out->sd = true;
     out->wifi = true; out->bt = true;
 
 #elif defined(PURR_TARGET_CYD_S024C)
@@ -124,7 +124,7 @@ bool device_config_default(device_config_t* out) {
     strlcpy(out->display, "ili9341",   sizeof(out->display));
     strlcpy(out->touch,   "cst816s",   sizeof(out->touch));
     out->display_w = 240; out->display_h = 320;
-    out->flash_mb = 4;
+    out->flash_mb = 4; out->sd = true;
     out->wifi = true; out->bt = true;
 
 #elif defined(PURR_TARGET_HELTEC)

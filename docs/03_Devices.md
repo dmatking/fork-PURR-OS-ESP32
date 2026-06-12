@@ -1,5 +1,7 @@
 # PURR OS — Device Reference
 
+See [04_Flashing.md](04_Flashing.md) for flash offsets, esptool commands, and web flasher instructions for each device.
+
 ## T-Deck Plus (`tdeck_plus`)
 
 **Chip:** ESP32-S3  **Flash:** 16MB  **PSRAM:** 8MB
@@ -38,10 +40,18 @@ MagiDOS and MagicMac enabled in release builds (8MB PSRAM required).
 ## CYD S028R (`cyd_s028r`)
 
 **Chip:** ESP32  **Flash:** 4MB  
-**Display:** ILI9341 2.4" 320×240  **Touch:** XPT2046 SPI resistive (T_CS=33 T_MOSI=32 T_MISO=39 T_SCLK=25 T_IRQ=36)  
-**Backlight:** GPIO 21
+**Display:** ILI9341 2.4" 320×240 landscape  **Touch:** XPT2046 SPI resistive  
+**Backlight:** GPIO 21  **SD card:** VSPI (MOSI=23 MISO=19 SCLK=18 CS=5)
 
-3-point resistive calibration runs on first boot.
+| Peripheral | Pins |
+|-----------|------|
+| Display SPI (HSPI) | MOSI=13 MISO=12 SCLK=14 CS=15 DC=2 |
+| Touch XPT2046 | T_CS=33 T_MOSI=32 T_MISO=39 T_SCLK=25 T_IRQ=36 |
+| SD card (VSPI) | MOSI=23 MISO=19 SCLK=18 CS=5 |
+
+**Display driver notes:** MADCTL=0x40 (MX=1). The PCB routes ILI9341 column 0 to the physical right edge, so MX=1 is required to flip column addressing. `SPI_TRANS_USE_TXDATA` must be used for all ≤4-byte SPI transfers — stack-allocated buffers are inaccessible to DMA and silently corrupt short transfers including MADCTL.
+
+3-point resistive touch calibration runs on first boot, stored in NVS. Erase flash to recalibrate.
 
 ---
 

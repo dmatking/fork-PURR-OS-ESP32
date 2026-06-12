@@ -65,8 +65,15 @@ extern int  purr_log_head;
 extern int  purr_log_count;
 #endif
 
+static int s_blue_count = 0;
+
 void purr_panic(const char* stop_code, purr_panic_level_t level, const char* msg)
 {
+    if (level == PURR_PANIC_BLUE) {
+        s_blue_count++;
+        if (s_blue_count >= 3)
+            level = PURR_PANIC_RED;
+    }
     printf("\n!!! PURR KERNEL PANIC [%s] !!!\n", stop_code ? stop_code : "?");
     printf("Level : %s\n", level == PURR_PANIC_RED ? "RED  :-(" : "BLUE :-/");
     printf("Reason: %s\n", msg ? msg : "(none)");

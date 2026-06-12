@@ -58,8 +58,8 @@ static const char* TAG = "ili9341";
 #define ILI_GMCTRP1  0xE0
 #define ILI_GMCTRN1  0xE1
 
-// MADCTL: MV=1 MX=1 BGR=1 → 320×240 landscape, correct colour order
-#define MADCTL_VAL   0x68
+// MADCTL: MX=1 → mirror columns to correct physical PCB wiring on S028R
+#define MADCTL_VAL   0x40
 
 // ── State ─────────────────────────────────────────────────────────────────────
 static spi_device_handle_t s_spi   = NULL;
@@ -68,21 +68,26 @@ static bool                s_ready = false;
 // ── Low-level SPI helpers (fully synchronous / blocking) ─────────────────────
 
 static void spi_cmd(uint8_t cmd) {
-    gpio_set_level((gpio_num_t)LCD_DC, 0);   // DC low = command
+    gpio_set_level((gpio_num_t)LCD_DC, 0);
     spi_transaction_t t = {};
-    t.length    = 8;
-    t.tx_buffer = &cmd;
-    t.flags     = 0;
+    t.length     = 8;
+    t.flags      = SPI_TRANS_USE_TXDATA;
+    t.tx_data[0] = cmd;
     spi_device_transmit(s_spi, &t);
 }
 
 static void spi_data(const void* data, size_t len) {
     if (!len) return;
-    gpio_set_level((gpio_num_t)LCD_DC, 1);   // DC high = data
+    gpio_set_level((gpio_num_t)LCD_DC, 1);
     spi_transaction_t t = {};
-    t.length    = len * 8;
-    t.tx_buffer = data;
-    t.flags     = 0;
+    t.length = len * 8;
+    if (len <= 4) {
+        t.flags = SPI_TRANS_USE_TXDATA;
+        memcpy(t.tx_data, data, len);
+    } else {
+        t.flags     = 0;
+        t.tx_buffer = data;
+    }
     spi_device_transmit(s_spi, &t);
 }
 
@@ -226,19 +231,17 @@ void display_ili9341_set_text_colors(uint16_t, uint16_t)  {}
 // ── Drawing primitives ────────────────────────────────────────────────────────
 
 // row buffer — 320 pixels × 2 bytes, reused across fill calls.
-static uint16_t s_row[320];
+static uint16_t s_row[CYD_TFT_WIDTH];
 
 void display_ili9341_fill_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
     if (!s_ready || w <= 0 || h <= 0) return;
-    int cols = (w <= 320) ? w : 320;
+    int cols = (w <= CYD_TFT_WIDTH) ? w : CYD_TFT_WIDTH;
     // byte-swap for big-endian SPI
     uint16_t sw = (uint16_t)((color >> 8) | (color << 8));
     for (int i = 0; i < cols; i++) s_row[i] = sw;
 
     set_addr_window((uint16_t)x, (uint16_t)y,
                     (uint16_t)(x + cols - 1), (uint16_t)(y + h - 1));
-    // DC already set to command by set_addr_window (ends on RAMWR cmd).
-    // Switch to data and blast pixels row by row.
     for (int r = 0; r < h; r++)
         spi_data(s_row, cols * 2);
 }
@@ -250,7 +253,7 @@ void display_ili9341_push_block(int16_t x, int16_t y, int16_t w, int16_t h, uint
 void display_ili9341_push_colors(int16_t x, int16_t y, int16_t w, int16_t h,
                                   const uint16_t* colors) {
     if (!s_ready || !colors || w <= 0 || h <= 0) return;
-    int cols = (w <= 320) ? w : 320;
+    int cols = (w <= CYD_TFT_WIDTH) ? w : CYD_TFT_WIDTH;
     set_addr_window((uint16_t)x, (uint16_t)y,
                     (uint16_t)(x + cols - 1), (uint16_t)(y + h - 1));
     for (int r = 0; r < h; r++) {
