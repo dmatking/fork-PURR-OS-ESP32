@@ -75,7 +75,7 @@ endif()
 # Touch driver: compile the source directly into lib_miniwin (same pattern as
 # MagiDOS drv_8086) to avoid cross-archive link-order issues where drv_touch
 # is resolved before lib_miniwin in the final executable link command.
-set(_drv_touch_dir "${CMAKE_CURRENT_SOURCE_DIR}/../drv_touch")
+set(_drv_touch_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_touch")
 set(_mw_touch_src "")
 if(TARGET_DEVICE STREQUAL "cyd_boot" OR TARGET_DEVICE STREQUAL "waveshare169"
    OR TARGET_DEVICE STREQUAL "cyd_s024c")
@@ -112,7 +112,8 @@ idf_component_register(
                  "${PURR_MW_HAL_DIR}"
                  "${PURR_MW_APPS_DIR}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/MiniWin/gl/fonts/truetype/mcufont"
-                 "${CMAKE_CURRENT_SOURCE_DIR}/../drv_shell"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_shell"
+                 "${_drv_touch_dir}"
     REQUIRES     ${_mw_requires}
 )
 
@@ -167,7 +168,7 @@ list(FILTER IDF_ALL_COMPONENT_INCLUDES EXCLUDE REGEX ".*/linux/include$")
 list(FILTER IDF_ALL_COMPONENT_INCLUDES EXCLUDE REGEX ".*/riscv/include$")
 set(_mw_include_extra "")
 if(PURR_ENABLE_LUA)
-    list(APPEND _mw_include_extra "${CMAKE_CURRENT_SOURCE_DIR}/../lib_lua/src")
+    list(APPEND _mw_include_extra "${CMAKE_CURRENT_SOURCE_DIR}/../../CoreOS/components/lib_lua/src")
 endif()
 if(PURR_ENABLE_MAGIDOS)
     list(APPEND _mw_include_extra
