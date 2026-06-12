@@ -213,7 +213,10 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
 
 # ── Device-specific: T-Deck ───────────────────────────────────────────────────
 elseif(TARGET_DEVICE STREQUAL "tdeck")
-    list(APPEND SRCS "../apps/kitten_ui/kitten_ui.cpp")
+    list(APPEND SRCS
+        "../apps/kitten_ui/kitten_ui.cpp"
+        "../system/kernel/modules/partition_manager.cpp"
+    )
     list(APPEND INCLUDE_DIRS "../apps/kitten_ui")
     if(BUILD_TDECK_PLUS)
         list(APPEND REQUIRES drv_gps)
@@ -384,7 +387,7 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
         PURR_TARGET_CYD_BOOT=1
     )
 elseif(TARGET_DEVICE STREQUAL "tdeck")
-    list(APPEND PURR_DEFS PURR_DISPLAY_ST7789=1 PURR_TARGET_TDECK=1)
+    list(APPEND PURR_DEFS PURR_DISPLAY_ST7789=1 PURR_TARGET_TDECK=1 PURR_HAS_PARTITION_MGR=1)
 elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
     list(APPEND PURR_DEFS
         PURR_DISPLAY_ST7789=1
