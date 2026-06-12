@@ -14,6 +14,7 @@ Usage:
   purrstrap clean [DEVICE]        delete build dir
   purrstrap bake [DEVICE|all]     build + pack to baked/<device>/
   purrstrap release [SET]         batch release build
+  purrstrap doctor                check environment and repo health
 
 Device config is stored in .purrstrap at the repo root.
 Build artifacts go to CoreOS/build_<device>/ (unchanged from IDF convention).
@@ -885,6 +886,195 @@ def cmd_init(cfg):
     cmd_status(cfg)
 
 
+# ── Doctor ───────────────────────────────────────────────────────────────────
+
+def cmd_doctor():
+    ok_count = 0
+    warn_count = 0
+    fail_count = 0
+
+    def _ok(label, detail=""):
+        nonlocal ok_count; ok_count += 1
+        tag = f"  {C_GRY}{detail}{C_RST}" if detail else ""
+        print(f"  {C_GRN}[ok]{C_RST}   {label}{tag}")
+
+    def _warn(label, detail="", fix=""):
+        nonlocal warn_count; warn_count += 1
+        tag = f"  {C_GRY}{detail}{C_RST}" if detail else ""
+        print(f"  {C_YLW}[warn]{C_RST} {label}{tag}")
+        if fix:
+            print(f"         {C_GRY}→ {fix}{C_RST}")
+
+    def _fail(label, detail="", fix=""):
+        nonlocal fail_count; fail_count += 1
+        tag = f"  {C_GRY}{detail}{C_RST}" if detail else ""
+        print(f"  {C_RED}[fail]{C_RST} {label}{tag}")
+        if fix:
+            print(f"         {C_GRY}→ {fix}{C_RST}")
+
+    div()
+    print(f"\n  {C_WHT}{C_BOLD}purrstrap doctor{C_RST}  {C_GRY}v{PURROS_VERSION}{C_RST}\n")
+
+    # ── Python ────────────────────────────────────────────────────────────────
+    pver = sys.version_info
+    if pver >= (3, 8):
+        _ok("Python", f"{pver.major}.{pver.minor}.{pver.micro}")
+    else:
+        _fail("Python 3.8+ required", f"found {pver.major}.{pver.minor}",
+              "upgrade Python")
+
+    # ── ESP-IDF ───────────────────────────────────────────────────────────────
+    idf = _idf_path()
+    if not idf:
+        _fail("ESP-IDF not found",
+              "IDF_PATH not set and not found in ~/esp/idf or ~/esp/esp-idf",
+              "cd ~/esp/idf && . ./export.sh")
+    else:
+        # Read version from idf_version.h or version.txt
+        ver_file = os.path.join(idf, "components", "esp_common", "include", "esp_idf_version.h")
+        ver_str = ""
+        if os.path.exists(ver_file):
+            with open(ver_file) as f:
+                content = f.read()
+            import re as _re
+            maj = _re.search(r'ESP_IDF_VERSION_MAJOR\s+(\d+)', content)
+            min_ = _re.search(r'ESP_IDF_VERSION_MINOR\s+(\d+)', content)
+            pat = _re.search(r'ESP_IDF_VERSION_PATCH\s+(\d+)', content)
+            if maj and min_ and pat:
+                ver_str = f"{maj.group(1)}.{min_.group(1)}.{pat.group(1)}"
+        label = f"ESP-IDF {ver_str}" if ver_str else "ESP-IDF (version unknown)"
+        if ver_str.startswith("5.3") or ver_str.startswith("5.4"):
+            _ok(label, idf)
+        elif ver_str:
+            _warn(label, idf, "PURR OS targets IDF 5.3.5 — other versions may have issues")
+        else:
+            _ok(f"ESP-IDF found", idf)
+
+    # ── IDF environment variables ─────────────────────────────────────────────
+    if os.environ.get("IDF_PATH"):
+        _ok("IDF_PATH set", os.environ["IDF_PATH"])
+    else:
+        _fail("IDF_PATH not set",
+              fix=". ~/esp/idf/export.sh")
+
+    if os.environ.get("ESP_ROM_ELF_DIR"):
+        _ok("ESP_ROM_ELF_DIR set")
+    else:
+        _warn("ESP_ROM_ELF_DIR not set",
+              "gdbinit generation will warn but builds still succeed",
+              ". ~/esp/idf/export.sh  (re-source to pick up all env vars)")
+
+    # ── IDF Python venv ───────────────────────────────────────────────────────
+    venv_matches = sorted(glob.glob(os.path.join(
+        os.path.expanduser("~"), ".espressif", "python_env", "idf*", "bin", "python"
+    )), reverse=True)
+    if venv_matches:
+        _ok("IDF Python venv", venv_matches[0])
+    else:
+        _warn("IDF Python venv not found",
+              "~/.espressif/python_env/idf*/bin/python missing",
+              "cd ~/esp/idf && ./install.sh esp32,esp32s3")
+
+    # ── esptool ───────────────────────────────────────────────────────────────
+    try:
+        r = subprocess.run([sys.executable, "-m", "esptool", "version"],
+                           capture_output=True, text=True, timeout=5)
+        ver_line = r.stdout.strip().splitlines()[0] if r.stdout.strip() else "?"
+        _ok("esptool", ver_line)
+    except Exception:
+        _fail("esptool not found", fix="pip install esptool")
+
+    # ── pyserial ──────────────────────────────────────────────────────────────
+    try:
+        import serial
+        _ok("pyserial", getattr(serial, "__version__", "installed"))
+    except ImportError:
+        _warn("pyserial not installed",
+              "port auto-detection disabled",
+              "pip install pyserial")
+
+    # ── Repo layout ───────────────────────────────────────────────────────────
+    print()
+    for d_path, label in [
+        (COREOS_DIR,  "CoreOS/"),
+        (DRIVERS_DIR, "drivers/"),
+        (os.path.join(REPO_DIR, "ui"), "ui/"),
+        (DEVICES_DIR, "devices/"),
+    ]:
+        if os.path.isdir(d_path):
+            _ok(label)
+        else:
+            _fail(f"{label} missing", fix="repo may be corrupted — check git status")
+
+    # ── SDK defaults ──────────────────────────────────────────────────────────
+    sdk_targets = os.path.join(REPO_DIR, "SDK", "targets")
+    missing_defaults = []
+    for device in DEVICES:
+        target = "cyd" if device == "cyd_boot" else device
+        f = os.path.join(sdk_targets, f"{target}.defaults")
+        if not os.path.exists(f):
+            missing_defaults.append(target)
+    if missing_defaults:
+        _warn("Missing sdkconfig defaults",
+              f"SDK/targets/: {' '.join(missing_defaults)}",
+              "build will use existing sdkconfig.defaults — may use wrong settings")
+    else:
+        _ok("SDK/targets/ defaults", f"{len(DEVICES)} device defaults present")
+
+    # ── Device overlay folders ────────────────────────────────────────────────
+    missing_devs = []
+    for device in DEVICES:
+        # cyd_boot shares the cyd HAL folder — no separate overlay needed
+        folder = "cyd" if device == "cyd_boot" else device
+        d_path = os.path.join(DEVICES_DIR, folder)
+        if not os.path.isdir(d_path):
+            missing_devs.append(device)
+    if missing_devs:
+        _warn("Missing device overlay folders",
+              f"devices/: {' '.join(missing_devs)}")
+    else:
+        _ok("Device overlay folders", f"{len(DEVICES)} device folders present")
+
+    # ── .purrstrap config ─────────────────────────────────────────────────────
+    print()
+    if os.path.exists(CFG_FILE):
+        try:
+            with open(CFG_FILE) as f:
+                cfg = json.load(f)
+            device = cfg.get("device", "?")
+            _ok(".purrstrap config", f"device={device}  ui={cfg.get('ui_kernel','?')}")
+        except Exception as e:
+            _warn(".purrstrap exists but is malformed", str(e),
+                  "purrstrap init  to reconfigure")
+    else:
+        _warn(".purrstrap not found",
+              "no device configured",
+              "purrstrap init")
+
+    # ── Serial ports ──────────────────────────────────────────────────────────
+    ports = _scan_ports()
+    if ports:
+        _ok(f"{len(ports)} serial port(s) detected",
+            "  ".join(p[0] for p in ports))
+    else:
+        _warn("No serial ports detected", "device not connected or driver missing")
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    print()
+    div()
+    total = ok_count + warn_count + fail_count
+    print(f"\n  {C_GRN}{ok_count} ok{C_RST}  "
+          f"{C_YLW}{warn_count} warnings{C_RST}  "
+          f"{C_RED}{fail_count} failures{C_RST}  "
+          f"{C_GRY}({total} checks){C_RST}\n")
+    if fail_count:
+        print(f"  {C_RED}Build will likely fail — fix failures above first.{C_RST}\n")
+    elif warn_count:
+        print(f"  {C_YLW}Builds should work. Warnings won't block compilation.{C_RST}\n")
+    else:
+        print(f"  {C_GRN}Everything looks good. Ready to build.{C_RST}\n")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
@@ -915,7 +1105,7 @@ subcommands:
                    version=f"purrstrap {PURROS_VERSION} / KITT {KITT_VERSION}")
     p.add_argument("subcommand", nargs="?", default="status",
                    choices=["init","status","list","build","flash","install",
-                            "monitor","clean","bake","release","scan"])
+                            "monitor","clean","bake","release","scan","doctor"])
     p.add_argument("args", nargs="*", help="subcommand arguments")
     args = p.parse_args()
 
@@ -934,6 +1124,9 @@ subcommands:
 
     elif sub == "list":
         cmd_list()
+
+    elif sub == "doctor":
+        cmd_doctor()
 
     elif sub == "scan":
         ports = _scan_ports()
