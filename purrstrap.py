@@ -523,9 +523,11 @@ def cmd_flash(cfg, port=None):
         "--flash_freq", d["flash_freq"],
         boot_offset,  os.path.join(bdir, "bootloader", "bootloader.bin"),
         "0x8000",     os.path.join(bdir, "partition_table", "partition-table.bin"),
-        "0xe000",     os.path.join(bdir, "ota_data_initial.bin"),
         app_offset,   os.path.join(bdir, "purr_os_core.bin"),
     ]
+    ota_bin = os.path.join(bdir, "ota_data_initial.bin")
+    if os.path.exists(ota_bin):
+        cmd += ["0xe000", ota_bin]
     if os.path.exists(spiffs_img):
         cmd += [spiffs_offset, spiffs_img]
         info(f"including SPIFFS at {spiffs_offset}")
