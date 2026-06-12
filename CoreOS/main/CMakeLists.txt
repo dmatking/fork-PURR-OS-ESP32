@@ -189,6 +189,11 @@ elseif(TARGET_DEVICE STREQUAL "cyd_boot")
         "../system/kernel/modules/purr_bootloader.cpp"
         "../system/kernel/modules/stub_managers.cpp"
         "../system/kernel/modules/purr_input.cpp"
+        "../system/kernel/modules/purr_sys_drv.cpp"
+        "../system/kernel/modules/purr_drv_registry.cpp"
+        "../system/kernel/modules/purr_drv.cpp"
+        "../system/kernel/modules/purr_drv_interp.cpp"
+        "../system/kernel/modules/device_info_drv.cpp"
     )
     set(REQUIRES
         bblanchon__arduinojson
