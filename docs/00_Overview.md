@@ -1,68 +1,96 @@
 # PURR OS — Overview
 
-**PURR OS v0.9.5 / KITT v0.6.0**
-
-> P.U.R.R. = Portable Unified Runtime & Radio Operating System
-
-PURR OS is a modular embedded operating system for ESP32 devices. It runs on cheap $10–$30 LCD boards, provides a full windowed UI via the **MiniWin** window manager, executes **Lua scripts** from an SD card, and optionally manages LoRa radio, Bluetooth, and OTA firmware updates.
+**P.U.R.R.** = Portable Unified Runtime & Radio Operating System  
+Powered by the **K.I.T.T** (Kernel Interface Translation Toolkit) kernel — a modular C++ embedded OS for ESP32 hardware, built on pure ESP-IDF 5.3.5.
 
 ---
 
-## Hardware targets
+## What is PURR OS?
 
-| Target ID | Board | Display | Touch | Notes |
-|-----------|-------|---------|-------|-------|
-| `cyd_s024c` | ESP32-2432S024C | ILI9341 320×240 | CST816S I2C | Recommended CYD target |
-| `cyd_s028r` | ESP32-2432S028R | ILI9341 320×240 | XPT2046 SPI | Original CYD |
-| `cyd` | Alias | — | — | Maps to s024c/s028r via variant flag |
-| `cyd_boot` | Any CYD | ILI9341 | CST816S | Factory bootloader only |
-| `tdeck_plus` | LilyGo T-Deck Plus | ST7789 320×240 | GT911 cap | Full OS |
-| `jc3248w535` | JC3248W535 3.5″ | ST7796 480×320 | GT911 I2C | 8MB PSRAM |
-| `waveshare169` | Waveshare 1.69″ | ST7789 240×280 | CST816S | WIP |
-| `heltec` | Heltec WiFi LoRa 32 V3 | SSD1306 OLED | — | Headless / LoRa only |
+PURR OS is a full embedded operating system for ESP32 devices with:
+
+- **MiniWin WM** — a window manager with touch, mouse cursor, keyboard navigation
+- **KittenUI** — a text-mode shell for small/headless displays (OLED, T-Deck)
+- **Kernel modules** — WiFi, Bluetooth, LoRa, GPS, SD card, power management
+- **App runtime** — Lua 5.4 scripting, MicroPython, PDL user-loaded drivers
+- **MagiDOS** — 8086 DOS emulator (requires 8MB PSRAM)
+- **MagicMac** — Mac Plus emulator (requires 8MB PSRAM)
 
 ---
 
-## System layers
+## Supported Devices
+
+| Target | Chip | Display | Touch | Notes |
+|--------|------|---------|-------|-------|
+| `tdeck_plus` | ESP32-S3 | ST7789 320×240 | GT911 cap | keyboard, trackball, SD, GPS opt |
+| `jc3248w535` | ESP32-S3 | ST7796 480×320 | GT911 cap | 8MB PSRAM, SD |
+| `cyd_s028r` | ESP32 | ILI9341 320×240 | XPT2046 resis | original CYD |
+| `cyd_s024c` | ESP32 | ILI9341 240×320 | CST816S cap | newer CYD |
+| `cyd_boot` | ESP32 | ILI9341 | CST816S | factory kernel only |
+| `heltec` | ESP32-S3 | SSD1306 OLED | — | SX1262 LoRa |
+| `tdeck` | ESP32-S3 | ST7789 320×240 | — | trackball, SX1262 LoRa (WIP) |
+| `waveshare169` | ESP32-S3 | ST7789 240×280 | CST816S cap | WIP |
+| `tembed_cc1101` | ESP32-S3 | ST7789 170×320 | — | CC1101 sub-GHz, rotary encoder |
+
+---
+
+## Repository Layout
 
 ```
-┌─────────────────────────────────────────────┐
-│  Lua scripts (.paws / .claw)  SD card apps  │  User scripts
-├─────────────────────────────────────────────┤
-│  MiniWin app windows  (devices/apps/)       │  App layer
-│  WCE shell / Blackberry shell               │  UI shell
-├─────────────────────────────────────────────┤
-│  MiniWin WM  (lib_miniwin)                  │  Window manager
-├─────────────────────────────────────────────┤
-│  KITT kernel                                │  Kernel services
-│  WiFi · BT · LoRa · SD · Power · OTA       │
-├─────────────────────────────────────────────┤
-│  ESP-IDF 5.3.5  (pure, no Arduino)          │  Platform
-└─────────────────────────────────────────────┘
+PURR-OS-ESP32/
+  CoreOS/          base kernel (ESP-IDF project root)
+    main/          CMakeLists.txt — device selection + module flags
+    system/        kernel/, bridge/, system/, micropython/
+    components/    lib_lua, lib_arduino, lib_nanopb, lib_radiolib, lib_mesh_pb
+    sdkconfig_*    per-device sdkconfig cache
+    build_*/       per-device build dirs (gitignored)
+
+  drivers/         hardware drivers (ESP-IDF components)
+    drv_display/   ILI9341, ST7789, ST7796, SSD1306
+    drv_touch/     GT911, XPT2046, CST816S, MXT336T
+    drv_wifi/      WiFi manager
+    drv_bt/        Bluetooth manager
+    drv_lora/      LoRa radio (SX1262, SX1276, RAK3172 kernels)
+    drv_cc1101/    CC1101 sub-GHz radio
+    drv_gps/       GPS manager (u-blox MIA-M10Q)
+    drv_hid/       keyboard matrix, USB HID
+    drv_shell/     USB serial debug REPL
+    drv_lte/       LTE manager (experimental)
+
+  ui/              UI frameworks (ESP-IDF components)
+    lib_miniwin/   MiniWin WM + device HAL bridge
+    lib_tftespi/   TFT_eSPI display backend
+    purr_wm/       PURR WM shell adapter
+
+  devices/         per-device HAL overlays
+    tdeck_plus/    hal_lcd, hal_touch, hal_input, purr_app, miniwin_config
+    cyd/           hal_*, purr_app, miniwin_config (wce/blackberry/luna themes)
+    cyd_s028r/     hal_*, purr_app, miniwin_config
+    cyd_s024c/     hal_*, purr_app, miniwin_config
+    jc3248w535/    hal_*, purr_app, miniwin_config
+    waveshare169/  hal_*, purr_app, miniwin_config
+    heltec/        hal stubs
+    tdeck/         hal stubs
+    tembed_cc1101/ hal stubs
+    generic/       fallback stubs
+    apps/          shared app source compiled into the WM
+
+  baked/           release outputs — flash.sh + bins per device (gitignored)
+  purrstrap.py     build system CLI (replaces SDK/sdk_core.py)
+  SDK/             legacy; targets/*.defaults still used by purrstrap
+  magidos/         MagiDOS 8086 emulator subproject
 ```
 
 ---
 
-## Key concepts
+## Quick reference
 
-- **KITT** — the kernel singleton (`extern KITT kitt`). Owns all hardware subsystems. See [03_KITT_API.md](03_KITT_API.md).
-- **MiniWin** — embedded window manager. Each app is a `mw_handle_t` window with paint + message callbacks. See [04_MiniWin_Shell.md](04_MiniWin_Shell.md).
-- **App catalog** — static list of built-in apps (`purr_catalog[]`). Shell Start menu and Blackberry drawer both read from it.
-- **Lua scripts** — `.paws` (sandboxed) and `.claw` (admin) scripts on `/sdcard/apps/`. Launched via `app_lua_window_create()`. See [05_Lua_Scripting.md](05_Lua_Scripting.md).
-- **SDK** — Python wizard (`SDK/sdk_core.py`) for configuring, building, and flashing. See [07_Build_System.md](07_Build_System.md).
+```bash
+./purrstrap.py list                      # show all devices + build status
+./purrstrap.py init                      # configure device wizard
+./purrstrap.py build tdeck_plus          # build
+./purrstrap.py install tdeck_plus -p /dev/ttyAMC0  # build + flash
+./purrstrap.py bake all                  # build + pack all devices to baked/
+```
 
----
-
-## Docs index
-
-| File | Contents |
-|------|----------|
-| [01_Quick_Start.md](01_Quick_Start.md) | Build, flash, monitor in 5 minutes |
-| [02_Architecture.md](02_Architecture.md) | Component graph, boot sequence, partition layout |
-| [03_KITT_API.md](03_KITT_API.md) | Full KITT C++ kernel API reference |
-| [04_MiniWin_Shell.md](04_MiniWin_Shell.md) | Shell themes, window system, taskbar |
-| [05_Lua_Scripting.md](05_Lua_Scripting.md) | Writing .paws/.claw scripts, win.* / sd.* / kitt.* API |
-| [06_App_Development.md](06_App_Development.md) | Writing MiniWin apps in C++ |
-| [07_Build_System.md](07_Build_System.md) | CMake flags, SDK wizard, all feature toggles |
-| [08_Devices.md](08_Devices.md) | Hardware targets, pin tables, device JSON |
-| [09_Partition_Manager.md](09_Partition_Manager.md) | OTA slots, SD firmware install, pm_* API |
+See [01_Quick_Start.md](01_Quick_Start.md) for full setup instructions.

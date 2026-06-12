@@ -10,7 +10,7 @@
 
 // ── WiFi stubs ────────────────────────────────────────────────────────────────
 void wifi_manager_init()                                {}
-void wifi_manager_update()                              {}
+void wifi_manager_tick()                              {}
 void wifi_manager_deinit()                              {}
 bool wifi_manager_enabled()                             { return false; }
 void wifi_manager_enable()                              {}
@@ -33,7 +33,7 @@ bool wifi_manager_yielded()                             { return false; }
 
 // ── Power manager stubs ───────────────────────────────────────────────────────
 void power_manager_init(uint16_t)                       {}
-void power_manager_update()                             {}
+void power_manager_tick()                             {}
 void power_manager_deinit()                             {}
 void power_manager_refresh_battery()                    {}
 int  power_manager_battery_percent()                    { return 0; }
@@ -44,3 +44,6 @@ void power_manager_cpu_set_freq(int)                    {}
 int  power_manager_cpu_get_freq()                       { return 240; }
 
 #endif  // PURR_IS_BOOTLOADER_IMG
+
+void wifi_manager_drv_register(bool e)  { (void)e; }
+void power_manager_drv_register(bool e, uint16_t) { (void)e; }

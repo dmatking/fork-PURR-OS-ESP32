@@ -83,21 +83,81 @@ bool device_config_load(const char* path, device_config_t* out) {
 
 bool device_config_default(device_config_t* out) {
     memset(out, 0, sizeof(*out));
-#ifdef PURR_TARGET_TDECK_PLUS
-    strlcpy(out->device,   "tdeck_plus", sizeof(out->device));
-    strlcpy(out->display,  "st7789",     sizeof(out->display));
-    strlcpy(out->touch,    "gt911",      sizeof(out->touch));
-    out->display_w   = 320;
-    out->display_h   = 240;
-    out->psram       = true;
-    out->flash_mb    = 16;
-    out->sd          = true;
-    out->wifi        = true;
-    out->bt          = true;
     out->cpu_max_mhz = 240;
-    ESP_LOGW(TAG, "device.json missing — using compile-time tdeck_plus defaults");
-    return true;
+    out->friends_ram_threshold_kb = 64;
+    strlcpy(out->lora_region, "US", sizeof(out->lora_region));
+
+#if defined(PURR_TARGET_TDECK_PLUS)
+    strlcpy(out->device,  "tdeck_plus", sizeof(out->device));
+    strlcpy(out->display, "st7789",     sizeof(out->display));
+    strlcpy(out->touch,   "gt911",      sizeof(out->touch));
+    out->display_w = 320; out->display_h = 240;
+    out->psram = true; out->flash_mb = 16; out->sd = true;
+    out->wifi = true; out->bt = true;
+
+#elif defined(PURR_TARGET_TDECK)
+    strlcpy(out->device,  "tdeck",  sizeof(out->device));
+    strlcpy(out->display, "st7789", sizeof(out->display));
+    strlcpy(out->touch,   "none",   sizeof(out->touch));
+    out->display_w = 160; out->display_h = 80;
+    out->flash_mb = 16; out->sd = true;
+    out->wifi = true; out->bt = true;
+
+#elif defined(PURR_TARGET_JC3248W535)
+    strlcpy(out->device,  "jc3248w535", sizeof(out->device));
+    strlcpy(out->display, "st7796",     sizeof(out->display));
+    strlcpy(out->touch,   "gt911",      sizeof(out->touch));
+    out->display_w = 480; out->display_h = 320;
+    out->psram = true; out->flash_mb = 16; out->sd = true;
+    out->wifi = true; out->bt = true;
+
+#elif defined(PURR_TARGET_CYD) || defined(PURR_TARGET_CYD_S028R)
+    strlcpy(out->device,  "cyd",     sizeof(out->device));
+    strlcpy(out->display, "ili9341", sizeof(out->display));
+    strlcpy(out->touch,   "xpt2046", sizeof(out->touch));
+    out->display_w = 320; out->display_h = 240;
+    out->flash_mb = 4;
+    out->wifi = true; out->bt = true;
+
+#elif defined(PURR_TARGET_CYD_S024C)
+    strlcpy(out->device,  "cyd_s024c", sizeof(out->device));
+    strlcpy(out->display, "ili9341",   sizeof(out->display));
+    strlcpy(out->touch,   "cst816s",   sizeof(out->touch));
+    out->display_w = 240; out->display_h = 320;
+    out->flash_mb = 4;
+    out->wifi = true; out->bt = true;
+
+#elif defined(PURR_TARGET_HELTEC)
+    strlcpy(out->device,  "heltec",  sizeof(out->device));
+    strlcpy(out->display, "ssd1306", sizeof(out->display));
+    strlcpy(out->touch,   "none",    sizeof(out->touch));
+    out->display_w = 128; out->display_h = 64;
+    out->flash_mb = 8;
+    out->wifi = true; out->bt = true;
+
+#elif defined(PURR_TARGET_WAVESHARE169)
+    strlcpy(out->device,  "waveshare169", sizeof(out->device));
+    strlcpy(out->display, "st7789",       sizeof(out->display));
+    strlcpy(out->touch,   "none",         sizeof(out->touch));
+    out->display_w = 240; out->display_h = 280;
+    out->flash_mb = 4;
+    out->wifi = true; out->bt = true;
+
+#elif defined(PURR_TARGET_TEMBED_CC1101)
+    strlcpy(out->device,  "tembed_cc1101", sizeof(out->device));
+    strlcpy(out->display, "st7789",        sizeof(out->display));
+    strlcpy(out->touch,   "none",          sizeof(out->touch));
+    out->display_w = 135; out->display_h = 240;
+    out->flash_mb = 4; out->cc1101 = true;
+    out->wifi = true; out->bt = true;
+
 #else
+    strlcpy(out->device, "unknown", sizeof(out->device));
+    ESP_LOGE(TAG, "no compile-time device target defined — config unknown");
     return false;
 #endif
+
+    ESP_LOGI(TAG, "baked-in config: device=%s display=%s %dx%d",
+             out->device, out->display, out->display_w, out->display_h);
+    return true;
 }

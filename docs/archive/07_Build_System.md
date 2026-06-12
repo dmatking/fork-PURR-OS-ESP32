@@ -92,6 +92,10 @@ Each target gets its own isolated build directory so switching targets doesn't r
 | `cyd_s024c` | `CoreOS/build_cyd_s024c/` |
 | `cyd_boot` | `CoreOS/build_cyd_boot/` |
 | `heltec` | `CoreOS/build_heltec/` |
+| `tembed_cc1101` | `CoreOS/build_tembed_cc1101/` |
+| `tdeck_plus` | `CoreOS/build_tdeck_plus/` |
+| `jc3248w535` | `CoreOS/build_jc3248/` |
+| `waveshare169` | `CoreOS/build_waveshare/` |
 
 sdkconfig is also per-target: `CoreOS/sdkconfig_cyd`, etc.
 
@@ -99,7 +103,13 @@ sdkconfig is also per-target: `CoreOS/sdkconfig_cyd`, etc.
 
 ## Manual build example
 
+> **Prefer `sdk_core.py` over `idf.py` directly.** The SDK wrapper sets the correct build directory, sdkconfig, and feature flags. Raw `idf.py` is for one-off experiments only.
+
 ```bash
+# Recommended
+python SDK/sdk_core.py --target cyd_s024c --build
+
+# Or raw idf.py (advanced)
 cd CoreOS
 source ~/esp/idf/export.sh
 

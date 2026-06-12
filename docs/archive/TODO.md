@@ -142,5 +142,29 @@
 
 ---
 
-## 15. More (TBD)
+## 15. KITT Driver Overhaul — Plug-and-Play PDL Drivers
+**KITT 0.7.0** — modular driver layer; `.drv` scripts hot-loaded from SD card
+
+### Implemented
+- [x] PDL interpreter (`purr_drv_interp.cpp`) — custom C-subset: int vars, if/else, while, functions, static locals
+- [x] Built-in hardware APIs: `gpio_mode/read/write`, `i2c_init/write/read`, `adc_read`, `delay`, `millis`, `mem_free`, `log`, `log_int`, `streq`, `arg`, `lora_send`, `lora_rssi`, `wifi_connected`
+- [x] Driver manager (`purr_drv.cpp`) — load/unload up to 8 `.drv` scripts, calls `init()/tick()/cmd()/deinit()`
+- [x] `drvmgr` shell command — `load`, `unload`, `list`, `cmd`, `tick`, `reload` subcommands
+- [x] `.drv` files loaded from `/sdcard/drvdebug/`
+- [x] Static local variables persist across `tick()` calls
+- [x] `tick()` called every ~100ms from main loop
+
+### Future
+- [ ] Make KITT core truly minimal — move all hardware drivers to PDL layer
+- [ ] PDL string variables (currently strings are literals + `arg()` only)
+- [ ] PDL arrays
+- [ ] `wifi_connected()` real implementation (stub)
+- [ ] `adc_read()` real implementation (needs oneshot ADC setup)
+- [ ] Hot-reload on SD card file change (inotify-equivalent via FAT polling)
+- [ ] Driver manifest / auto-load on boot from `/sdcard/drvdebug/autoload.txt`
+- [ ] Example drivers shipped in `/sdcard/drvdebug/blink.drv`, `i2c_scan.drv`
+
+---
+
+## 16. More (TBD)
 - [ ] *(additional items to be added)*

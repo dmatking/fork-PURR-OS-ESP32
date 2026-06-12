@@ -1,109 +1,130 @@
-# Quick Start
-
-Build and flash PURR OS to a CYD board in five minutes.
-
----
+# PURR OS — Quick Start
 
 ## Prerequisites
 
-- **ESP-IDF 5.3.5** installed and sourced (`export.sh` / `export.ps1`)
-- **Python 3.8+** in PATH
-- USB cable connected to your board
+- **ESP-IDF v5.3.5** installed at `~/esp/idf`  
+  `IDF_PATH` must be set and `export.sh` sourced, or purrstrap will find it automatically.
+- **Python 3.8+** with `pyserial` for port auto-detection (`pip install pyserial`)
+- **esptool** (`pip install esptool`)
+
+One-time IDF setup:
+```bash
+cd ~/esp/idf
+./install.sh esp32,esp32s3
+. ./export.sh
+```
 
 ---
 
-## Linux / macOS
+## Build your first firmware
 
 ```bash
-# One-time setup
-./SDK/setup_linux.sh          # installs ESP-IDF 5.3.5 if not present
+git clone <repo>
+cd PURR-OS-ESP32
 
-# Interactive wizard — configure target, modules, port
-python SDK/sdk_core.py --configure
+# Configure (pick device, modules, ports)
+./purrstrap.py init
 
 # Build
-python SDK/sdk_core.py --build
+./purrstrap.py build
 
 # Flash
-python SDK/sdk_core.py --flash
+./purrstrap.py flash -p /dev/ttyUSB0
+
+# Or build + flash in one step
+./purrstrap.py install -p /dev/ttyUSB0
 
 # Monitor serial output
-python SDK/sdk_core.py --monitor
-
-# Build + flash in one step
-python SDK/sdk_core.py --build --flash
+./purrstrap.py monitor -p /dev/ttyUSB0
 ```
 
-## Windows (PowerShell)
-
-```powershell
-# Interactive wizard
-.\SDK\SDK.ps1
-
-# Quick build+flash
-.\SDK\SDK.ps1 -Target cyd_s024c -Build -Flash COM8
-```
-
----
-
-## Manual idf.py (advanced)
+### Override device without reconfiguring
 
 ```bash
-cd CoreOS
-idf.py -DTARGET_DEVICE=cyd -DPURR_UI_KERNEL=miniwin \
-       -DPURR_ENABLE_LUA=1 -DPURR_UI_THEME=wce \
-       set-target esp32 build
-idf.py -p /dev/ttyUSB0 flash monitor
+./purrstrap.py build tdeck_plus
+./purrstrap.py flash tdeck_plus -p /dev/ttyAMC0
+./purrstrap.py install cyd_s028r -p /dev/ttyUSB0
 ```
 
----
-
-## First-time full flash (factory + ota_0)
-
-Use when flashing a brand-new board or after a partition table change:
+### Clean build
 
 ```bash
-python SDK/sdk_core.py --full-flash
+./purrstrap.py build --clean
+./purrstrap.py build tdeck_plus --clean
 ```
-
-This writes the partition table, factory bootloader, and ota_0 OS image in one shot.
 
 ---
 
-## Flash addresses (CYD)
+## Flashing T-Deck Plus
 
-| Region | Address | Size |
-|--------|---------|------|
-| Partition table | `0x8000` | 4 KB |
-| Factory bootloader | `0x10000` | 1.0625 MB |
-| ota_0 (OS) | `0x120000` | 1.4375 MB |
-| ota_1 | `0x290000` | 1.0 MB |
-| SPIFFS | `0x390000` | 448 KB |
+The T-Deck Plus uses a USB-C port that shows up as `/dev/ttyAMC0` on Linux.
+
+```bash
+./purrstrap.py install tdeck_plus -p /dev/ttyAMC0
+```
+
+Full erase before first flash (recommended):
+```bash
+python -m esptool --chip esp32s3 -p /dev/ttyAMC0 erase_flash
+./purrstrap.py flash tdeck_plus -p /dev/ttyAMC0
+```
 
 ---
 
-## Putting scripts on the SD card
+## Release builds (all devices)
 
-SD card must be formatted **FAT32**. PURR OS mounts it at `/sdcard`.
+```bash
+# Build all devices + pack to baked/<device>/
+./purrstrap.py release all
 
+# Build a specific set
+./purrstrap.py release miniwin      # CYD + JC + Waveshare + T-Deck Plus
+./purrstrap.py release cyd          # CYD variants only
+
+# Build + pack a single device
+./purrstrap.py bake tdeck_plus
 ```
-/sdcard/
-  apps/
-    hello.paws      ← userland Lua app
-    admin.claw      ← admin Lua app (full KITT access)
-```
 
-Scripts appear automatically in the Apps launcher and Blackberry app drawer.
+Each `baked/<device>/` folder contains:
+- `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`, `purr_os_core.bin`
+- `spiffs.bin` (if applicable)
+- `flash.sh` — ready-to-run esptool command
+- `FLASH_GUIDE.md` — offsets, web flasher instructions, device notes
 
 ---
 
-## Choosing a shell theme
+## purrstrap subcommands
 
-In the SDK wizard, after selecting `ui_kernel = miniwin`, press `[t]` to pick:
+| Command | Description |
+|---------|-------------|
+| `init` | Interactive wizard — pick device, modules, ports → `.purrstrap` |
+| `status` | Show current config and build state |
+| `list` | List all devices with build/bake status |
+| `build [DEVICE]` | Build firmware |
+| `flash [DEVICE] [-p PORT]` | Flash to device |
+| `install [DEVICE] [-p PORT]` | Build + flash |
+| `monitor [-p PORT]` | Serial monitor (Ctrl+] to exit) |
+| `clean [DEVICE]` | Delete build dir |
+| `bake [DEVICE\|SET\|all]` | Build + pack to baked/ |
+| `release [SET]` | Batch release build |
+| `scan` | Scan for connected serial devices |
 
-| Theme | Description |
-|-------|-------------|
-| `wce` | Windows CE-style gray shell, Start menu, taskbar |
-| `blackberry` | Green-on-black phosphor terminal, dock, swipe-up drawer |
+---
 
-Or pass directly: `-DPURR_UI_THEME=blackberry`
+## Module flags
+
+Pass `--device` to override the configured device for a single command. All other flags are persistent in `.purrstrap` after `init`.
+
+To enable optional modules at build time without going through `init`:
+```bash
+# Edit .purrstrap directly — it's plain JSON
+cat .purrstrap
+```
+
+Key module keys: `wifi`, `bt`, `lora`, `mesh`, `gps`, `magidos`, `magicmac`, `lua`, `micropython`, `shell`
+
+---
+
+## Legacy SDK (deprecated)
+
+`SDK/sdk_core.py` is still present but no longer maintained. Use `purrstrap.py` instead. The `SDK/targets/*.defaults` files are still used by purrstrap for sdkconfig defaults.

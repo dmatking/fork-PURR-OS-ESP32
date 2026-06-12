@@ -12,7 +12,8 @@
 | `tdeck_plus` | ESP32-S3 | ST7789 | 320×240 | GT911 cap | 16MB | — | ✅ Supported |
 | `jc3248w535` | ESP32-S3 | ST7796 | 480×320 | GT911 I2C | 16MB | 8MB | 🚧 WIP |
 | `waveshare169` | ESP32-S3 | ST7789 | 240×280 | CST816S | 4MB | — | 🚧 WIP |
-| `heltec` | ESP32-S3 | SSD1306 | 128×64 | — | 8MB | — | ✅ LoRa only |
+| `heltec` | ESP32-S3 | SSD1306 | 128×64 | — | 8MB | — | ✅ LoRa / KittenUI |
+| `tembed_cc1101` | ESP32-S3 | ST7789 | 170×320 | — | 16MB | 8MB | ✅ CC1101 / KittenUI |
 | `tdeck` | ESP32-S3 | ST7789 | 320×240 | trackball | 16MB | — | 🚧 No touch |
 
 ---

@@ -19,6 +19,8 @@ static const char *TAG = "kitt";
 #  include "bt_manager.h"
 #endif
 #include "modules/power_manager.h"
+#include "modules/purr_sys_drv.h"
+#include "modules/purr_drv_registry.h"
 
 #ifdef PURR_HAS_LORA
 #  include "lora_manager.h"
@@ -293,14 +295,11 @@ bool KITT::init(const char* device_json_path) {
     if (!spiffs_ok)
         ESP_LOGW("kitt", "SPIFFS not found — running without filesystem (launcher mode)");
 
-    // Step 3: parse device.json — fall back to compile-time defaults if missing or no SPIFFS
-    if (!spiffs_ok || !device_config_load(device_json_path, &cfg)) {
-        ESP_LOGI(TAG, "device.json not found — trying compile-time defaults");
-        if (!device_config_default(&cfg)) {
-            ESP_LOGE(TAG, "ERR 0x01 no device config");
-            purr_panic(PURR_STOP_CATFAIL, PURR_PANIC_BLUE, "device.json missing, no default");
-            return false;
-        }
+    // Step 3: device config — always baked-in at compile time, no JSON dependency
+    if (!device_config_default(&cfg)) {
+        ESP_LOGE(TAG, "ERR 0x01 no device config");
+        purr_panic(PURR_STOP_CATFAIL, PURR_PANIC_BLUE, "no compile-time device config");
+        return false;
     }
 
     // Step 5: init display (skipped for MiniWin targets — mw_init() calls mw_hal_lcd_init())
@@ -368,21 +367,7 @@ bool KITT::init(const char* device_json_path) {
         }
     }
 
-    // Step 9: WiFi (skip in MagicMac mode to save memory)
-    if (cfg.wifi && boot_mode != BOOT_MAGICMAC) {
-        wifi_manager_init();
-        log("KITT", "wifi OK");
-    }
-
-    // Step 10: BT (skip in MagicMac mode to save memory)
-#ifdef PURR_HAS_BT
-    if (cfg.bt && boot_mode != BOOT_MAGICMAC) {
-        bt_manager_init();
-        log("KITT", "bt OK");
-    }
-#endif
-
-    // Step 10.5: SD card
+    // Step 10.5: SD card (before driver init — drivers may need SD)
 #ifdef PURR_HAS_PARTITION_MGR
     if (cfg.sd) {
         pm_init();
@@ -390,33 +375,30 @@ bool KITT::init(const char* device_json_path) {
     }
 #endif
 
-    // Step 11: LoRa
+    // Steps 9-14: register + init all hardware drivers via unified registry
+    // MagicMac mode skips WiFi/BT to save memory
+    if (boot_mode == BOOT_MAGICMAC) {
+        const_cast<device_config_t&>(cfg).wifi = false;
+        const_cast<device_config_t&>(cfg).bt   = false;
+    }
+    purr_drv_register_all(&cfg);
+    sys_drv_init_all();
+
+    // Post-init checks for radio subsystems
 #ifdef PURR_HAS_LORA
     if (cfg.lora) {
-        uint32_t freq = (strcmp(cfg.lora_region, "EU") == 0) ? 868000000UL : 915000000UL;
-        lora_manager_init(freq, 14);
-        if (lora_manager_enabled()) {
-            strncpy(os_name_buf, "PURR OS", sizeof(os_name_buf));
-            log("KITT", "lora OK — PURR OS");
-        } else {
-            log("KITT", "ERR:0x03 LoRa init fail — PUR OS");
-        }
+        if (lora_manager_enabled()) { strncpy(os_name_buf, "PURR OS", sizeof(os_name_buf)); log("KITT", "lora OK — PURR OS"); }
+        else log("KITT", "ERR:0x03 LoRa init fail — PUR OS");
     }
 #endif
-
-    // Step 11b: CC1101 sub-GHz radio
 #ifdef PURR_HAS_CC1101
     if (cfg.cc1101) {
-        cc1101_manager_init(433.92f, 4.8f, 5.0f, 58.0f, 10);
-        if (cc1101_manager_enabled()) {
-            log("KITT", "cc1101 OK");
-        } else {
-            log("KITT", "ERR:0x04 CC1101 init fail");
-        }
+        if (cc1101_manager_enabled()) log("KITT", "cc1101 OK");
+        else log("KITT", "ERR:0x04 CC1101 init fail");
     }
 #endif
 
-    // Step 12: Mesh stack (Meshtastic-compatible, requires LoRa)
+    // Mesh stack (requires LoRa to be up)
 #ifdef PURR_HAS_MESH
     if (cfg.lora && lora_manager_enabled()) {
         purr_mesh_init(cfg.lora_region);
@@ -424,16 +406,6 @@ bool KITT::init(const char* device_json_path) {
     }
 #endif
 
-    // Step 13: Pi manager
-#ifdef PURR_HAS_PI_SLOT
-    if (cfg.pi_slot) {
-        pi_manager_init();
-        log("KITT", "pi mgr OK");
-    }
-#endif
-
-    // Step 14: power manager
-    power_manager_init(cfg.cpu_max_mhz);
     last_battery_refresh = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
     // Step 14b: rotary encoder GPIO init
@@ -561,23 +533,8 @@ void KITT::update() {
     }
 #endif
 
-    // WiFi scan polling
-    if (cfg.wifi) wifi_manager_update();
-
-    // BT discovery polling
-#ifdef PURR_HAS_BT
-    if (cfg.bt) bt_manager_update();
-#endif
-
-    // CC1101 RX polling
-#ifdef PURR_HAS_CC1101
-    if (cfg.cc1101) cc1101_manager_update();
-#endif
-
-    // Pi state polling
-#ifdef PURR_HAS_PI_SLOT
-    if (cfg.pi_slot) pi_manager_update();
-#endif
+    // Subsystem tick — all registered drivers
+    sys_drv_tick_all();
 
     // Battery refresh every 60s
     if (now - last_battery_refresh >= 60000) {
@@ -637,17 +594,7 @@ void KITT::update() {
 // ── Lifecycle ──────────────────────────────────────────────────────────────────
 
 void KITT::shutdown() {
-    if (cfg.wifi) wifi_manager_deinit();
-#ifdef PURR_HAS_BT
-    if (cfg.bt)   bt_manager_deinit();
-#endif
-#ifdef PURR_HAS_LORA
-    if (cfg.lora) lora_manager_deinit();
-#endif
-#ifdef PURR_HAS_PI_SLOT
-    if (cfg.pi_slot) pi_manager_deinit();
-#endif
-    power_manager_deinit();
+    sys_drv_deinit_all();
     kitt_ready = false;
     ESP_LOGI(TAG, "shutdown");
 }

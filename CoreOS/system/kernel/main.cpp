@@ -14,6 +14,7 @@ static const char *TAG = "app_main";
 #include "modules/lua_runtime.h"
 #endif
 #include "modules/purr_input.h"
+#include "modules/purr_drv.h"
 #ifdef PURR_HAS_MINIWIN
 #include "miniwin.h"
 #endif
@@ -33,6 +34,7 @@ void setup() {
     lua_runtime_init();
 #endif
     purr_input_init(32);
+    purr_drv_init();
 #ifdef PURR_HAS_MINIWIN
     mw_init();
 #endif
@@ -44,8 +46,11 @@ void setup() {
     system_start();
 }
 
+static int s_drv_tick_count = 0;
+
 void loop() {
     kitt.update();
+    if (++s_drv_tick_count >= 10) { purr_drv_tick(); s_drv_tick_count = 0; } // ~100ms
 #ifdef PURR_HAS_MINIWIN
     mw_process_message();
     vTaskDelay(pdMS_TO_TICKS(MW_TICK_PERIOD_MS));

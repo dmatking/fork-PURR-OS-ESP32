@@ -14,7 +14,7 @@ void mtp_manager_init() {
     ESP_LOGI(TAG, "init (tinyusb integration pending)");
 }
 
-void mtp_manager_update() {
+void mtp_manager_tick() {
     // tinyusb task would be driven here
 }
 
@@ -34,4 +34,28 @@ void mtp_manager_exit() {
     ESP_LOGI(TAG, "exiting MTP mode");
     mtp_active = false;
     // TODO: tinyusb_mtp_stop()
+}
+
+// ── sys_drv registry ────────────────────────────────────────────────────────
+#include "purr_sys_drv.h"
+#include <stdio.h>
+
+static int mtp_cmd(const char *args, char *out, int out_len) {
+    snprintf(out, out_len, "mtp %s", mtp_manager_active() ? "active" : "idle");
+    return 0;
+}
+
+static sys_drv_t s_mtp_drv = {
+    .name      = "mtp",
+    .subsystem = "io",
+    .enabled   = false,
+    .init      = mtp_manager_init,
+    .tick      = mtp_manager_tick,
+    .deinit    = mtp_manager_deinit,
+    .cmd       = mtp_cmd,
+};
+
+void mtp_manager_drv_register(bool enabled) {
+    s_mtp_drv.enabled = enabled;
+    sys_drv_register(&s_mtp_drv);
 }

@@ -71,7 +71,7 @@ void power_manager_init(uint16_t cpu_max_mhz) {
              power_manager_cpu_get_freq(), cached_percent);
 }
 
-void power_manager_update()  {}
+void power_manager_tick()  {}
 void power_manager_deinit()  {}
 
 void power_manager_refresh_battery() {
@@ -118,4 +118,36 @@ void power_manager_cpu_set_freq(int mhz) {
 
 int power_manager_cpu_get_freq() {
     return cached_cpu_freq;
+}
+
+// ── sys_drv registry ────────────────────────────────────────────────────────
+#include "purr_sys_drv.h"
+#include <stdio.h>
+
+static uint16_t s_reg_cpu_mhz = 240;
+static void power_init_wrap() { power_manager_init(s_reg_cpu_mhz); }
+
+static int power_cmd(const char *args, char *out, int out_len) {
+    snprintf(out, out_len, "cpu=%dMHz batt=%d%% %dmV charging=%d",
+             power_manager_cpu_get_freq(),
+             power_manager_battery_percent(),
+             power_manager_battery_voltage_mv(),
+             (int)power_manager_battery_charging());
+    return 0;
+}
+
+static sys_drv_t s_power_drv = {
+    .name      = "power",
+    .subsystem = "power",
+    .enabled   = false,
+    .init      = power_init_wrap,
+    .tick      = power_manager_tick,
+    .deinit    = power_manager_deinit,
+    .cmd       = power_cmd,
+};
+
+void power_manager_drv_register(bool enabled, uint16_t cpu_max_mhz) {
+    s_reg_cpu_mhz = cpu_max_mhz;
+    s_power_drv.enabled = enabled;
+    sys_drv_register(&s_power_drv);
 }

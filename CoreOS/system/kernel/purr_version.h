@@ -5,7 +5,7 @@
 #define PURR_OS_VERSION_MINOR 10
 #define PURR_OS_VERSION_PATCH 1
 
-#define KITT_VERSION          "0.6.9"
+#define KITT_VERSION          "0.7.0"
 #define KITT_VERSION_MAJOR    0
-#define KITT_VERSION_MINOR    6
-#define KITT_VERSION_PATCH    9
+#define KITT_VERSION_MINOR    7
+#define KITT_VERSION_PATCH    0

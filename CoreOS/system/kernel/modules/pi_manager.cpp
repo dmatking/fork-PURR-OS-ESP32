@@ -23,11 +23,11 @@ void pi_manager_init() {
     gpio_set_pull_mode((gpio_num_t)PI_HANDSHAKE_PIN, GPIO_PULLDOWN_ONLY);
     gpio_set_level((gpio_num_t)PI_GATE_PIN, 0);
     gate_on = false;
-    pi_manager_update();
+    pi_manager_tick();
     ESP_LOGI(TAG, "init OK");
 }
 
-void pi_manager_update() {
+void pi_manager_tick() {
     bool gate      = (bool)gpio_get_level((gpio_num_t)PI_GATE_PIN);
     bool handshake = (bool)gpio_get_level((gpio_num_t)PI_HANDSHAKE_PIN);
 
@@ -96,3 +96,34 @@ void pi_manager_power_off() {
 pi_state_t pi_manager_state()          { return pi_state; }
 bool       pi_manager_handshake_high() { return (bool)gpio_get_level((gpio_num_t)PI_HANDSHAKE_PIN); }
 bool       pi_manager_rail_enabled()   { return gate_on; }
+
+// ── sys_drv registry ────────────────────────────────────────────────────────
+#include "purr_sys_drv.h"
+#include <stdio.h>
+
+static const char *pi_state_str[] = {"absent","powering_up","active","anomaly"};
+
+static int pi_cmd(const char *args, char *out, int out_len) {
+    if (args && strcmp(args, "on")  == 0) { pi_manager_power_on();  snprintf(out, out_len, "ok"); return 0; }
+    if (args && strcmp(args, "off") == 0) { pi_manager_power_off(); snprintf(out, out_len, "ok"); return 0; }
+    snprintf(out, out_len, "pi state=%s handshake=%d rail=%d",
+             pi_state_str[pi_manager_state()],
+             (int)pi_manager_handshake_high(),
+             (int)pi_manager_rail_enabled());
+    return 0;
+}
+
+static sys_drv_t s_pi_drv = {
+    .name      = "pi",
+    .subsystem = "io",
+    .enabled   = false,
+    .init      = pi_manager_init,
+    .tick      = pi_manager_tick,
+    .deinit    = pi_manager_deinit,
+    .cmd       = pi_cmd,
+};
+
+void pi_manager_drv_register(bool enabled) {
+    s_pi_drv.enabled = enabled;
+    sys_drv_register(&s_pi_drv);
+}

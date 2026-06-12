@@ -89,7 +89,7 @@ void pm_init() {
     // the display HAL. hal_lcd.cpp will set it again — that is harmless.
     gpio_set_direction((gpio_num_t)10, GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)10, 1);
-    vTaskDelay(pdMS_TO_TICKS(50));  // allow card power rail to stabilise
+    vTaskDelay(pdMS_TO_TICKS(250));  // SD card needs ~250ms after power-on before ready
 
     ESP_LOGI(TAG, "T-Deck Plus: ensuring SPI3 bus is up, then attaching SD CS=%d", PM_SD_CS);
     {
