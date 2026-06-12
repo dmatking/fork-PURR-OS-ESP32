@@ -1,10 +1,8 @@
-// WCE shell — tdeck_plus
+// WCE shell — generic
 // Single full-screen shell window. App windows launched via purr_catalog[].
 
 #include "miniwin.h"
 #include "miniwin_utilities.h"
-#include "hal/hal_touch.h"
-#include "esp_log.h"
 #include "gl/gl.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
@@ -12,10 +10,6 @@
 
 #include "purr_app_catalog.h"
 #include "purr_taskbar.h"
-#include "hal_input.h"
-#include "app_restart_menu.h"
-#include "app_files.h"
-#include "app_launcher.h"
 
 #define SCR_W       mw_hal_lcd_get_display_width()
 #define SCR_H       mw_hal_lcd_get_display_height()
@@ -30,15 +24,8 @@
 #define SMENU_SEP_H 8
 #define SMENU_X     0
 
-// Top-level menu: "Programs >" + separator + "Restart / Boot"
+// Top-level menu: "Programs >" + separator + "Restart"
 #define SMENU_TL_H  (2 * SMENU_IH + SMENU_SEP_H + 4)
-
-// Desktop shortcut buttons
-#define DSK_BTN_W   52
-#define DSK_BTN_H   52
-#define DSK_BTN_X   8
-#define DSK_FILES_Y 8
-#define DSK_APPS_Y  (DSK_FILES_Y + DSK_BTN_H + 6)
 
 #define WCE_DESKTOP 0x008080
 #define WCE_BAR     0xC0C0C0
@@ -49,10 +36,8 @@
 #define WCE_MBKG    0xD4D0C8
 
 static mw_handle_t shell_handle;
-static bool smenu_open    = false;
-static int  smenu_folder  = -1;  // -1 = top level, 0 = programs
-static int  smenu_sel     = 0;   // highlighted item index
-static bool smenu_pressed = false; // item is being activated (flash feedback)
+static bool smenu_open   = false;
+static int  smenu_folder = -1;  // -1 = top level, 0 = programs
 
 static void draw_raised(const mw_gl_draw_info_t *d,
                         int16_t x, int16_t y, int16_t w, int16_t h,
@@ -97,33 +82,13 @@ static void draw_smenu_box(const mw_gl_draw_info_t *d,
     mw_gl_set_font(MW_GL_FONT_9);
 }
 
-static void draw_desktop_btn(const mw_gl_draw_info_t *d,
-                             int16_t x, int16_t y, const char *label)
-{
-    draw_raised(d, x, y, DSK_BTN_W, DSK_BTN_H, WCE_BAR);
-    mw_gl_set_fg_colour(WCE_TXT);
-    mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
-    mw_gl_set_font(MW_GL_FONT_9);
-    int16_t lw = mw_gl_get_string_width_pixels(label);
-    mw_gl_string(d, (int16_t)(x + (DSK_BTN_W - lw) / 2),
-                 (int16_t)(y + (DSK_BTN_H - 9) / 2), label);
-}
-
 static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
 {
     (void)handle;
 
-    // Desktop background — draw everything in one layer
-    const int16_t W = (int16_t)SCR_W;
-    const int16_t H = (int16_t)SCR_H;
-    mw_gl_set_fill(MW_GL_FILL);
-    mw_gl_set_border(MW_GL_BORDER_OFF);
+    mw_gl_set_fill(MW_GL_FILL); mw_gl_set_border(MW_GL_BORDER_OFF);
     mw_gl_set_solid_fill_colour(WCE_DESKTOP);
-    mw_gl_rectangle(d, 0, 0, W, H);
-
-    // Desktop shortcut buttons
-    draw_desktop_btn(d, DSK_BTN_X, DSK_FILES_Y, "Files");
-    draw_desktop_btn(d, DSK_BTN_X, DSK_APPS_Y,  "Apps");
+    mw_gl_rectangle(d, 0, 0, SCR_W, TASKBAR_Y);
 
     mw_gl_set_solid_fill_colour(WCE_BAR);
     mw_gl_rectangle(d, 0, TASKBAR_Y, SCR_W, TASKBAR_H);
@@ -180,43 +145,25 @@ static void shell_paint(mw_handle_t handle, const mw_gl_draw_info_t *d)
 
     if (!smenu_open) return;
 
-    auto draw_sel = [&](int16_t x, int16_t y, int16_t w, int16_t h, bool selected) {
-        if (selected && smenu_pressed) {
-            // Pressed flash: bright white background, dark text
-            mw_gl_set_solid_fill_colour(0xFFFFFF);
-            mw_gl_rectangle(d, x, y, w, h);
-            mw_gl_set_fg_colour(0x000080);
-        } else if (selected) {
-            mw_gl_set_solid_fill_colour(0x000080);
-            mw_gl_rectangle(d, x, y, w, h);
-            mw_gl_set_fg_colour(0xFFFFFF);
-        } else {
-            mw_gl_set_fg_colour(WCE_TXT);
-        }
-    };
-
     if (smenu_folder < 0) {
         // Top-level: "Programs >" + separator + "Restart"
         int16_t smy = (int16_t)(TASKBAR_Y - SMENU_TL_H);
         draw_smenu_box(d, smy, SMENU_TL_H);
-        draw_sel(SMENU_X + 1, smy + 2, SMENU_W - 2, SMENU_IH, smenu_sel == 0);
         mw_gl_string(d, SMENU_X + 8, smy + 2 + 4, "Programs >");
         mw_gl_set_fg_colour(WCE_SHD);
         mw_gl_hline(d, SMENU_X + 4, SMENU_X + SMENU_W - 4,
                     (int16_t)(smy + 2 + SMENU_IH + SMENU_SEP_H / 2));
-        draw_sel(SMENU_X + 1, smy + 2 + SMENU_IH + SMENU_SEP_H, SMENU_W - 2, SMENU_IH, smenu_sel == 1);
+        mw_gl_set_fg_colour(WCE_TXT);
         mw_gl_string(d, SMENU_X + 8,
-                     (int16_t)(smy + 2 + SMENU_IH + SMENU_SEP_H + 4), "Restart / Boot");
+                     (int16_t)(smy + 2 + SMENU_IH + SMENU_SEP_H + 4), "Restart");
     } else {
         // Programs submenu: "< Back" + catalog entries
         int16_t smh = (int16_t)((purr_catalog_count + 1) * SMENU_IH + 4);
         int16_t smy = (int16_t)(TASKBAR_Y - smh);
         draw_smenu_box(d, smy, smh);
-        draw_sel(SMENU_X + 1, smy + 2, SMENU_W - 2, SMENU_IH, smenu_sel == 0);
         mw_gl_string(d, SMENU_X + 8, smy + 2 + 4, "< Back");
         for (int i = 0; i < purr_catalog_count; i++) {
             int16_t iy = smy + 2 + (int16_t)((i + 1) * SMENU_IH);
-            draw_sel(SMENU_X + 1, iy, SMENU_W - 2, SMENU_IH, smenu_sel == i + 1);
             mw_gl_string(d, SMENU_X + 8, iy + 4, purr_catalog[i].name);
         }
     }
@@ -226,85 +173,14 @@ static void shell_message(const mw_message_t *msg)
 {
     if (msg->message_id == MW_WINDOW_CREATED_MESSAGE ||
         msg->message_id == MW_TIMER_MESSAGE) {
-        // Poll input every tick (100ms); do a full display refresh once per second
-        hal_input_tick();
-
-        static uint8_t repaint_counter = 0;
-        if (++repaint_counter >= 10) {
-            mw_paint_all();
-            repaint_counter = 0;
-        }
-        // 5 ticks = 100ms at MW_TICK_PERIOD_MS=20 — keeps input responsive
-        mw_set_timer(MW_TICKS_PER_SECOND / 10, shell_handle, MW_WINDOW_MESSAGE);
+        mw_paint_all();
+        mw_set_timer(MW_TICKS_PER_SECOND, shell_handle, MW_WINDOW_MESSAGE);
         return;
     }
-    if (msg->message_id == MW_KEY_PRESSED_MESSAGE) {
-        uint8_t code = (uint8_t)msg->message_data;
-        // If an app window is active and the start menu is closed, all key input
-        // belongs to the app — the shell background must not silently eat it.
-        if (!smenu_open && taskbar_focused_handle != MW_INVALID_HANDLE) {
-            mw_post_message(MW_KEY_PRESSED_MESSAGE,
-                            MW_INVALID_HANDLE, taskbar_focused_handle,
-                            (uint32_t)code, NULL, MW_WINDOW_MESSAGE);
-            return;
-        }
-        // NAV_UP=1 NAV_DOWN=2 NAV_LEFT=3 NAV_RIGHT=4 NAV_ENTER=0x0D
-        if (!smenu_open) {
-            if (code == 0x0D) { smenu_open = true; smenu_sel = 0; }
-        } else if (smenu_folder < 0) {
-            int max_items = 2;  // "Programs >" and "Restart / Boot"
-            if (code == 0x01 || code == 0x03) smenu_sel = (smenu_sel - 1 + max_items) % max_items;
-            if (code == 0x02 || code == 0x04) smenu_sel = (smenu_sel + 1) % max_items;
-            if (code == 0x0D) {
-                // Flash pressed state, then act
-                smenu_pressed = true;
-                mw_paint_window_client(shell_handle);
-                smenu_pressed = false;
-                if (smenu_sel == 0) { smenu_folder = 0; smenu_sel = 0; }
-                else { smenu_open = false; smenu_folder = -1; app_restart_menu_launch(); }
-            }
-            if (code == 0x1B /* Esc */ || code == 0x03) { smenu_open = false; smenu_folder = -1; }
-        } else {
-            int max_items = purr_catalog_count + 1;  // "< Back" + apps
-            if (code == 0x01) smenu_sel = (smenu_sel - 1 + max_items) % max_items;
-            if (code == 0x02) smenu_sel = (smenu_sel + 1) % max_items;
-            if (code == 0x0D) {
-                smenu_pressed = true;
-                mw_paint_window_client(shell_handle);
-                smenu_pressed = false;
-                if (smenu_sel == 0) { smenu_folder = -1; smenu_sel = 0; }
-                else {
-                    int idx = smenu_sel - 1;
-                    smenu_open = false; smenu_folder = -1;
-                    if (idx >= 0 && idx < purr_catalog_count) purr_catalog[idx].launch();
-                }
-            }
-            if (code == 0x1B || code == 0x03) { smenu_folder = -1; smenu_sel = 0; }
-        }
-        mw_paint_window_client(shell_handle);
-        return;
-    }
-
     if (msg->message_id != MW_TOUCH_DOWN_MESSAGE) return;
 
     int16_t tx = (int16_t)(msg->message_data >> 16);
     int16_t ty = (int16_t)(msg->message_data & 0xFFFF);
-
-    // Desktop shortcut buttons (Files / Apps)
-    if (!smenu_open) {
-        if (tx >= DSK_BTN_X && tx < DSK_BTN_X + DSK_BTN_W) {
-            if (ty >= DSK_FILES_Y && ty < DSK_FILES_Y + DSK_BTN_H) {
-                app_files_launch();
-                mw_paint_all();
-                return;
-            }
-            if (ty >= DSK_APPS_Y && ty < DSK_APPS_Y + DSK_BTN_H) {
-                app_launcher_launch();
-                mw_paint_all();
-                return;
-            }
-        }
-    }
 
     if (smenu_open) {
         if (smenu_folder < 0) {
@@ -315,10 +191,9 @@ static void shell_message(const mw_message_t *msg)
                 if (rel_y >= 0 && rel_y < SMENU_IH) {
                     smenu_folder = 0;  // open Programs submenu
                 } else if (rel_y >= SMENU_IH + SMENU_SEP_H) {
-                    // "Restart / Boot" — open boot mode selection menu
                     smenu_open   = false;
                     smenu_folder = -1;
-                    app_restart_menu_launch();
+                    esp_restart();
                 }
             } else {
                 smenu_open   = false;
@@ -387,24 +262,18 @@ extern "C" {
 
 void mw_user_init(void)
 {
-    hal_input_init();
-
     mw_util_rect_t r;
     mw_util_set_rect(&r, 0, 0, SCR_W, SCR_H);
     shell_handle = mw_add_window(&r, "",
         shell_paint, shell_message, NULL, 0,
         MW_WINDOW_FLAG_IS_VISIBLE | MW_WINDOW_FLAG_TOUCH_FOCUS_AND_EVENT,
         NULL);
-
-    hal_input_set_shell_handle(shell_handle);
-
     mw_paint_all();
 }
 
 void mw_user_root_paint_function(const mw_gl_draw_info_t *draw_info)
 {
     (void)draw_info;
-    // All desktop rendering is done in shell_paint (single layer).
 }
 
 void mw_user_root_message_function(const mw_message_t *message)

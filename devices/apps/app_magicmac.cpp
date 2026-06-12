@@ -9,8 +9,8 @@
 #include "purr_apps_common.h"
 #include "purr_taskbar.h"
 #include "esp_system.h"
-#include <sys/stat.h>
 #include <string.h>
+#include <stdio.h>
 
 static mw_handle_t s_handle = MW_INVALID_HANDLE;
 
@@ -19,9 +19,13 @@ static mw_handle_t s_handle = MW_INVALID_HANDLE;
 
 static bool file_exists(const char *path)
 {
-    struct stat st;
-    return stat(path, &st) == 0;
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    fclose(f);
+    return true;
 }
+
+
 
 static void paint(mw_handle_t h, const mw_gl_draw_info_t *d)
 {
@@ -47,13 +51,11 @@ static void paint(mw_handle_t h, const mw_gl_draw_info_t *d)
     mw_gl_string(d, 8, 26, rom_ok  ? "ROM:  mac.rom found"  : "ROM:  mac.rom MISSING");
     mw_gl_set_fg_colour(disk_ok ? 0x00AA00 : 0xCC0000);
     mw_gl_string(d, 8, 38, disk_ok ? "Disk: meow.dsk found" : "Disk: meow.dsk MISSING");
-
     mw_gl_set_fg_colour(WCE_SHD);
     mw_gl_string(d, 8, 50, "Place files in /sdcard/magicmac/");
 
     mw_gl_hline(d, 4, cr.width - 4, 62);
 
-    // Boot button
     bool can_boot = rom_ok;
     mw_gl_set_fill(MW_GL_FILL);
     mw_gl_set_solid_fill_colour(can_boot ? 0x0066CC : 0x888888);

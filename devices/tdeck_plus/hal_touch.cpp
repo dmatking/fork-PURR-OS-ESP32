@@ -81,6 +81,7 @@ bool mw_hal_touch_is_recalibration_required(void) {
 }
 
 mw_hal_touch_state_t mw_hal_touch_get_state(void) {
+    if (!s_dev) { s_pressed = false; return MW_HAL_TOUCH_STATE_UP; }
     uint8_t status = 0;
     if (!_read(GT_REG_STATUS, &status, 1)) {
         s_pressed = false;

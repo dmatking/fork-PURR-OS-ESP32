@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Shells/ lives next to CoreOS/ — register as extra component dirs so IDF finds them
-set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../Shells")
+set(EXTRA_COMPONENT_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ui"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../drivers"
+)
 
 # MagiDOS emulator components (conditional)
 

@@ -2,8 +2,15 @@
 build/
 build_*/
 
-# GitHub release staging — populated by SDK/pack_releases.sh, never committed
+# Release staging dirs — populated by purrstrap bake/release, never committed
 GHReleases/
+baked/
+
+# Scratch build workspace
+tmp/
+
+# purrstrap device config (local paths/ports)
+.purrstrap
 CoreOS/build/
 CoreOS/build_*/
 CoreOS/sdkconfig

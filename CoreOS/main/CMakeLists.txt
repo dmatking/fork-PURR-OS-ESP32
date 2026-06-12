@@ -55,6 +55,11 @@ set(SRCS
     "../system/kernel/device_config.cpp"
     "../system/kernel/idf_compat.c"
     "../system/kernel/modules/power_manager.cpp"
+    "../system/kernel/modules/purr_sys_drv.cpp"
+    "../system/kernel/modules/device_info_drv.cpp"
+    "../system/kernel/modules/purr_drv_registry.cpp"
+    "../system/kernel/modules/purr_drv.cpp"
+    "../system/kernel/modules/purr_drv_interp.cpp"
     "../system/kernel/modules/purr_input.cpp"
     "../system/bridge/main.cpp"
     "../system/system/main.cpp"
@@ -286,29 +291,34 @@ idf_component_register(
 # IDF 5.3 does not propagate include dirs through REQUIRES chains to main.
 # drv_display and drv_cc1101 headers are included by kernel files — expose them here.
 target_include_directories(${COMPONENT_LIB} PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_display"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_cc1101"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_lora"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_touch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../components/drv_shell"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_display"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_cc1101"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_lora"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_touch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_shell"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_wifi"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_bt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../drivers/drv_gps"
 )
 
 if(PURR_UI_KERNEL STREQUAL "miniwin")
     if(TARGET_DEVICE STREQUAL "cyd_s028r")
         set(_mw_dev "cyd_s028r")
+    elseif(TARGET_DEVICE STREQUAL "cyd_s024c")
+        set(_mw_dev "cyd_s024c")
     elseif(TARGET_DEVICE MATCHES "^cyd")
         set(_mw_dev "cyd")
     elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
         set(_mw_dev "tdeck_plus")
     elseif(TARGET_DEVICE STREQUAL "jc3248w535")
-        set(_mw_dev "jc3248")
+        set(_mw_dev "jc3248w535")
     elseif(TARGET_DEVICE STREQUAL "waveshare169")
-        set(_mw_dev "waveshare")
+        set(_mw_dev "waveshare169")
     else()
         set(_mw_dev "generic")
     endif()
     target_include_directories(${COMPONENT_LIB} PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/../components/lib_miniwin/MiniWin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../ui/lib_miniwin/MiniWin"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../devices/${_mw_dev}"
     )
 endif()
@@ -322,10 +332,11 @@ endif()
 set(PURR_DEFS "")
 
 if(TARGET_DEVICE STREQUAL "heltec")
-    list(APPEND PURR_DEFS PURR_DISPLAY_SSD1306=1)
+    list(APPEND PURR_DEFS PURR_DISPLAY_SSD1306=1 PURR_TARGET_HELTEC=1)
 elseif(TARGET_DEVICE STREQUAL "tembed_cc1101")
     list(APPEND PURR_DEFS
         PURR_DISPLAY_ST7789=1
+        PURR_TARGET_TEMBED_CC1101=1
         PURR_FORCE_KITTEN_UI=1
         PURR_HAS_PSRAM=1
         PURR_HAS_ENCODER=1
@@ -355,17 +366,20 @@ elseif(TARGET_DEVICE STREQUAL "tembed_cc1101")
 elseif(TARGET_DEVICE STREQUAL "cyd_s028r" OR TARGET_DEVICE STREQUAL "cyd_s024c" OR TARGET_DEVICE STREQUAL "cyd")
     list(APPEND PURR_DEFS PURR_DISPLAY_ILI9341=1 PURR_HAS_PARTITION_MGR=1)
     if(CYD_DISPLAY_VARIANT STREQUAL "s024c" OR TARGET_DEVICE STREQUAL "cyd_s024c")
-        list(APPEND PURR_DEFS PURR_HAS_TOUCH_CST816S=1 CYD_VARIANT_S024C=1)
+        list(APPEND PURR_DEFS PURR_HAS_TOUCH_CST816S=1 CYD_VARIANT_S024C=1 PURR_TARGET_CYD_S024C=1)
+    elseif(TARGET_DEVICE STREQUAL "cyd_s028r")
+        list(APPEND PURR_DEFS PURR_HAS_TOUCH_XPT2046=1 PURR_TARGET_CYD_S028R=1)
     else()
-        list(APPEND PURR_DEFS PURR_HAS_TOUCH_XPT2046=1)
+        list(APPEND PURR_DEFS PURR_HAS_TOUCH_XPT2046=1 PURR_TARGET_CYD=1)
     endif()
 elseif(TARGET_DEVICE STREQUAL "cyd_boot")
     list(APPEND PURR_DEFS
         PURR_DISPLAY_ILI9341=1 PURR_HAS_BOOTLOADER=1 PURR_IS_BOOTLOADER_IMG=1
         PURR_HAS_TOUCH_CST816S=1 PURR_HAS_PARTITION_MGR=1 CYD_VARIANT_S024C=1
+        PURR_TARGET_CYD_BOOT=1
     )
 elseif(TARGET_DEVICE STREQUAL "tdeck")
-    list(APPEND PURR_DEFS PURR_DISPLAY_ST7789=1)
+    list(APPEND PURR_DEFS PURR_DISPLAY_ST7789=1 PURR_TARGET_TDECK=1)
 elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
     list(APPEND PURR_DEFS
         PURR_DISPLAY_ST7789=1
@@ -376,10 +390,10 @@ elseif(TARGET_DEVICE STREQUAL "tdeck_plus")
         PURR_DEVICE_TDECK_PLUS=1
     )
 elseif(TARGET_DEVICE STREQUAL "jc3248w535")
-    list(APPEND PURR_DEFS PURR_DISPLAY_ST7796=1 PURR_HAS_TOUCH_GT911=1 PURR_TARGET_WIP=1 PURR_HAS_PSRAM=1)
+    list(APPEND PURR_DEFS PURR_DISPLAY_ST7796=1 PURR_HAS_TOUCH_GT911=1 PURR_TARGET_WIP=1 PURR_HAS_PSRAM=1 PURR_TARGET_JC3248W535=1)
 elseif(TARGET_DEVICE STREQUAL "waveshare169")
     list(APPEND PURR_DEFS
-        PURR_DISPLAY_ST7789=1 PURR_HAS_TOUCH_CST816S=1 PURR_TARGET_WIP=1
+        PURR_DISPLAY_ST7789=1 PURR_HAS_TOUCH_CST816S=1 PURR_TARGET_WIP=1 PURR_TARGET_WAVESHARE169=1
         # Display ST7789 — verified pins (Waveshare ESP32-S3 1.69" schematic)
         PURR_ST7789_MOSI=9
         PURR_ST7789_SCLK=18
