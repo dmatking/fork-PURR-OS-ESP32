@@ -194,9 +194,7 @@ void display_ili9341_init(void) {
     bus.quadwp_io_num = -1;
     bus.quadhd_io_num = -1;
     bus.max_transfer_sz = CYD_TFT_WIDTH * CYD_TFT_HEIGHT * 2 + 8;
-    // DMA disabled: avoids alignment requirements on cmd/gamma stack buffers.
-    // At 40 MHz the CPU-driven FIFO transfers are fast enough for 320×240.
-    spi_bus_initialize(LCD_HOST, &bus, SPI_DMA_DISABLED);
+    spi_bus_initialize(LCD_HOST, &bus, SPI_DMA_CH_AUTO);
 
     spi_device_interface_config_t dev = {};
     dev.clock_speed_hz = LCD_CLK_HZ;

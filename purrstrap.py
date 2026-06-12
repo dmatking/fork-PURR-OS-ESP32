@@ -205,7 +205,7 @@ UI_THEMES    = {"wce": "WCE Classic", "blackberry": "Blackberry", "luna": "Luna 
 
 DEFAULT_CFG = {
     "device":      "heltec",
-    "ui_kernel":   "none",
+    "ui_kernel":   None,
     "ui_theme":    "wce",
     "lora_kernel": "sx1262",
     "flash_port":  "",
@@ -258,6 +258,8 @@ def _sanitize(cfg):
 
     if device in ("heltec", "tembed_cc1101"):
         cfg["ui_kernel"] = "none"
+    elif cfg.get("ui_kernel") is None:
+        cfg["ui_kernel"] = d.get("default_ui", "none")
     elif cfg.get("ui_kernel") not in UI_KERNELS:
         cfg["ui_kernel"] = d.get("default_ui", "none")
 
