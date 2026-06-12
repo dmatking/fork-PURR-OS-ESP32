@@ -23,15 +23,15 @@ idf_component_register(
         "shell_cmds_conman.cpp"
         "shell_cmds_script.cpp"
         "shell_cmds_drv.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel/modules/purr_script.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../CoreOS/system/kernel/modules/purr_script.cpp"
     INCLUDE_DIRS "."
     REQUIRES ${_shell_requires}
 )
 
 # Kernel headers (purr_panic.h etc.)
 target_include_directories(${COMPONENT_LIB} PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel/modules"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../CoreOS/system/kernel"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../CoreOS/system/kernel/modules"
 )
 
 if(PURR_ENABLE_BT)

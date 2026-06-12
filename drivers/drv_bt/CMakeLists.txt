@@ -6,5 +6,5 @@ idf_component_register(
 )
 
 target_include_directories(${COMPONENT_LIB} PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../system/kernel/modules"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../CoreOS/system/kernel/modules"
 )
