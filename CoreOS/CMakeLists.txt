@@ -14,7 +14,7 @@ set(EXTRA_COMPONENT_DIRS
 set(PURR_UI_KERNEL "none" CACHE STRING "UI framework: miniwin | none")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-set(PROJECT_VER "0.10.0")
+set(PROJECT_VER "0.11.0")
 project(purr_os_core)
 
 # Hardware support flags are injected by sdk_core.py via -D cmake args.

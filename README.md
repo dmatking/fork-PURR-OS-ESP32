@@ -1,4 +1,4 @@
-# PURR OS — v0.10.1
+# PURR OS — v0.11.0
 
 > **Disclaimer:** This project is very much vibe-coded. It has gone from 0 to "what" at an alarming rate. Fully open-source, contributions encouraged. Please.
 
@@ -99,8 +99,8 @@ Config is stored in `.purrstrap` (gitignored). Build dirs are in `CoreOS/build_<
 
 | Component | Version |
 |-----------|---------|
-| PURR OS   | v0.10.1 |
-| KITT      | v0.6.9  |
+| PURR OS   | v0.11.0 |
+| KITT      | v0.8.0  |
 
 ---
 

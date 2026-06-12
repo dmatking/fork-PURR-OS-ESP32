@@ -42,8 +42,8 @@ C_YLW  = "\033[93m"
 C_CYN  = "\033[96m"
 C_WHT  = "\033[97m"
 
-PURROS_VERSION = "0.10.1"
-KITT_VERSION   = "0.6.9"
+PURROS_VERSION = "0.11.0"
+KITT_VERSION   = "0.8.0"
 
 def info(msg):        print(f"{C_GRN}[purr]{C_RST} {msg}")
 def warn(msg):        print(f"{C_YLW}[warn]{C_RST} {msg}")

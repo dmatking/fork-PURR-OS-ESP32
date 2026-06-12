@@ -1,6 +1,29 @@
 # CHANGELOG
 
-## v0.10.1 — 2026-06-11 (current)
+## v0.11.0 — 2026-06-12 (current)
+
+### Version bump
+- PURR OS: v0.10.1 → v0.11.0
+- KITT: v0.6.9 → v0.8.0
+
+### New vs v0.10.0
+- **purrstrap.py** — pmbootstrap-style CLI replaces `SDK/sdk_core.py`; subcommands: `init`, `status`, `list`, `build`, `flash`, `install`, `monitor`, `clean`, `bake`, `release`, `scan`, `doctor`
+- **Doctor command** — 15-point environment + repo health check (Python, ESP-IDF version, esptool, pyserial, component dirs, device overlays, serial ports)
+- **Repo restructure** — `drivers/` and `ui/` at repo root replace `CoreOS/components/`; all CMakeLists paths updated
+- **T-Deck Plus** — full keyboard + trackball input with 5-second cursor auto-hide, mouse cursor rendering
+- **MagiDOS CGA layer** — `magidos_cga.cpp/.h` and `magidos_filepicker.cpp` added
+- **Device compile-time config** — `device_config_default()` fully baked in for all targets; no SPIFFS/device.json dependency
+- **GT911 touch fix** — I2C bus conflict resolved; NULL guard prevents touch spam brownout
+- **GPS boot fix** — probe timeout 1500→800ms; total GPS wait 2000→500ms
+- **SD card fix** — 250ms GPIO 10 power stabilization delay on T-Deck Plus
+- **IDF sdmmc patch** — `ESP_ERR_INVALID_SIZE` allowed in SPI mode (`sdmmc_io.c`)
+- **4 new docs** — Overview, Quick Start, Architecture, Devices; all old docs archived
+- **baked/ output** — `purrstrap bake` produces per-device folder with binaries + `flash.sh` + `FLASH_GUIDE.md`
+- **9 targets all building** — heltec, tembed_cc1101, cyd_s028r, cyd_s024c, cyd_boot, tdeck, tdeck_plus, jc3248w535, waveshare169
+
+---
+
+## v0.10.1 — 2026-06-11
 
 ### Repo restructure
 - `CoreOS/components/drv_*` → `drivers/` at repo root
