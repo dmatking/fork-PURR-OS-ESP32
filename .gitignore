@@ -2,12 +2,13 @@
 build/
 build_*/
 
-# Release staging dirs — populated by purrstrap bake/release, never committed
+# Intermediate build scratch — never committed
 GHReleases/
 baked/
-releases/
 prebuilt/
 cattobaked/
+
+# releases/ IS tracked — distributable flash.bin artifacts per version
 
 # Scratch build workspace
 tmp/

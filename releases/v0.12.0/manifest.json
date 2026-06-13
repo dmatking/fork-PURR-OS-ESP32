@@ -1,0 +1,180 @@
+{
+  "purros_version": "0.12.0",
+  "kitt_version": "0.9.0",
+  "baked_at": "2026-06-13T08:41:41.775241",
+  "build_note": "SPIFFS flash.bin contains the filesystem image \u2014 modules, drivers, and app registrations. The kernel spine (firmware.bin) is produced by ESP-IDF from CoreOS/ on the target build machine. P1 driver blobs are registered as IDF components and compiled into firmware.bin, not staged as .purr files.",
+  "devices": {
+    "cyd": {
+      "status": "ok",
+      "chip": "esp32",
+      "name": "cyd",
+      "flash_bin_kb": 512,
+      "bundled_apps": [
+        "settings",
+        "about",
+        "terminal",
+        "fileman",
+        "calculator"
+      ],
+      "radio": {
+        "wifi": true,
+        "bt": true,
+        "lora": ""
+      },
+      "files": [
+        "flash.bin",
+        "build.json",
+        "glue/purr_device_glue.c"
+      ]
+    },
+    "cyd_s024c": {
+      "status": "ok",
+      "chip": "esp32",
+      "name": "cyd_s024c",
+      "flash_bin_kb": 512,
+      "bundled_apps": [
+        "settings",
+        "about",
+        "terminal",
+        "fileman",
+        "calculator"
+      ],
+      "radio": {
+        "wifi": true,
+        "bt": true,
+        "lora": ""
+      },
+      "files": [
+        "flash.bin",
+        "build.json",
+        "glue/purr_device_glue.c"
+      ]
+    },
+    "cyd_s028r": {
+      "status": "ok",
+      "chip": "esp32",
+      "name": "cyd_s028r",
+      "flash_bin_kb": 512,
+      "bundled_apps": [
+        "settings",
+        "about",
+        "terminal",
+        "fileman",
+        "calculator"
+      ],
+      "radio": {
+        "wifi": true,
+        "bt": true,
+        "lora": ""
+      },
+      "files": [
+        "flash.bin",
+        "build.json",
+        "glue/purr_device_glue.c"
+      ]
+    },
+    "heltec": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "heltec",
+      "flash_bin_kb": 256,
+      "bundled_apps": [],
+      "radio": {
+        "wifi": true,
+        "bt": true,
+        "lora": "sx1262"
+      },
+      "files": [
+        "flash.bin",
+        "build.json",
+        "glue/purr_device_glue.c"
+      ]
+    },
+    "jc3248w535": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "jc3248w535",
+      "flash_bin_kb": 1024,
+      "bundled_apps": [
+        "settings",
+        "about",
+        "terminal",
+        "fileman",
+        "calculator"
+      ],
+      "radio": {
+        "wifi": true,
+        "bt": true,
+        "lora": ""
+      },
+      "files": [
+        "flash.bin",
+        "build.json",
+        "glue/purr_device_glue.c"
+      ]
+    },
+    "tdeck": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "tdeck",
+      "flash_bin_kb": 512,
+      "bundled_apps": [
+        "settings",
+        "about",
+        "terminal",
+        "fileman",
+        "calculator"
+      ],
+      "radio": {
+        "wifi": true,
+        "bt": true,
+        "lora": "sx1262"
+      },
+      "files": [
+        "flash.bin",
+        "build.json",
+        "glue/purr_device_glue.c"
+      ]
+    },
+    "tdeck_plus": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "tdeck_plus",
+      "flash_bin_kb": 512,
+      "bundled_apps": [
+        "settings",
+        "about",
+        "terminal",
+        "fileman",
+        "calculator"
+      ],
+      "radio": {
+        "wifi": true,
+        "bt": true,
+        "lora": "sx1276"
+      },
+      "files": [
+        "flash.bin",
+        "build.json",
+        "glue/purr_device_glue.c"
+      ]
+    },
+    "waveshare169": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "waveshare169",
+      "flash_bin_kb": 256,
+      "bundled_apps": [],
+      "radio": {
+        "wifi": true,
+        "bt": true,
+        "lora": ""
+      },
+      "files": [
+        "flash.bin",
+        "build.json",
+        "glue/purr_device_glue.c"
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "device": "cyd_s028r",
+  "chip": "esp32",
+  "purros_version": "0.12.0",
+  "kitt_version": "0.9.0",
+  "last_build": "2026-06-13T08:40:47.135966",
+  "pcat": "/home/Catto/Documents/Projects/PURR-OS-ESP32/source/devices/cyd_s028r/device.pcat",
+  "flash_bin": "/home/Catto/Documents/Projects/PURR-OS-ESP32/cattobaked/cyd_s028r/flash.bin",
+  "firmware_bin": "not built",
+  "spiffs_kb": 512
+}
