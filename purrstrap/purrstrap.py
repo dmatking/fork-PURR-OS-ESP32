@@ -7,12 +7,13 @@ dependencies, generates glue, calls IDF to compile the kernel spine, then
 assembles the final flashable image in cattobaked/<device>/.
 
 Usage:
-  purrstrap build <device>       build firmware for device
-  purrstrap flash <device> [-p]  build + flash to connected device
-  purrstrap clean <device>       remove build artifacts for device
-  purrstrap list                 list supported devices (reads source/devices/)
-  purrstrap status               show current .purrstrap workspace config
-  purrstrap doctor               check environment health (IDF, tools present)
+  purrstrap build <device>              build firmware for device
+  purrstrap flash <device> [-p]         build + flash to connected device
+  purrstrap monitor <device> [-p] [-b]  open serial monitor (idf_monitor.py)
+  purrstrap clean <device>              remove build artifacts for device
+  purrstrap list                        list supported devices (reads source/devices/)
+  purrstrap status                      show current .purrstrap workspace config
+  purrstrap doctor                      check environment health (IDF, tools present)
 
 Output: cattobaked/<device>/
   firmware.bin          complete merged flash image
@@ -662,6 +663,44 @@ def cmd_flash(args):
     else:
         warn("flash.bin not built — run purrstrap build first")
 
+def cmd_monitor(args):
+    port = getattr(args, "port", None) or "auto"
+    baud = getattr(args, "baud", None) or "115200"
+    device = args.device
+
+    idf = _idf_path()
+    if not idf:
+        warn("IDF_PATH not set — cannot run monitor")
+        return
+
+    build_dir = os.path.join(REPO_DIR, "CoreOS", f"build_{device}")
+    if not os.path.isdir(build_dir):
+        warn(f"no build dir for {device} — run purrstrap build {device} first")
+        return
+
+    monitor_py = os.path.join(idf, "tools", "idf_monitor.py")
+    elf        = os.path.join(build_dir, "purr_os.elf")
+
+    if not os.path.isfile(elf):
+        warn(f"purr_os.elf not found in {build_dir}")
+        return
+
+    div()
+    info(f"monitor: {device}  port: {port}  baud: {baud}")
+    info("press Ctrl+] to exit")
+    div()
+
+    cmd = [
+        sys.executable, monitor_py,
+        "--port", port if port != "auto" else "/dev/ttyUSB0",
+        "--baud", baud,
+        elf,
+    ]
+    try:
+        subprocess.run(cmd, cwd=build_dir)
+    except KeyboardInterrupt:
+        pass
+
 def cmd_clean(args):
     device = args.device
     build_dir = os.path.join(REPO_DIR, "source", f"build_{device}")
@@ -777,6 +816,11 @@ def main():
     p_flash.add_argument("device")
     p_flash.add_argument("-p", "--port", default=None)
 
+    p_monitor = sub.add_parser("monitor", help="Open serial monitor for a device")
+    p_monitor.add_argument("device")
+    p_monitor.add_argument("-p", "--port", default=None)
+    p_monitor.add_argument("-b", "--baud", default=None)
+
     p_clean = sub.add_parser("clean",  help="Remove build artifacts")
     p_clean.add_argument("device")
 
@@ -787,13 +831,14 @@ def main():
 
     args = parser.parse_args()
     dispatch = {
-        "build":  cmd_build,
-        "flash":  cmd_flash,
-        "clean":  cmd_clean,
-        "bake":   cmd_bake,
-        "list":   cmd_list,
-        "status": cmd_status,
-        "doctor": cmd_doctor,
+        "build":   cmd_build,
+        "flash":   cmd_flash,
+        "monitor": cmd_monitor,
+        "clean":   cmd_clean,
+        "bake":    cmd_bake,
+        "list":    cmd_list,
+        "status":  cmd_status,
+        "doctor":  cmd_doctor,
     }
     if args.cmd not in dispatch:
         parser.print_help()
