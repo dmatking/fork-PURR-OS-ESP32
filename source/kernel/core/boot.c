@@ -112,20 +112,19 @@ void app_main(void)
     mount_sd_vfs();
     ensure_sd_dirs();
 
-    // ── Phase 1: load flash modules in priority order (P1 drivers first) ──────
+    // ── Phase 1: load all built-in modules from the .purr_modules section ──────
     //
-    // SD fallback path: /sdcard/modules
-    // If a P1 module is missing from flash AND from SD → kernel panic.
-    ESP_LOGI(TAG, "=== phase 1: flash modules ===");
-    purr_kernel_scan_modules("/flash/modules",  "/sdcard/modules");
+    // All drivers and system modules compiled into the firmware are registered
+    // via PURR_MODULE_REGISTER() and land in the .purr_modules linker section.
+    // The kernel iterates that section sorted by priority (P1→P2→P3).
+    // P1 modules that fail to init trigger purr_kernel_panic().
+    ESP_LOGI(TAG, "=== phase 1: static modules ===");
+    purr_kernel_load_static_modules();
 
-    // Also scan flash drivers directory (drivers are modules too)
-    purr_kernel_scan_modules("/flash/drivers",  "/sdcard/drivers");
-
-    // ── Phase 2: SD extras (optional modules not on flash) ────────────────────
+    // ── Phase 2: SD extras (optional modules not compiled in) ─────────────────
     //
-    // These are always loaded as OPTIONAL regardless of their header priority,
-    // because they were absent from flash intentionally (user-added).
+    // User-supplied .purr blobs on SD card. Always treated as OPTIONAL
+    // regardless of their header priority — third-party or user-added modules.
     if (purr_kernel_sd_available()) {
         ESP_LOGI(TAG, "=== phase 2: SD extras ===");
         purr_kernel_scan_modules("/sdcard/modules", NULL);

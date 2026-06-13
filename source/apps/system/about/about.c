@@ -144,7 +144,7 @@ static void about_deinit(void) {
 
 // ── Module header ─────────────────────────────────────────────────────────────
 
-purr_module_header_t purr_module = {
+PURR_MODULE_REGISTER(about) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_APP,

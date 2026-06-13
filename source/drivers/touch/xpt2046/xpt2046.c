@@ -246,7 +246,7 @@ static void xpt2046_drv_deinit(void)
 
 // ── PURR module header ────────────────────────────────────────────────────────
 
-purr_module_header_t purr_module = {
+PURR_MODULE_REGISTER(xpt2046) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_DRIVER,

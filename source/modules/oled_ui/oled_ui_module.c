@@ -233,7 +233,7 @@ static void oled_ui_deinit(void) {
     vTaskDelay(pdMS_TO_TICKS(600));
 }
 
-purr_module_header_t purr_module = {
+PURR_MODULE_REGISTER(oled_ui) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_UI,

@@ -22,12 +22,22 @@ extern "C" {
 
 // ── Module loader ─────────────────────────────────────────────────────────────
 
-// Scan flash dir for .purr files sorted by priority, with SD fallback.
-// For PURR_PRIORITY_REQUIRED modules: if both flash and sd_fallback_dir fail,
-// purr_kernel_panic() is called. Pass NULL for sd_fallback_dir to disable fallback.
+// Called automatically by PURR_MODULE_REGISTER() constructors before app_main.
+// Safe to call very early (just appends to a static list).
+void purr_kernel_register_module_static(const purr_module_header_t *hdr);
+
+// Load all modules pre-registered via purr_kernel_register_module_static().
+// Sorts by priority and calls each module's init().
+// P1 modules that fail to init trigger purr_kernel_panic().
+// Call from boot.c instead of purr_kernel_scan_modules for built-in modules.
+int  purr_kernel_load_static_modules(void);
+
+// Scan a directory for .purr files sorted by priority, with optional SD
+// fallback. Intended for SD card extras only — built-in modules use
+// purr_kernel_load_static_modules() instead.
 int  purr_kernel_scan_modules(const char *flash_dir, const char *sd_fallback_dir);
 
-// Load a single .purr by path.
+// Load a single .purr by path (SD card / file-based modules).
 int  purr_kernel_load_module(const char *path);
 
 // Unload by name.

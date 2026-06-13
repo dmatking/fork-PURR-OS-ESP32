@@ -181,7 +181,7 @@ static const catcall_gps_t s_catcall = {
     .deinit          = nmea_deinit,
 };
 
-purr_module_header_t purr_module = {
+PURR_MODULE_REGISTER(generic_nmea) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_DRIVER,

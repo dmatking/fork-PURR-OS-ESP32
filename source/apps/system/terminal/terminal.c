@@ -209,7 +209,7 @@ static void terminal_deinit(void) {
 
 #include "purr_module.h"
 
-purr_module_header_t purr_module = {
+PURR_MODULE_REGISTER(terminal) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_APP,

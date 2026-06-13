@@ -147,7 +147,84 @@ static bool peek_module_header(const char *path, purr_module_header_t *out)
     return n >= sizeof(*out) && out->magic == PURR_MODULE_MAGIC;
 }
 
-// ── Core loader ───────────────────────────────────────────────────────────────
+// ── Static (constructor) module registration ──────────────────────────────────
+//
+// PURR_MODULE_REGISTER() emits a __attribute__((constructor)) function for each
+// module. These run before app_main, filling s_static_reg[]. When boot.c calls
+// purr_kernel_load_static_modules(), we sort by priority and init each one.
+
+#define MAX_STATIC_REG 64
+static const purr_module_header_t *s_static_reg[MAX_STATIC_REG];
+static int s_static_reg_count = 0;
+
+void purr_kernel_register_module_static(const purr_module_header_t *hdr)
+{
+    if (s_static_reg_count < MAX_STATIC_REG) {
+        s_static_reg[s_static_reg_count++] = hdr;
+    } else {
+        // Can't call ESP_LOG this early — just silently drop (shouldn't happen)
+    }
+}
+
+static int load_one_static(const purr_module_header_t *hdr)
+{
+    if (s_module_count >= MAX_MODULES) {
+        ESP_LOGE(TAG, "module table full, cannot load %s", hdr->name);
+        return -1;
+    }
+    if (hdr->magic != PURR_MODULE_MAGIC) {
+        ESP_LOGE(TAG, "bad magic in static module '%s'", hdr->name);
+        return -1;
+    }
+    if (hdr->abi_version != PURR_MODULE_ABI_VERSION) {
+        ESP_LOGE(TAG, "ABI mismatch: '%s' (module=%d kernel=%d)",
+                 hdr->name, hdr->abi_version, PURR_MODULE_ABI_VERSION);
+        return -1;
+    }
+    if (hdr->init) {
+        int rc = hdr->init();
+        if (rc != 0) {
+            ESP_LOGE(TAG, "static module '%s' init() returned %d", hdr->name, rc);
+            return -1;
+        }
+    }
+    module_slot_t *slot = &s_modules[s_module_count++];
+    memcpy(&slot->header, hdr, sizeof(*hdr));
+    slot->loaded = true;
+    const char *prio = hdr->load_priority == PURR_PRIORITY_REQUIRED  ? "P1" :
+                       hdr->load_priority == PURR_PRIORITY_IMPORTANT ? "P2" : "P3";
+    ESP_LOGI(TAG, "loaded %s: %s v%s [static]", prio, hdr->name, hdr->version);
+    return 0;
+}
+
+static int cmp_reg_priority(const void *a, const void *b)
+{
+    const purr_module_header_t *ha = *(const purr_module_header_t **)a;
+    const purr_module_header_t *hb = *(const purr_module_header_t **)b;
+    return (int)ha->load_priority - (int)hb->load_priority;
+}
+
+int purr_kernel_load_static_modules(void)
+{
+    qsort(s_static_reg, s_static_reg_count,
+          sizeof(s_static_reg[0]), cmp_reg_priority);
+
+    int n = s_static_reg_count;
+    for (int i = 0; i < n; i++) {
+        const purr_module_header_t *hdr = s_static_reg[i];
+        int rc = load_one_static(hdr);
+        if (rc != 0 && hdr->load_priority == PURR_PRIORITY_REQUIRED) {
+            char reason[96];
+            snprintf(reason, sizeof(reason),
+                     "Required module '%.32s' failed to init.", hdr->name);
+            purr_kernel_panic(reason);
+        }
+    }
+    ESP_LOGI(TAG, "static module load: %d/%d initialised", s_module_count, n);
+    return s_module_count;
+}
+
+// ── File-based loader (SD card extras) ───────────────────────────────────────
 
 int purr_kernel_load_module(const char *path)
 {
