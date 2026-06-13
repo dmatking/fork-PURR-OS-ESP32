@@ -1,0 +1,4 @@
+## IDF Component Manager manifest for PURR OS CoreOS main component
+dependencies:
+  lvgl/lvgl:
+    version: ">=8.3.0,<9.0.0"

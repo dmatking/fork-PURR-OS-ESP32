@@ -1,0 +1,27 @@
+# drivers/radio/sx1276/driver.pcat
+
+name            = "sx1276"
+version         = "0.1.0"
+type            = "radio"
+catcall_version = 1
+idf_min         = "5.3.0"
+chip            = ["esp32", "esp32s3"]
+kernel_min      = "0.9.0"
+kernel_max      = ""
+
+module_type     = "PURR_MOD_DRIVER"
+provides        = ["radio"]
+
+required_catcalls = [
+    "catcall_radio_t.init",
+    "catcall_radio_t.send",
+    "catcall_radio_t.receive",
+    "catcall_radio_t.data_available",
+    "catcall_radio_t.rssi",
+    "catcall_radio_t.snr",
+    "catcall_radio_t.set_frequency",
+    "catcall_radio_t.set_power",
+    "catcall_radio_t.deinit",
+]
+
+notes = "LoRa SX1276. Used on T-Deck Plus. Supports 433/868/915 MHz bands."

@@ -1,9 +1,8 @@
-# PURR OS — 16 MB flash partition table
+# PURR OS — 16 MB flash partition table (factory-only, no OTA)
 # Devices: tdeck, tdeck_plus, jc3248w535
 # SPIFFS offset: 0xD90000  size: 0x270000 (2.4 MB)
 # Name,     Type, SubType,  Offset,    Size
-nvs,        data, nvs,      0x9000,    0x5000
-otadata,    data, ota,      0xE000,    0x2000
+nvs,        data, nvs,      0x9000,    0x6000
 phy_init,   data, phy,      0xF000,    0x1000
 factory,    app,  factory,  0x10000,   0xD80000
 spiffs,     data, spiffs,   0xD90000,  0x270000

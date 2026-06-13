@@ -1,0 +1,11 @@
+{
+  "device": "waveshare169",
+  "chip": "esp32s3",
+  "purros_version": "0.12.1",
+  "kitt_version": "0.9.1",
+  "last_build": "2026-06-13T11:21:55.130747",
+  "pcat": "/home/Catto/Documents/Projects/PURR-OS-ESP32/source/devices/waveshare169/device.pcat",
+  "flash_bin": "/home/Catto/Documents/Projects/PURR-OS-ESP32/cattobaked/waveshare169/flash.bin",
+  "firmware_bin": "/home/Catto/Documents/Projects/PURR-OS-ESP32/cattobaked/waveshare169/firmware.bin",
+  "spiffs_kb": 256
+}

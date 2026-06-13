@@ -1,0 +1,95 @@
+{
+  "purros_version": "0.12.1",
+  "kitt_version": "0.9.1",
+  "baked_at": "2026-06-13T11:08:44.284810",
+  "devices": {
+    "cyd": {
+      "status": "ok",
+      "chip": "esp32",
+      "name": "cyd",
+      "copied": [
+        "flash.bin",
+        "build.json",
+        "firmware.bin"
+      ],
+      "staged": []
+    },
+    "cyd_s024c": {
+      "status": "ok",
+      "chip": "esp32",
+      "name": "cyd_s024c",
+      "copied": [
+        "flash.bin",
+        "build.json",
+        "firmware.bin"
+      ],
+      "staged": []
+    },
+    "cyd_s028r": {
+      "status": "ok",
+      "chip": "esp32",
+      "name": "cyd_s028r",
+      "copied": [
+        "flash.bin",
+        "build.json",
+        "firmware.bin"
+      ],
+      "staged": []
+    },
+    "heltec": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "heltec",
+      "copied": [
+        "flash.bin",
+        "build.json",
+        "firmware.bin"
+      ],
+      "staged": []
+    },
+    "jc3248w535": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "jc3248w535",
+      "copied": [
+        "flash.bin",
+        "build.json",
+        "firmware.bin"
+      ],
+      "staged": []
+    },
+    "tdeck": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "tdeck",
+      "copied": [
+        "flash.bin",
+        "build.json",
+        "firmware.bin"
+      ],
+      "staged": []
+    },
+    "tdeck_plus": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "tdeck_plus",
+      "copied": [
+        "flash.bin",
+        "build.json",
+        "firmware.bin"
+      ],
+      "staged": []
+    },
+    "waveshare169": {
+      "status": "ok",
+      "chip": "esp32s3",
+      "name": "waveshare169",
+      "copied": [
+        "flash.bin",
+        "build.json",
+        "firmware.bin"
+      ],
+      "staged": []
+    }
+  }
+}

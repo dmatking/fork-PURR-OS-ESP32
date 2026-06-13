@@ -1,0 +1,184 @@
+// driver_manager.c — PURR OS driver manager
+
+#include "driver_manager.h"
+#include "../../kernel/core/purr_kernel.h"
+#include "esp_log.h"
+#include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
+
+static const char *TAG = "drv_mgr";
+
+#define MAX_DRIVERS 32
+
+// Paths scanned in order. First match per driver name wins.
+static const char *s_scan_paths[] = {
+    "/flash/drivers",
+    "/sdcard/drivers",
+    NULL
+};
+
+static drv_entry_t s_drivers[MAX_DRIVERS];
+static int         s_driver_count = 0;
+
+// ── Compat check ──────────────────────────────────────────────────────────────
+// For now: required_catcalls is a bitmask. Check each flag against what the
+// kernel has registered. Returns true if all required catcalls are present.
+
+static bool compat_check(uint32_t required_catcalls, char *fail_reason, size_t reason_sz) {
+    if ((required_catcalls & CATCALL_FLAG_DISPLAY) && !purr_kernel_display()) {
+        snprintf(fail_reason, reason_sz, "missing: catcall_display");
+        return false;
+    }
+    if ((required_catcalls & CATCALL_FLAG_TOUCH) && !purr_kernel_touch()) {
+        snprintf(fail_reason, reason_sz, "missing: catcall_touch");
+        return false;
+    }
+    if ((required_catcalls & CATCALL_FLAG_INPUT) && !purr_kernel_input()) {
+        snprintf(fail_reason, reason_sz, "missing: catcall_input");
+        return false;
+    }
+    if ((required_catcalls & CATCALL_FLAG_RADIO) && !purr_kernel_radio()) {
+        snprintf(fail_reason, reason_sz, "missing: catcall_radio");
+        return false;
+    }
+    if ((required_catcalls & CATCALL_FLAG_GPS) && !purr_kernel_gps()) {
+        snprintf(fail_reason, reason_sz, "missing: catcall_gps");
+        return false;
+    }
+    return true;
+}
+
+// ── Version helpers ───────────────────────────────────────────────────────────
+
+static int version_cmp(const char *a, const char *b) {
+    unsigned ma=0,mi=0,pa=0, mb=0,mib=0,pb=0;
+    sscanf(a, "%u.%u.%u", &ma, &mi, &pa);
+    sscanf(b, "%u.%u.%u", &mb, &mib, &pb);
+    if (ma != mb) return ma < mb ? -1 : 1;
+    if (mi != mib) return mi < mib ? -1 : 1;
+    if (pa != pb) return pa < pb ? -1 : 1;
+    return 0;
+}
+
+// ── Load one driver .purr ─────────────────────────────────────────────────────
+
+static void load_driver(const char *path) {
+    if (s_driver_count >= MAX_DRIVERS) return;
+
+    purr_module_header_t hdr;
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    size_t n = fread(&hdr, 1, sizeof(hdr), f);
+    fclose(f);
+    if (n < sizeof(hdr) || hdr.magic != PURR_MODULE_MAGIC) return;
+
+    drv_entry_t *ent = &s_drivers[s_driver_count];
+    strncpy(ent->name, hdr.name, sizeof(ent->name) - 1);
+    strncpy(ent->version, hdr.version, sizeof(ent->version) - 1);
+    ent->status = DRV_STATUS_OK;
+    ent->fail_reason[0] = '\0';
+
+    // kernel_min check
+    if (hdr.kernel_min[0] && version_cmp(KITT_VERSION, hdr.kernel_min) < 0) {
+        ent->status = DRV_STATUS_SKIP;
+        snprintf(ent->fail_reason, sizeof(ent->fail_reason),
+                 "needs kernel >= %s", hdr.kernel_min);
+        s_driver_count++;
+        ESP_LOGW(TAG, "skip %s: %s", hdr.name, ent->fail_reason);
+        return;
+    }
+
+    // kernel_max check
+    bool beyond_max = hdr.kernel_max[0] && version_cmp(KITT_VERSION, hdr.kernel_max) > 0;
+    if (beyond_max) {
+        // Compat check — all required catcalls must be present
+        if (!compat_check(hdr.required_catcalls, ent->fail_reason, sizeof(ent->fail_reason))) {
+            ent->status = DRV_STATUS_FAIL;
+            s_driver_count++;
+            ESP_LOGE(TAG, "FAIL %s: %s", hdr.name, ent->fail_reason);
+            return;
+        }
+        ent->status = DRV_STATUS_COMPAT;
+    }
+
+    // Call init
+    if (hdr.init && hdr.init() != 0) {
+        ent->status = DRV_STATUS_FAIL;
+        snprintf(ent->fail_reason, sizeof(ent->fail_reason), "init() failed");
+        s_driver_count++;
+        ESP_LOGE(TAG, "FAIL %s: init returned error", hdr.name);
+        return;
+    }
+
+    s_driver_count++;
+    ESP_LOGI(TAG, "%s %s v%s",
+             drv_status_badge(ent->status), hdr.name, hdr.version);
+}
+
+// ── Scan a directory for driver .purr files ───────────────────────────────────
+
+static void scan_dir(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        const char *ext = strrchr(ent->d_name, '.');
+        if (!ext || strcmp(ext, ".purr") != 0) continue;
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        load_driver(path);
+    }
+    closedir(d);
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+int driver_manager_init(void) {
+    s_driver_count = 0;
+    for (int i = 0; s_scan_paths[i]; i++) {
+        scan_dir(s_scan_paths[i]);
+    }
+    ESP_LOGI(TAG, "init complete: %d drivers registered", s_driver_count);
+    return 0;
+}
+
+void driver_manager_deinit(void) {
+    s_driver_count = 0;
+}
+
+int driver_manager_get_count(void) {
+    return s_driver_count;
+}
+
+const drv_entry_t *driver_manager_get_entry(int idx) {
+    if (idx < 0 || idx >= s_driver_count) return NULL;
+    return &s_drivers[idx];
+}
+
+const char *drv_status_badge(drv_status_t s) {
+    switch (s) {
+    case DRV_STATUS_OK:     return "[OK]";
+    case DRV_STATUS_COMPAT: return "[COMPAT]";
+    case DRV_STATUS_FAIL:   return "[FAIL]";
+    case DRV_STATUS_SKIP:   return "[SKIP]";
+    default:                return "[?]";
+    }
+}
+
+// ── .purr module header ───────────────────────────────────────────────────────
+
+purr_module_header_t purr_module = {
+    .magic             = PURR_MODULE_MAGIC,
+    .abi_version       = PURR_MODULE_ABI_VERSION,
+    .module_type       = PURR_MOD_SYSTEM,
+    .name              = "driver_manager",
+    .version           = "0.1.0",
+    .kernel_min        = "0.9.0",
+    .kernel_max        = "",
+    .provided_catcalls = 0,
+    .required_catcalls = 0,
+    .init              = driver_manager_init,
+    .deinit            = driver_manager_deinit,
+};

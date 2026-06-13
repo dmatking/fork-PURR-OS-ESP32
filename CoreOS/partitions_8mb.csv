@@ -1,9 +1,8 @@
-# PURR OS — 8 MB flash partition table
+# PURR OS — 8 MB flash partition table (factory-only, no OTA)
 # Devices: heltec
 # SPIFFS offset: 0x690000  size: 0x170000 (1.5 MB)
 # Name,     Type, SubType,  Offset,    Size
-nvs,        data, nvs,      0x9000,    0x5000
-otadata,    data, ota,      0xE000,    0x2000
+nvs,        data, nvs,      0x9000,    0x6000
 phy_init,   data, phy,      0xF000,    0x1000
 factory,    app,  factory,  0x10000,   0x680000
 spiffs,     data, spiffs,   0x690000,  0x170000

@@ -1,0 +1,21 @@
+# drivers/gps/generic_nmea/driver.pcat
+
+name            = "generic_nmea"
+version         = "0.1.0"
+type            = "gps"
+catcall_version = 1
+idf_min         = "5.3.0"
+chip            = ["esp32", "esp32s3"]
+kernel_min      = "0.9.0"
+kernel_max      = ""
+
+module_type     = "PURR_MOD_DRIVER"
+provides        = ["gps"]
+
+required_catcalls = [
+    "catcall_gps_t.init",
+    "catcall_gps_t.get_fix",
+    "catcall_gps_t.deinit",
+]
+
+notes = "Generic UART NMEA parser. Works with any GPS module outputting standard NMEA sentences."
