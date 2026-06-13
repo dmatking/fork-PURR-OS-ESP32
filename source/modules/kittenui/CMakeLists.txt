@@ -4,6 +4,10 @@ idf_component_register(
         kittenui_module.c
         kittenui_hal.c
         kittenui_win.c
+        kittenui_desktop.c
+        themes/theme_wce.c
+        themes/theme_luna.c
+        themes/theme_dark.c
     INCLUDE_DIRS
         .
         ../../kernel/core

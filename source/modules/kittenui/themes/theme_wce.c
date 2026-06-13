@@ -34,10 +34,10 @@ static const kittenui_theme_t s_theme_wce = {
     },
 
     .fonts = {
-        .small   = &lv_font_montserrat_10,
+        .small   = &lv_font_montserrat_14,
         .body    = &lv_font_montserrat_14,
-        .heading = &lv_font_montserrat_16,
-        .mono    = &lv_font_unscii_8,
+        .heading = &lv_font_montserrat_14,
+        .mono    = &lv_font_montserrat_14,
     },
 
     .flags = {

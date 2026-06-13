@@ -156,17 +156,18 @@ static const kittenui_theme_t *load_theme_from_nvs(void)
 
 static TaskHandle_t s_task = NULL;
 
-extern void app_manager_open_launcher(void);
+#include "kittenui_desktop.h"
 
 static void kittenui_task(void *arg)
 {
     (void)arg;
-    // Open Cat Apps launcher on first tick — LVGL is fully up by now
-    if (purr_kernel_get_module("app_manager")) {
-        app_manager_open_launcher();
-    }
+    // Boot the XP desktop shell — LVGL is fully initialised by now
+    kittenui_desktop_init();
+    uint32_t tick = 0;
     while (1) {
         lv_timer_handler();
+        // Update clock every ~30 s (6000 × 5 ms)
+        if (++tick % 6000 == 0) kittenui_desktop_tick();
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }

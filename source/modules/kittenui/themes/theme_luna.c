@@ -37,10 +37,10 @@ const kittenui_theme_t *kittenui_theme_luna(void)
         s_theme_luna_rt.name = "Luna";
         s_theme_luna_rt.id   = "luna";
 
-        s_theme_luna_rt.fonts.small   = &lv_font_montserrat_10;
+        s_theme_luna_rt.fonts.small   = &lv_font_montserrat_14;
         s_theme_luna_rt.fonts.body    = &lv_font_montserrat_14;
-        s_theme_luna_rt.fonts.heading = &lv_font_montserrat_16;
-        s_theme_luna_rt.fonts.mono    = &lv_font_unscii_8;
+        s_theme_luna_rt.fonts.heading = &lv_font_montserrat_14;
+        s_theme_luna_rt.fonts.mono    = &lv_font_montserrat_14;
 
         s_theme_luna_rt.flags.raised_buttons  = false;  // flat buttons in Luna
         s_theme_luna_rt.flags.rounded_corners = true;

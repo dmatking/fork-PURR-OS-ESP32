@@ -35,10 +35,10 @@ const kittenui_theme_t *kittenui_theme_dark(void)
         s_theme_dark_rt.name = "Dark";
         s_theme_dark_rt.id   = "dark";
 
-        s_theme_dark_rt.fonts.small   = &lv_font_montserrat_10;
+        s_theme_dark_rt.fonts.small   = &lv_font_montserrat_14;
         s_theme_dark_rt.fonts.body    = &lv_font_montserrat_14;
-        s_theme_dark_rt.fonts.heading = &lv_font_montserrat_16;
-        s_theme_dark_rt.fonts.mono    = &lv_font_unscii_8;
+        s_theme_dark_rt.fonts.heading = &lv_font_montserrat_14;
+        s_theme_dark_rt.fonts.mono    = &lv_font_montserrat_14;
 
         s_theme_dark_rt.flags.raised_buttons  = false;
         s_theme_dark_rt.flags.rounded_corners = true;

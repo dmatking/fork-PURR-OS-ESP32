@@ -269,87 +269,68 @@ def _find_purr_blob(slug):
 
 def build_flash_image(device, pcat_cfg, out_dir, spiffs_size_kb=512):
     """
-    1. Run modulestrap to build all .purr blobs.
-    2. Read [flash] section from device.pcat to find which blobs to include.
-    3. Copy blobs into staging dir (preserving modules/ vs drivers/<type>/ layout).
-    4. Run spiffsgen.py to produce flash.bin.
+    Stage userland app files into a SPIFFS image (flash.bin).
+
+    Drivers, system modules, and UI modules are statically linked into the
+    firmware via PURR_MODULE_REGISTER() — they do NOT need .purr blobs on
+    SPIFFS. Only entries under apps/* in [flash] are staged here.
+
+    Steps:
+      1. Run catstrap to build any .meow / .paws / .claw app files.
+      2. Stage apps/* entries from [flash] into spiffs_staging/apps/.
+      3. Run spiffsgen.py to produce flash.bin.
+
     Returns path to flash.bin or None on failure.
     """
-    MODULESTRAP_PY = os.path.join(REPO_DIR, "modulestrap", "modulestrap.py")
-    staging_dir    = os.path.join(out_dir, "spiffs_staging")
-    flash_bin      = os.path.join(out_dir, "flash.bin")
-
-    # ── Step 1: build all .purr blobs + register all apps ─────────────────────
-    info("invoking modulestrap to build .purr blobs...")
-    rc = run_live([sys.executable, MODULESTRAP_PY, "build", "all"])
-    if rc != 0:
-        warn("modulestrap exited with errors — some modules may be missing")
-
     CATSTRAP_PY = os.path.join(REPO_DIR, "catstrap", "catstrap.py")
-    info("invoking catstrap to register apps...")
-    rc = run_live([sys.executable, CATSTRAP_PY, "build", "all"])
-    if rc != 0:
-        warn("catstrap exited with errors — some apps may be missing")
+    staging_dir = os.path.join(out_dir, "spiffs_staging")
+    flash_bin   = os.path.join(out_dir, "flash.bin")
 
-    # ── Step 2: read flash manifest ────────────────────────────────────────────
+    # ── Step 1: build userland apps ───────────────────────────────────────────
+    if os.path.isfile(CATSTRAP_PY):
+        info("invoking catstrap to build apps...")
+        rc = run_live([sys.executable, CATSTRAP_PY, "build", "all"])
+        if rc != 0:
+            warn("catstrap exited with errors — some apps may be missing")
+
+    # ── Step 2: read flash manifest and stage apps only ───────────────────────
     flash_entries = parse_flash_manifest(pcat_cfg)
-    if not flash_entries:
-        warn("no [flash] section in device.pcat — flash.bin will be empty filesystem")
 
-    # ── Step 3: stage files ────────────────────────────────────────────────────
     if os.path.isdir(staging_dir):
         shutil.rmtree(staging_dir)
-    os.makedirs(os.path.join(staging_dir, "modules"),  exist_ok=True)
-    os.makedirs(os.path.join(staging_dir, "drivers"),  exist_ok=True)
-    os.makedirs(os.path.join(staging_dir, "apps"),     exist_ok=True)
+    os.makedirs(os.path.join(staging_dir, "apps"), exist_ok=True)
 
     staged = 0
-    missing_required = []
 
     for slug, priority in sorted(flash_entries, key=lambda x: x[1]):
-        src = _find_purr_blob(slug)
+        parts = slug.split("/")
         prio_str = f"P{priority}"
 
-        if src is None:
-            msg = f"{prio_str} {slug} — blob not found in cattobaked/"
-            if priority == 1:
-                missing_required.append(slug)
-                print(f"  {C_RED}[XX]{C_RST}  {msg}")
-            else:
-                print(f"  {C_YLW}[--]{C_RST}  {msg}")
+        # Drivers, system modules, and UI are statically linked — skip them
+        if len(parts) != 2 or parts[0] != "apps":
+            print(f"  {C_GRN}[**]{C_RST}  {prio_str} {slug:<30}  static (in firmware)")
             continue
 
-        # Determine staging destination
-        parts = slug.split("/")
-        if len(parts) == 2 and parts[0] == "apps":
-            name = parts[1]
-            app_staging = os.path.join(staging_dir, "apps")
-            os.makedirs(app_staging, exist_ok=True)
-            if src.endswith(".meta.json"):
-                # Pre-linked app — registered in firmware, copy manifest as marker
-                dst = os.path.join(app_staging, f"{name}.meta.json")
-            else:
-                ext = os.path.splitext(src)[1]
-                dst = os.path.join(app_staging, f"{name}{ext}")
-        elif len(parts) == 1:
-            dst = os.path.join(staging_dir, "modules", f"{slug}.purr")
+        name = parts[1]
+        src  = _find_purr_blob(slug)
+
+        if src is None:
+            print(f"  {C_YLW}[--]{C_RST}  {prio_str} {slug} — no blob (pre-linked in firmware)")
+            continue
+
+        app_staging = os.path.join(staging_dir, "apps")
+        if src.endswith(".meta.json"):
+            dst = os.path.join(app_staging, f"{name}.meta.json")
         else:
-            type_dir = os.path.join(staging_dir, "drivers", parts[0])
-            os.makedirs(type_dir, exist_ok=True)
-            dst = os.path.join(type_dir, f"{parts[1]}.purr")
+            ext = os.path.splitext(src)[1]
+            dst = os.path.join(app_staging, f"{name}{ext}")
 
         shutil.copy2(src, dst)
         size_kb = os.path.getsize(src) // 1024
         print(f"  {C_GRN}[OK]{C_RST}  {prio_str} {slug:<30}  {size_kb} KB")
         staged += 1
 
-    if missing_required:
-        warn(f"{len(missing_required)} REQUIRED (P1) module(s) missing from build:")
-        for s in missing_required:
-            warn(f"  {s}")
-        warn("The kernel will panic at boot if these are not available on SD card.")
-
-    info(f"staged {staged}/{len(flash_entries)} modules into spiffs_staging/")
+    info(f"staged {staged} app(s) into spiffs_staging/")
 
     # ── Step 4: run spiffsgen.py ───────────────────────────────────────────────
     idf = _idf_path()
