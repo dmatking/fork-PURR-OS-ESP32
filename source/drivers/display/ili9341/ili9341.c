@@ -440,6 +440,11 @@ static const catcall_display_t s_catcall = {
 
 static int ili9341_drv_init(void)
 {
+    esp_err_t ret = ili9341_init(NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "hardware init failed: %s", esp_err_to_name(ret));
+        return -1;
+    }
     purr_kernel_register_display(&s_catcall);
     return 0;
 }
