@@ -1,87 +1,119 @@
 # CHANGELOG
 
-## v0.11.0 — 2026-06-12 (current)
-
-### Version bump
-- PURR OS: v0.10.1 → v0.11.0
-- KITT: v0.6.9 → v0.8.0
-
-### New vs v0.10.0
-- **purrstrap.py** — pmbootstrap-style CLI replaces `SDK/sdk_core.py`; subcommands: `init`, `status`, `list`, `build`, `flash`, `install`, `monitor`, `clean`, `bake`, `release`, `scan`, `doctor`
-- **Doctor command** — 15-point environment + repo health check (Python, ESP-IDF version, esptool, pyserial, component dirs, device overlays, serial ports)
-- **Repo restructure** — `drivers/` and `ui/` at repo root replace `CoreOS/components/`; all CMakeLists paths updated
-- **T-Deck Plus** — full keyboard + trackball input with 5-second cursor auto-hide, mouse cursor rendering
-- **MagiDOS CGA layer** — `magidos_cga.cpp/.h` and `magidos_filepicker.cpp` added
-- **Device compile-time config** — `device_config_default()` fully baked in for all targets; no SPIFFS/device.json dependency
-- **GT911 touch fix** — I2C bus conflict resolved; NULL guard prevents touch spam brownout
-- **GPS boot fix** — probe timeout 1500→800ms; total GPS wait 2000→500ms
-- **SD card fix** — 250ms GPIO 10 power stabilization delay on T-Deck Plus
-- **IDF sdmmc patch** — `ESP_ERR_INVALID_SIZE` allowed in SPI mode (`sdmmc_io.c`)
-- **4 new docs** — Overview, Quick Start, Architecture, Devices; all old docs archived
-- **baked/ output** — `purrstrap bake` produces per-device folder with binaries + `flash.sh` + `FLASH_GUIDE.md`
-- **9 targets all building** — heltec, tembed_cc1101, cyd_s028r, cyd_s024c, cyd_boot, tdeck, tdeck_plus, jc3248w535, waveshare169
+> **Note:** This changelog covers PURR OS v0.12.0 and later — the modular architecture era.
+> History up to v0.11.0 is preserved in [archive/CHANGELOG_0.11.md](archive/CHANGELOG_0.11.md).
+> v0.11.0 was the final release of the monolithic build system. Everything from here is new.
 
 ---
 
-## v0.10.1 — 2026-06-11
+## v0.12.0 — 2026-06-13
 
-### Repo restructure
-- `CoreOS/components/drv_*` → `drivers/` at repo root
-- `CoreOS/components/lib_miniwin` + `lib_tftespi` → `ui/`
-- `Shells/purr_wm` → `ui/purr_wm`
-- Device folders renamed to match target names: `jc3248` → `jc3248w535`, `waveshare` → `waveshare169`
-- Added missing device stub folders: `cyd_s024c`, `heltec`, `tembed_cc1101`, `tdeck`
-- All CMakeLists paths updated for new layout
-- `lib_miniwin/CMakeLists.txt` path fixes + added explicit `cyd_s024c` HAL mapping
+### Summary
+Complete ground-up architecture redesign and the first full release of the PURR OS modular era.
+Every driver, UI framework, and app is an isolated precompiled module. The kernel spine has zero
+hardware knowledge — it just loads modules and hands off. KITT v0.9.0 ships alongside with the
+same catcall-based kernel interface translation toolkit.
 
-### purrstrap.py (new)
-- Replaces `SDK/sdk_core.py` — pmbootstrap-style CLI
-- Subcommands: `init`, `status`, `list`, `build`, `flash`, `install`, `monitor`, `clean`, `bake`, `release`, `scan`
-- `baked/<device>/` output with `flash.sh` + `FLASH_GUIDE.md` per device
-- `.purrstrap` config at repo root (gitignored)
-- Release sets: `all`, `miniwin`, `s3`, `cyd`
+This release also introduces the **Unified UI API** (`purr_win.h`), a base set of five system apps
+that work identically on all UI backends, and per-device `[radio]` and `[apps]` configuration so
+builds are explicitly declared rather than assembled at runtime.
 
-### Runtime fixes (tdeck_plus)
-- Fixed I2C bus conflict: GT911 sys_drv disabled on tdeck_plus; `hal_touch.cpp` owns the bus
-- Fixed touch spam → brownout: added NULL guard in `mw_hal_touch_get_state()`
-- Fixed ADC crash: `BATT_ADC_PIN = -1` for tdeck_plus (no exposed battery ADC)
-- Fixed GPS blocking 5s boot: `GPS_INIT_WAIT_MS` 2000→500ms, probe timeouts 1500→800ms
-- Fixed SD card power: 250ms stabilization delay after GPIO 10 HIGH
-- Applied IDF patch: `sdmmc_io.c` allows `ESP_ERR_INVALID_SIZE` in SPI mode
+### New in v0.12.0
 
-### Device config
-- `device_config_default()` fully baked in at compile time for all targets — no `device.json` / SPIFFS dependency
-- `kitt.cpp` always calls `device_config_default()`, never loads JSON
-- `PURR_TARGET_*` defines added to `CoreOS/main/CMakeLists.txt` for all devices
+#### catcall_ui_t — Unified UI catcall
+- New sixth catcall: `catcall_ui_t` registered via `purr_kernel_register_ui()`, accessed via `purr_kernel_ui()`
+- Covers windows, labels, buttons, textareas, layout containers, on-screen keyboard
+- `source/kernel/catcalls/catcall_ui.h` — full struct definition
+- `source/kernel/catcalls/purr_win.h` — thin inline dispatch header for apps; all `purr_win_*()` helpers null-check before calling through the registered backend
 
-### Desktop / UI
-- Removed legacy `desktop_icons_register_defaults()` from tdeck_plus `purr_app.cpp`
-- Removed identity matrix calibration pre-seed — MiniWin 3-point calibration runs on first boot
-- Drivers app USER tab shows "No SD card / No user drivers" when `!pm_sd_available()`
+#### KittenUI LVGL backend
+- `source/modules/kittenui/kittenui_win.c` — implements `catcall_ui_t` using LVGL 8.x
+- Handle pool: `s_wins[16]` / `s_wids[128]` → `lv_obj_t*`
+- Button/textarea callbacks via `cb_ctx_t` trampoline structs
+- LVGL keyboard attached to textarea on `kb_show`
+- Called from `kittenui_module.c` init via `kittenui_win_register()`
 
-### Repo cleanup
-- Archived: `SDK/` legacy scripts, `WIP/` shell experiments, old `releases/` binaries
-- Removed root-level scratch files (`CMakeLists.txt`, `main.cpp`, `purr_api.h`)
-- Updated `.gitignore`: `baked/`, `tmp/`, `.purrstrap`
+#### MiniWin backend
+- `source/modules/miniwin/miniwin_win.c` — implements `catcall_ui_t` using MiniWin WM
+- Handle pool: `win_slot_t s_wins[16]` / `wid_slot_t s_wids[128]`
+- Vertical cursor stacking for label/button layout
+- `kb_show` is a no-op — physical keyboard handled via `catcall_input` automatically
+- Called from `miniwin_module.c` init via `miniwin_win_register()`
+
+#### Five built-in system apps
+All apps use `purr_win.h` exclusively — zero direct LVGL or MiniWin calls.
+They run identically on KittenUI and MiniWin without any source changes.
+
+| App | Tier | Description |
+|-----|------|-------------|
+| `settings` | `.claw` | Theme switcher (WCE/Luna/Dark, persisted to NVS "kittenui" namespace), display brightness via `catcall_display->set_brightness`, SD card status, system reboot |
+| `about` | `.claw` | PURR OS + KITT version, chip model/revision/cores, flash size, free RAM, uptime (live-updating every 5 s via background FreeRTOS task), all active catcall driver names |
+| `terminal` | `.claw` | Interactive shell: `ls [path]`, `cat <path>`, `echo <text>`, `modules`, `mem`, `uptime`, `clear`, `reboot`, `help`; 2 KB output scroll buffer |
+| `fileman` | `.claw` | Browse SPIFFS + SD card; Prev/Next cursor selection; Open enters directories or previews text files; binary-safe (non-printable bytes replaced with `.`) |
+| `calculator` | `.paws` | Basic arithmetic: `+`, `-`, `*`, `/`, decimal point, ERR:DIV0 guard; 5-row button layout via `purr_win_row()` |
+
+#### Device configs — [radio] and [apps] sections
+Every `device.pcat` now has:
+- `[radio]` — declares `wifi`, `bt`, `lora` capabilities; purrstrap emits `CONFIG_PURR_WIFI`, `CONFIG_PURR_BT`, `CONFIG_PURR_LORA`, `CONFIG_PURR_LORA_DRIVER` into the glue layer
+- `[apps]` — per-app `true/false` flags; controls which apps are baked into the SPIFFS flash image
+- Medium/large-screen devices (cyd*, tdeck*, jc3248w535) get all five apps bundled by default
+- Small-screen devices (heltec, waveshare169) ship without GUI apps
+
+#### purrstrap — full pipeline wired
+- `_generate_glue()` now emits radio flags and `/flash/apps` + `/sdcard/apps` path constants
+- `build_flash_image()` now calls catstrap automatically (was manual step before)
+- `_find_purr_blob()` handles `apps/<name>` slugs: resolves `.claw`/`.paws`/`.meow` output files and `.meta.json` registrations
+- App blob staging into `spiffs_staging/apps/` alongside modules and drivers
+
+#### New GPS driver
+- `source/drivers/gps/generic_nmea/generic_nmea.c` — full UART NMEA 0183 parser
+- Background FreeRTOS task reads UART line by line; parses `$GPRMC` (lat/lon/speed/validity) and `$GPGGA` (satellites/hdop/altitude)
+- Mutex-protected `gps_fix_t`; thread-safe `get_fix()` reads
+- PURR_PRIORITY_OPTIONAL — kernel does not panic if GPS is absent
+
+#### New OLED UI module
+- `source/modules/oled_ui/oled_ui_module.c` — text-mode UI for SSD1306 128x64
+- Embedded 6x8 bitmap font (95 printable ASCII chars)
+- Ring-buffer log display (5 visible lines); `oled_ui_log(const char *)` public API for other modules
+- Row 0 = title bar, row 1 = status, row 2 = separator, rows 3-7 = scrolling log
+- Redraws every 500 ms via FreeRTOS task
+
+#### app_manager — fully wired
+- `launch_meow()` — looks up `lua_runtime` module via `purr_kernel_get_module()`, stores pending path, spawns `meow_task()`
+- `launch_native()` — looks up app name via `purr_kernel_get_module()`; reports "not pre-linked: recompile firmware" if absent; spawns `native_task()` (16 KB stack for .claw, 8 KB for .paws)
+- `app_manager_stop()` — calls `mod->deinit()`, waits up to 2 s via semaphore, force-deletes task via `vTaskDelete()` if still alive
+- `app_manager_open_launcher()` — logs app list with name/tier/state
+- `app_task_ctx_t` struct tracks task handle + done semaphore per app slot
+
+#### catstrap — IDF component model
+- `build_app()` now generates IDF component `CMakeLists.txt` fragments with correct include paths to `source/kernel/` headers
+- Writes `.meta.json` with status "registered" (was "placeholder" before)
+- .claw apps get `source/kernel/core/` + `source/kernel/catcalls/` in their include dirs
+
+#### Documentation refresh (docs/)
+- `02_Catcalls.md` — added `catcall_ui_t` section with full struct, functions, backend table, app usage guide; added Glue Layer section documenting `CONFIG_PURR_WIFI`/`BT`/`LORA` defines; added per-catcall driver tables
+- `04_Devices.md` — added all 8 devices (was 4); added `[radio]`, `[apps]`, `[flash]` format; added screen size classification table; expanded pin reference with LoRa busy pin, MADCTL override, SD keys
+- `06_Apps.md` — rewrote with `purr_win.h` API reference, full function signatures for all widget types; added built-in system apps table; updated .meow kitt.* section with `radio_rssi()`, GPS fix fields
+- `07_Build_Tools.md` — complete rewrite; documents full purrstrap pipeline (7-step sequence), modulestrap IDF component model, catstrap SDK headers including `catcall_ui.h` and `purr_win.h`
+- `12_AppAPI.md` — added settings/about/fileman to built-in apps table; added file manager layout diagram
+
+### Bug fixes
+- `oled_ui_module.c` — removed duplicate kernel header includes (double `../../kernel/` and `../../../source/kernel/` paths would fail compilation)
+- `modulestrap` — removed broken per-module IDF mini-project invocation (ESP-IDF cannot build isolated component mini-projects); replaced with component registration model
+- `cyd_s024c` — backlight pin was GPIO 21 in old config; corrected to GPIO 27 (verified)
+- `cyd_s028r` — missing MADCTL=0x40 portrait flip; added `display_madctl` pin key
+
+### Breaking changes from v0.11.0
+- Old `CoreOS/`, `drivers/`, `ui/`, `devices/`, `SDK/`, `CattoHID/`, `Userland/`, `sdcard_apps/` are archived to `PURR-OS-0.11/` — not built by default
+- `purrstrap.py` (monolithic CLI) replaced by three separate tools: `purrstrap/`, `modulestrap/`, `catstrap/`
+- Build output moves from `baked/<device>/` to `cattobaked/<device|modules|drivers|apps>/`
+
+### Versions
+- PURR OS: v0.12.0
+- KITT: v0.9.0
+- `.purr` ABI version: 1
+- Catcall API version: 1 (+ catcall_ui added as slot 6)
 
 ---
 
-## v0.10.0 — 2026-05-xx
-
-- MiniWin WM: keyboard + trackball support across system
-- Trackball mouse cursor with 5s auto-hide
-- Cross-device build fixes (ILI9341/pm guards, GT911/ST7796, misleading-indentation)
-- Increased blue panic memory threshold to 50KB
-
----
-
-## v0.9.6 — 2026-04-xx
-
-- MagiDOS 8086 DOS emulator (ESP32-S3 + 8MB PSRAM)
-- MagicMac Mac Plus emulator stub
-- SPIFFS partition offset corrected to 0xe00000
-- CYD white display fix on boot
-
----
-
-*Older history archived in [docs/archive/](docs/archive/).*
+*v0.11.0 and earlier: see [archive/CHANGELOG_0.11.md](archive/CHANGELOG_0.11.md)*

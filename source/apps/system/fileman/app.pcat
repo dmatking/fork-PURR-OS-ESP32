@@ -1,0 +1,9 @@
+# apps/system/fileman/app.pcat
+
+name        = "fileman"
+version     = "1.0.0"
+tier        = "claw"
+author      = "PURR OS"
+description = "File manager: browse SPIFFS and SD card, view text files."
+
+idf_requires = "esp_common driver freertos spiffs fatfs"

@@ -1,0 +1,224 @@
+// terminal.c — PURR OS built-in terminal app (.claw)
+// Uses purr_win.h — works on both KittenUI (LVGL) and MiniWin.
+// Commands: help, ls, cat, echo, modules, mem, uptime, reboot, clear
+
+#include <string.h>
+#include <stdio.h>
+#include <dirent.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "purr_win.h"
+#include "purr_kernel.h"
+#include "purr_module.h"
+
+#define CMD_MAX   128
+#define OUT_MAX   2048
+
+static purr_win_t  s_win  = 0;
+static purr_wid_t  s_out  = 0;   // output textarea
+static purr_wid_t  s_in   = 0;   // input textarea (single line)
+static purr_wid_t  s_send = 0;   // send button
+static char        s_outbuf[OUT_MAX];
+static size_t      s_outlen = 0;
+
+// ── Output helpers ────────────────────────────────────────────────────────────
+
+static void term_print(const char *text) {
+    size_t tlen = strlen(text);
+    if (s_outlen + tlen >= OUT_MAX - 1) {
+        // Scroll: drop first half
+        size_t half = OUT_MAX / 2;
+        memmove(s_outbuf, s_outbuf + half, s_outlen - half);
+        s_outlen -= half;
+        s_outbuf[s_outlen] = '\0';
+    }
+    memcpy(s_outbuf + s_outlen, text, tlen + 1);
+    s_outlen += tlen;
+    purr_win_textarea_set(s_out, s_outbuf);
+}
+
+static void term_println(const char *text) {
+    term_print(text);
+    term_print("\n");
+}
+
+// ── Command handlers ──────────────────────────────────────────────────────────
+
+static void cmd_help(void) {
+    term_println("Commands:");
+    term_println("  help               this message");
+    term_println("  ls [path]          list directory");
+    term_println("  cat <path>         print file");
+    term_println("  echo <text>        print text");
+    term_println("  modules            list loaded modules");
+    term_println("  mem                free RAM");
+    term_println("  uptime             uptime in seconds");
+    term_println("  clear              clear screen");
+    term_println("  reboot             reboot device");
+}
+
+static void cmd_ls(const char *path) {
+    const char *dir = (path && *path) ? path : "/flash";
+    DIR *d = opendir(dir);
+    if (!d) { term_println("ls: cannot open directory"); return; }
+    struct dirent *ent;
+    int n = 0;
+    while ((ent = readdir(d))) {
+        char line[64];
+        snprintf(line, sizeof(line), "  %s%s\n",
+                 ent->d_name,
+                 ent->d_type == DT_DIR ? "/" : "");
+        term_print(line);
+        n++;
+    }
+    closedir(d);
+    if (!n) term_println("  (empty)");
+}
+
+static void cmd_cat(const char *path) {
+    if (!path || !*path) { term_println("cat: missing path"); return; }
+    FILE *f = fopen(path, "r");
+    if (!f) { term_println("cat: file not found"); return; }
+    char buf[128];
+    while (fgets(buf, sizeof(buf), f)) term_print(buf);
+    fclose(f);
+    term_print("\n");
+}
+
+static void cmd_echo(const char *text) {
+    term_println(text ? text : "");
+}
+
+static void cmd_modules(void) {
+    term_println("Loaded modules:");
+    for (int i = 0; i < 32; i++) {
+        const purr_module_header_t *m = NULL;
+        // Walk the registry — we try names via get_module but we don't have
+        // an iteration API, so we use the known-loaded list approach:
+        // (In a future kernel revision, purr_kernel_module_iter() would be ideal.)
+        (void)m;
+    }
+    // For now, report the UI that's active as a proxy
+    const catcall_ui_t *ui = purr_kernel_ui();
+    char line[64];
+    snprintf(line, sizeof(line), "  ui: %s\n", ui ? ui->name : "(none)");
+    term_print(line);
+    const catcall_display_t *disp = purr_kernel_display();
+    snprintf(line, sizeof(line), "  display: %s\n", disp ? disp->name : "(none)");
+    term_print(line);
+}
+
+static void cmd_mem(void) {
+    char buf[48];
+    snprintf(buf, sizeof(buf), "Free RAM: %lu bytes\n",
+             (unsigned long)purr_kernel_free_ram());
+    term_print(buf);
+}
+
+static void cmd_uptime(void) {
+    char buf[48];
+    snprintf(buf, sizeof(buf), "Uptime: %llu s\n",
+             (unsigned long long)(purr_kernel_uptime_ms() / 1000ULL));
+    term_print(buf);
+}
+
+static void cmd_clear(void) {
+    s_outlen = 0;
+    s_outbuf[0] = '\0';
+    purr_win_textarea_clear(s_out);
+}
+
+// ── Command dispatch ──────────────────────────────────────────────────────────
+
+static void run_command(const char *line) {
+    char buf[CMD_MAX];
+    strncpy(buf, line, CMD_MAX - 1);
+    buf[CMD_MAX - 1] = '\0';
+
+    // Trim trailing newline/space
+    int len = strlen(buf);
+    while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r' || buf[len-1] == ' '))
+        buf[--len] = '\0';
+
+    if (!*buf) return;
+
+    // Echo command
+    char prompt[CMD_MAX + 4];
+    snprintf(prompt, sizeof(prompt), "> %s\n", buf);
+    term_print(prompt);
+
+    // Split verb + args
+    char *space = strchr(buf, ' ');
+    const char *args = space ? (space + 1) : "";
+    if (space) *space = '\0';
+    const char *verb = buf;
+
+    if      (strcmp(verb, "help")   == 0) cmd_help();
+    else if (strcmp(verb, "ls")     == 0) cmd_ls(args);
+    else if (strcmp(verb, "cat")    == 0) cmd_cat(args);
+    else if (strcmp(verb, "echo")   == 0) cmd_echo(args);
+    else if (strcmp(verb, "modules")== 0) cmd_modules();
+    else if (strcmp(verb, "mem")    == 0) cmd_mem();
+    else if (strcmp(verb, "uptime") == 0) cmd_uptime();
+    else if (strcmp(verb, "clear")  == 0) cmd_clear();
+    else if (strcmp(verb, "reboot") == 0) { term_println("Rebooting..."); vTaskDelay(300); purr_kernel_reboot(); }
+    else {
+        char err[CMD_MAX + 24];
+        snprintf(err, sizeof(err), "unknown command: %s\n", verb);
+        term_print(err);
+    }
+}
+
+// ── UI callbacks ──────────────────────────────────────────────────────────────
+
+static void on_send(purr_wid_t wid, purr_event_t event, void *user) {
+    (void)wid; (void)event; (void)user;
+    const char *text = purr_win_textarea_get(s_in);
+    if (text && *text) {
+        run_command(text);
+        purr_win_textarea_clear(s_in);
+    }
+}
+
+// ── App init / deinit ─────────────────────────────────────────────────────────
+
+static int terminal_init(void) {
+    s_outlen = 0;
+    s_outbuf[0] = '\0';
+
+    s_win  = purr_win_create("Terminal");
+    s_out  = purr_win_textarea(s_win, 100, 75);
+    s_in   = purr_win_textarea(s_win, 80, 10);
+    s_send = purr_win_button(s_win, "Send", on_send, NULL);
+
+    purr_win_textarea_focus(s_in);
+    purr_win_show(s_win);
+
+    term_println("PURR OS Terminal v1.0");
+    term_println("Type 'help' for commands.");
+    term_print("> ");
+    return 0;
+}
+
+static void terminal_deinit(void) {
+    purr_win_destroy(s_win);
+    s_win = 0; s_out = 0; s_in = 0; s_send = 0;
+}
+
+// ── Module header ─────────────────────────────────────────────────────────────
+
+#include "purr_module.h"
+
+purr_module_header_t purr_module = {
+    .magic             = PURR_MODULE_MAGIC,
+    .abi_version       = PURR_MODULE_ABI_VERSION,
+    .module_type       = PURR_MOD_APP,
+    .load_priority     = PURR_PRIORITY_OPTIONAL,
+    .name              = "terminal",
+    .version           = "1.0.0",
+    .kernel_min        = "0.9.0",
+    .provided_catcalls = 0,
+    .required_catcalls = 0,
+    .init              = terminal_init,
+    .deinit            = terminal_deinit,
+};

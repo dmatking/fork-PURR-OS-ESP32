@@ -5,6 +5,9 @@ build_*/
 # Release staging dirs — populated by purrstrap bake/release, never committed
 GHReleases/
 baked/
+releases/
+prebuilt/
+cattobaked/
 
 # Scratch build workspace
 tmp/

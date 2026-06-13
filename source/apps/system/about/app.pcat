@@ -1,0 +1,9 @@
+# apps/system/about/app.pcat
+
+name        = "about"
+version     = "1.0.0"
+tier        = "claw"
+author      = "PURR OS"
+description = "About PURR OS: version, device info, free RAM, uptime, loaded modules."
+
+idf_requires = "esp_common driver freertos esp_chip_info

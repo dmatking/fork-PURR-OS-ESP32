@@ -1,0 +1,16 @@
+# drivers/display/ssd1306/driver.pcat
+
+name            = "ssd1306"
+version         = "1.0.0"
+type            = "display"
+catcall_version = 1
+idf_min         = "5.3.0"
+chip            = ["esp32", "esp32s3"]
+kernel_min      = "0.9.0"
+kernel_max      = ""
+
+module_type     = "PURR_MOD_DRIVER"
+provides        = ["display"]
+required_catcalls = []
+
+notes = "SSD1306 I2C monochrome OLED 128x64. Used on heltec. RGB565 pixels are dithered to 1-bit."

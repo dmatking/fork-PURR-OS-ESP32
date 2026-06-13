@@ -1,0 +1,10 @@
+# apps/system/terminal/app.pcat
+# PURR OS built-in terminal — .claw tier (needs kernel module list + reboot)
+
+name        = "terminal"
+version     = "1.0.0"
+tier        = "claw"
+author      = "PURR OS"
+description = "Built-in terminal. Commands: help, ls, cat, echo, modules, reboot, clear."
+
+idf_requires = "esp_common driver freertos nvs_flash esp_vfs fatfs spiffs

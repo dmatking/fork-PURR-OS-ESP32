@@ -1,0 +1,262 @@
+// kittenui_win.c — catcall_ui_t backend for KittenUI (LVGL)
+// Registers via purr_kernel_register_ui() during kittenui module init.
+
+#include "lvgl.h"
+#include "../../kernel/catcalls/catcall_ui.h"
+#include "../../kernel/core/purr_kernel.h"
+
+// ── Handle pool ───────────────────────────────────────────────────────────────
+// Map opaque uint32_t tokens → lv_obj_t*. Simple linear scan; MAX 32 windows
+// + 256 widgets is more than enough for embedded apps.
+
+#define MAX_WINS  16
+#define MAX_WIDS  128
+
+static lv_obj_t *s_wins[MAX_WINS];
+static lv_obj_t *s_wids[MAX_WIDS];
+
+static purr_win_t alloc_win(lv_obj_t *obj) {
+    for (int i = 0; i < MAX_WINS; i++) {
+        if (!s_wins[i]) { s_wins[i] = obj; return (purr_win_t)(i + 1); }
+    }
+    return 0;
+}
+static lv_obj_t *get_win(purr_win_t h) {
+    if (h < 1 || h > MAX_WINS) return NULL;
+    return s_wins[h - 1];
+}
+static void free_win(purr_win_t h) {
+    if (h >= 1 && h <= MAX_WINS) s_wins[h - 1] = NULL;
+}
+
+static purr_wid_t alloc_wid(lv_obj_t *obj) {
+    for (int i = 0; i < MAX_WIDS; i++) {
+        if (!s_wids[i]) { s_wids[i] = obj; return (purr_wid_t)(i + 1); }
+    }
+    return 0;
+}
+static lv_obj_t *get_wid(purr_wid_t h) {
+    if (h < 1 || h > MAX_WIDS) return NULL;
+    return s_wids[h - 1];
+}
+static void free_wid(purr_wid_t h) {
+    if (h >= 1 && h <= MAX_WIDS) s_wids[h - 1] = NULL;
+}
+
+// ── Callback trampoline ───────────────────────────────────────────────────────
+
+typedef struct { purr_win_cb_t cb; void *user; purr_wid_t wid; } cb_ctx_t;
+
+static void btn_event_cb(lv_event_t *e) {
+    cb_ctx_t *ctx = (cb_ctx_t *)lv_event_get_user_data(e);
+    if (ctx && ctx->cb) ctx->cb(ctx->wid, PURR_EVENT_CLICKED, ctx->user);
+}
+
+static void ta_event_cb(lv_event_t *e) {
+    cb_ctx_t *ctx = (cb_ctx_t *)lv_event_get_user_data(e);
+    if (ctx && ctx->cb) ctx->cb(ctx->wid, PURR_EVENT_CHANGED, ctx->user);
+}
+
+// ── Window ────────────────────────────────────────────────────────────────────
+
+static purr_win_t kw_win_create(const char *title) {
+    lv_obj_t *win = lv_win_create(lv_scr_act());
+    lv_win_add_title(win, title);
+    lv_obj_set_size(win, LV_PCT(100), LV_PCT(100));
+    lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
+    return alloc_win(win);
+}
+
+static void kw_win_destroy(purr_win_t h) {
+    lv_obj_t *w = get_win(h);
+    if (w) lv_obj_del(w);
+    free_win(h);
+}
+
+static void kw_win_show(purr_win_t h) {
+    lv_obj_t *w = get_win(h);
+    if (w) lv_obj_clear_flag(w, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void kw_win_hide(purr_win_t h) {
+    lv_obj_t *w = get_win(h);
+    if (w) lv_obj_add_flag(w, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void kw_win_clear(purr_win_t h) {
+    lv_obj_t *w = get_win(h);
+    if (!w) return;
+    lv_obj_t *content = lv_win_get_content(w);
+    if (content) lv_obj_clean(content);
+}
+
+// ── Labels ────────────────────────────────────────────────────────────────────
+
+static purr_wid_t kw_label_create(purr_win_t h, const char *text) {
+    lv_obj_t *w = get_win(h);
+    if (!w) return 0;
+    lv_obj_t *lbl = lv_label_create(lv_win_get_content(w));
+    lv_label_set_text(lbl, text);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(lbl, LV_PCT(100));
+    return alloc_wid(lbl);
+}
+
+static void kw_label_set(purr_wid_t wid, const char *text) {
+    lv_obj_t *o = get_wid(wid);
+    if (o) lv_label_set_text(o, text);
+}
+
+static void kw_label_align(purr_wid_t wid, purr_align_t align) {
+    lv_obj_t *o = get_wid(wid);
+    if (!o) return;
+    lv_text_align_t a = (align == PURR_ALIGN_CENTER) ? LV_TEXT_ALIGN_CENTER :
+                        (align == PURR_ALIGN_RIGHT)  ? LV_TEXT_ALIGN_RIGHT  :
+                                                        LV_TEXT_ALIGN_LEFT;
+    lv_obj_set_style_text_align(o, a, 0);
+}
+
+// ── Buttons ───────────────────────────────────────────────────────────────────
+
+static purr_wid_t kw_btn_create(purr_win_t h, const char *label,
+                                  purr_win_cb_t cb, void *user) {
+    lv_obj_t *w = get_win(h);
+    if (!w) return 0;
+    lv_obj_t *btn = lv_btn_create(lv_win_get_content(w));
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, label);
+    lv_obj_center(lbl);
+
+    purr_wid_t wid = alloc_wid(btn);
+    if (cb) {
+        cb_ctx_t *ctx = heap_caps_malloc(sizeof(cb_ctx_t), MALLOC_CAP_DEFAULT);
+        if (ctx) { ctx->cb = cb; ctx->user = user; ctx->wid = wid; }
+        lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, ctx);
+    }
+    return wid;
+}
+
+static void kw_btn_enable(purr_wid_t wid, bool enabled) {
+    lv_obj_t *o = get_wid(wid);
+    if (!o) return;
+    if (enabled) lv_obj_clear_state(o, LV_STATE_DISABLED);
+    else         lv_obj_add_state(o, LV_STATE_DISABLED);
+}
+
+// ── Textarea ──────────────────────────────────────────────────────────────────
+
+static purr_wid_t kw_ta_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
+    lv_obj_t *w = get_win(h);
+    if (!w) return 0;
+    lv_obj_t *ta = lv_textarea_create(lv_win_get_content(w));
+    lv_obj_set_size(ta, LV_PCT(w_pct), LV_PCT(h_pct));
+    lv_textarea_set_one_line(ta, false);
+    return alloc_wid(ta);
+}
+
+static void kw_ta_append(purr_wid_t wid, const char *text) {
+    lv_obj_t *o = get_wid(wid);
+    if (o) lv_textarea_add_text(o, text);
+}
+
+static void kw_ta_set(purr_wid_t wid, const char *text) {
+    lv_obj_t *o = get_wid(wid);
+    if (o) lv_textarea_set_text(o, text);
+}
+
+static void kw_ta_clear(purr_wid_t wid) {
+    lv_obj_t *o = get_wid(wid);
+    if (o) lv_textarea_set_text(o, "");
+}
+
+static const char *kw_ta_get(purr_wid_t wid) {
+    lv_obj_t *o = get_wid(wid);
+    return o ? lv_textarea_get_text(o) : NULL;
+}
+
+static void kw_ta_focus(purr_wid_t wid) {
+    lv_obj_t *o = get_wid(wid);
+    if (o) lv_obj_add_state(o, LV_STATE_FOCUSED);
+}
+
+static void kw_ta_cb(purr_wid_t wid, purr_win_cb_t cb, void *user) {
+    lv_obj_t *o = get_wid(wid);
+    if (!o || !cb) return;
+    cb_ctx_t *ctx = heap_caps_malloc(sizeof(cb_ctx_t), MALLOC_CAP_DEFAULT);
+    if (ctx) { ctx->cb = cb; ctx->user = user; ctx->wid = wid; }
+    lv_obj_add_event_cb(o, ta_event_cb, LV_EVENT_VALUE_CHANGED, ctx);
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+
+static purr_wid_t kw_layout_begin(purr_win_t h, purr_layout_t dir, uint8_t pad) {
+    lv_obj_t *w = get_win(h);
+    if (!w) return 0;
+    lv_obj_t *cont = lv_obj_create(lv_win_get_content(w));
+    lv_obj_set_size(cont, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(cont, pad, 0);
+    lv_obj_set_style_border_width(cont, 0, 0);
+    lv_layout_t lv_dir = (dir == PURR_LAYOUT_ROW)
+        ? LV_LAYOUT_FLEX : LV_LAYOUT_FLEX;
+    lv_obj_set_layout(cont, lv_dir);
+    lv_obj_set_flex_flow(cont,
+        (dir == PURR_LAYOUT_ROW) ? LV_FLEX_FLOW_ROW : LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    return alloc_wid(cont);
+}
+
+static void kw_layout_end(purr_wid_t wid) {
+    (void)wid; // nothing to do in LVGL — container stays valid until win_clear
+}
+
+// ── Keyboard ──────────────────────────────────────────────────────────────────
+
+static lv_obj_t *s_keyboard = NULL;
+
+static void kw_kb_show(purr_win_t h, purr_wid_t target) {
+    lv_obj_t *w = get_win(h);
+    lv_obj_t *ta = get_wid(target);
+    if (!w || !ta) return;
+    if (!s_keyboard) {
+        s_keyboard = lv_keyboard_create(lv_scr_act());
+    }
+    lv_keyboard_set_textarea(s_keyboard, ta);
+    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void kw_kb_hide(purr_win_t h) {
+    (void)h;
+    if (s_keyboard) lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ── Registration ──────────────────────────────────────────────────────────────
+
+static const catcall_ui_t s_kittenui_win = {
+    .name            = "kittenui",
+    .catcall_version = CATCALL_UI_VERSION,
+    .win_create      = kw_win_create,
+    .win_destroy     = kw_win_destroy,
+    .win_show        = kw_win_show,
+    .win_hide        = kw_win_hide,
+    .win_clear       = kw_win_clear,
+    .label_create    = kw_label_create,
+    .label_set       = kw_label_set,
+    .label_align     = kw_label_align,
+    .btn_create      = kw_btn_create,
+    .btn_enable      = kw_btn_enable,
+    .textarea_create = kw_ta_create,
+    .textarea_append = kw_ta_append,
+    .textarea_set    = kw_ta_set,
+    .textarea_clear  = kw_ta_clear,
+    .textarea_get    = kw_ta_get,
+    .textarea_focus  = kw_ta_focus,
+    .textarea_cb     = kw_ta_cb,
+    .layout_begin    = kw_layout_begin,
+    .layout_end      = kw_layout_end,
+    .kb_show         = kw_kb_show,
+    .kb_hide         = kw_kb_hide,
+};
+
+void kittenui_win_register(void) {
+    purr_kernel_register_ui(&s_kittenui_win);
+}

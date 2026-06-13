@@ -1,0 +1,9 @@
+# apps/system/settings/app.pcat
+
+name        = "settings"
+version     = "1.0.0"
+tier        = "claw"
+author      = "PURR OS"
+description = "System settings: theme, brightness, SD card, device info."
+
+idf_requires = "esp_common driver freertos nvs_flash

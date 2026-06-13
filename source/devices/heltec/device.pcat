@@ -1,0 +1,58 @@
+# devices/heltec/device.pcat
+# Heltec WiFi LoRa 32 V3 — ESP32-S3, 128x64 SSD1306 OLED, SX1262 LoRa
+# Small OLED — text-mode only. Full radio (WiFi + BT + SX1262 LoRa). No GUI apps.
+
+[device]
+name        = "heltec"
+chip        = "esp32s3"
+flash_mb    = 8
+psram       = false
+spiffs_kb   = 256
+
+[drivers]
+display     = "ssd1306"
+touch       = ""
+input       = ""
+radio       = "sx1262"
+gps         = ""
+
+[radio]
+wifi        = true
+bt          = true
+lora        = "sx1262"
+
+[modules]
+ui          = "oled_ui"
+app_manager = "app_manager"
+
+[ui]
+style       = "full"
+
+[apps]
+# 128x64 OLED — no touch, no GUI apps.
+settings    = false
+about       = false
+terminal    = false
+fileman     = false
+calculator  = false
+
+[flash]
+display/ssd1306  = 1
+radio/sx1262     = 2
+oled_ui          = 2
+app_manager      = 2
+
+[pins]
+display_sda   = 17
+display_scl   = 18
+display_rst   = 21
+
+lora_mosi     = 10
+lora_miso     = 11
+lora_sclk     = 9
+lora_cs       = 8
+lora_rst      = 12
+lora_busy     = 13
+lora_irq      = 14
+
+sd_enabled    = false

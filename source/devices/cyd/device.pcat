@@ -1,0 +1,73 @@
+# devices/cyd/device.pcat
+# ESP32-2432S028 — CYD "Cheap Yellow Display", 2.8" ILI9341 + XPT2046 touch
+# Medium screen (320×240). Base OS profile.
+
+[device]
+name        = "cyd"
+chip        = "esp32"
+flash_mb    = 4
+psram       = false
+spiffs_kb   = 512
+
+[drivers]
+display     = "ili9341"
+touch       = "xpt2046"
+input       = ""
+radio       = ""
+gps         = ""
+
+[radio]
+# ESP32 has built-in WiFi + BT — no LoRa module on base CYD
+wifi        = true
+bt          = true
+lora        = ""
+
+[modules]
+ui          = "kittenui"
+app_manager = "app_manager"
+
+[ui]
+theme       = "wce"
+
+[apps]
+# Base OS — staple apps always present
+settings    = true
+about       = true
+# Core usable apps
+terminal    = true
+fileman     = true
+calculator  = true
+
+[flash]
+# Priority 1 — required, kernel panics without these
+display/ili9341  = 1
+touch/xpt2046    = 1
+# Priority 2 — important UI + management layer
+kittenui         = 2
+app_manager      = 2
+# Priority 3 — base OS apps
+apps/settings    = 3
+apps/about       = 3
+apps/terminal    = 3
+apps/fileman     = 3
+apps/calculator  = 3
+
+[pins]
+display_cs    = 15
+display_dc    = 2
+display_mosi  = 13
+display_sclk  = 14
+display_rst   = -1
+display_bl    = 21
+
+touch_cs      = 33
+touch_miso    = 12
+touch_mosi    = 13
+touch_sclk    = 14
+touch_irq     = 36
+
+sd_cs         = 5
+sd_mosi       = 23
+sd_miso       = 19
+sd_sclk       = 18
+sd_enabled    = true

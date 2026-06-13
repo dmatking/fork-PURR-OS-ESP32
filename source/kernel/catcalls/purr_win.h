@@ -1,0 +1,119 @@
+#pragma once
+// purr_win.h — unified windowing API for PURR OS apps
+//
+// Include this header and call purr_win_*() — never call LVGL or MiniWin
+// directly from app code. The active UI module (kittenui or miniwin) registers
+// a catcall_ui_t backend; these helpers dispatch through it.
+//
+// Usage:
+//   #include "purr_win.h"
+//
+//   purr_win_t win = purr_win_create("My App");
+//   purr_wid_t lbl = purr_win_label(win, "Hello!");
+//   purr_win_show(win);
+
+#include "catcall_ui.h"
+#include "../core/purr_kernel.h"
+
+// ── Internal dispatch macro ────────────────────────────────────────────────────
+// Returns a default value if no UI is registered (graceful no-op).
+
+#define _UI_CALL(ret, fn, ...) \
+    do { \
+        const catcall_ui_t *_ui = purr_kernel_ui(); \
+        if (_ui && _ui->fn) return _ui->fn(__VA_ARGS__); \
+        return ret; \
+    } while(0)
+
+#define _UI_VOID(fn, ...) \
+    do { \
+        const catcall_ui_t *_ui = purr_kernel_ui(); \
+        if (_ui && _ui->fn) _ui->fn(__VA_ARGS__); \
+    } while(0)
+
+// ── Window lifecycle ──────────────────────────────────────────────────────────
+
+static inline purr_win_t purr_win_create(const char *title) {
+    _UI_CALL(0, win_create, title);
+}
+static inline void purr_win_destroy(purr_win_t win) {
+    _UI_VOID(win_destroy, win);
+}
+static inline void purr_win_show(purr_win_t win) {
+    _UI_VOID(win_show, win);
+}
+static inline void purr_win_hide(purr_win_t win) {
+    _UI_VOID(win_hide, win);
+}
+static inline void purr_win_clear(purr_win_t win) {
+    _UI_VOID(win_clear, win);
+}
+
+// ── Labels ────────────────────────────────────────────────────────────────────
+
+static inline purr_wid_t purr_win_label(purr_win_t win, const char *text) {
+    _UI_CALL(0, label_create, win, text);
+}
+static inline void purr_win_label_set(purr_wid_t wid, const char *text) {
+    _UI_VOID(label_set, wid, text);
+}
+static inline void purr_win_label_align(purr_wid_t wid, purr_align_t align) {
+    _UI_VOID(label_align, wid, align);
+}
+
+// ── Buttons ───────────────────────────────────────────────────────────────────
+
+static inline purr_wid_t purr_win_button(purr_win_t win, const char *label,
+                                          purr_win_cb_t cb, void *user) {
+    _UI_CALL(0, btn_create, win, label, cb, user);
+}
+static inline void purr_win_button_enable(purr_wid_t wid, bool enabled) {
+    _UI_VOID(btn_enable, wid, enabled);
+}
+
+// ── Textarea ──────────────────────────────────────────────────────────────────
+
+static inline purr_wid_t purr_win_textarea(purr_win_t win,
+                                            uint16_t w_pct, uint16_t h_pct) {
+    _UI_CALL(0, textarea_create, win, w_pct, h_pct);
+}
+static inline void purr_win_textarea_append(purr_wid_t wid, const char *text) {
+    _UI_VOID(textarea_append, wid, text);
+}
+static inline void purr_win_textarea_set(purr_wid_t wid, const char *text) {
+    _UI_VOID(textarea_set, wid, text);
+}
+static inline void purr_win_textarea_clear(purr_wid_t wid) {
+    _UI_VOID(textarea_clear, wid);
+}
+static inline const char *purr_win_textarea_get(purr_wid_t wid) {
+    _UI_CALL(NULL, textarea_get, wid);
+}
+static inline void purr_win_textarea_focus(purr_wid_t wid) {
+    _UI_VOID(textarea_focus, wid);
+}
+static inline void purr_win_textarea_on_change(purr_wid_t wid,
+                                                purr_win_cb_t cb, void *user) {
+    _UI_VOID(textarea_cb, wid, cb, user);
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+
+static inline purr_wid_t purr_win_row(purr_win_t win, uint8_t pad) {
+    _UI_CALL(0, layout_begin, win, PURR_LAYOUT_ROW, pad);
+}
+static inline purr_wid_t purr_win_col(purr_win_t win, uint8_t pad) {
+    _UI_CALL(0, layout_begin, win, PURR_LAYOUT_COL, pad);
+}
+static inline void purr_win_layout_end(purr_wid_t container) {
+    _UI_VOID(layout_end, container);
+}
+
+// ── Keyboard ──────────────────────────────────────────────────────────────────
+
+static inline void purr_win_keyboard_show(purr_win_t win, purr_wid_t target) {
+    _UI_VOID(kb_show, win, target);
+}
+static inline void purr_win_keyboard_hide(purr_win_t win) {
+    _UI_VOID(kb_hide, win);
+}

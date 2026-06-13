@@ -1,0 +1,10 @@
+# apps/system/calculator/app.pcat
+# PURR OS built-in calculator — .paws tier (display + touch only)
+
+name        = "calculator"
+version     = "1.0.0"
+tier        = "paws"
+author      = "PURR OS"
+description = "Basic calculator. Operations: + - * / with decimal support."
+
+idf_requires = "esp_common freertos

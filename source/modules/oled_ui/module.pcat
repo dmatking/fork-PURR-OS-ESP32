@@ -1,0 +1,16 @@
+# modules/oled_ui/module.pcat
+
+name            = "oled_ui"
+version         = "1.0.0"
+type            = "module"
+module_type     = "PURR_MOD_UI"
+catcall_version = 1
+idf_min         = "5.3.0"
+chip            = ["esp32", "esp32s3"]
+kernel_min      = "0.9.0"
+kernel_max      = ""
+
+required_catcalls = ["display"]
+provides         = []
+
+notes = "Text-mode UI for 128x64 SSD1306 OLED. Used on heltec. No LVGL, no MiniWin."

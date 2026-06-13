@@ -1,0 +1,59 @@
+# devices/waveshare169/device.pcat
+# Waveshare 1.69" ESP32-S3 — ST7789 240x280, CST816S cap touch
+# Small screen — below medium threshold. Minimal profile. WiFi + BT only, no LoRa.
+
+[device]
+name        = "waveshare169"
+chip        = "esp32s3"
+flash_mb    = 4
+psram       = false
+spiffs_kb   = 256
+
+[drivers]
+display     = "st7789"
+touch       = "cst816s"
+input       = ""
+radio       = ""
+gps         = ""
+
+[radio]
+wifi        = true
+bt          = true
+lora        = ""
+
+[modules]
+ui          = "kittenui"
+app_manager = "app_manager"
+
+[ui]
+theme       = "wce"
+
+[apps]
+# 1.69" is below medium threshold — no full-size apps bundled.
+# KittenUI loads so custom .meow/.paws scripts still work.
+settings    = false
+about       = false
+terminal    = false
+fileman     = false
+calculator  = false
+
+[flash]
+display/st7789   = 1
+touch/cst816s    = 1
+kittenui         = 2
+app_manager      = 2
+
+[pins]
+display_cs    = 10
+display_dc    = 11
+display_mosi  = 7
+display_sclk  = 6
+display_rst   = 13
+display_bl    = 14
+
+touch_sda     = 4
+touch_scl     = 5
+touch_int     = 3
+touch_rst     = -1
+
+sd_enabled    = false
