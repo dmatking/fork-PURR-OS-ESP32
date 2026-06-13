@@ -8,7 +8,8 @@ chip        = "esp32s3"
 flash_mb    = 16
 psram       = true
 psram_mb    = 8
-spiffs_kb   = 1024
+spiffs_kb      = 1024
+spiffs_offset  = "0xD90000"
 
 [drivers]
 display     = "axs15231b"

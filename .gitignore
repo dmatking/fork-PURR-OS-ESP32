@@ -18,8 +18,9 @@ tmp/
 CoreOS/build/
 CoreOS/build_*/
 CoreOS/sdkconfig
-CoreOS/sdkconfig_*
+CoreOS/sdkconfig.old
 CoreOS/dependencies.lock
+# Device sdkconfig_* source files ARE tracked — only ignore IDF-generated sdkconfig
 
 # IDF managed components — fetched at build time, not stored in VCS
 CoreOS/managed_components/
@@ -29,10 +30,10 @@ Builder/purr_build.cfg
 Builder/purr_sdk.cfg
 SDK/purr_sdk.cfg
 
-# Root-level scratch files
-CMakeLists.txt
-main.cpp
-purr_api.h
+# Root-level scratch files (anchored to repo root only)
+/CMakeLists.txt
+/main.cpp
+/purr_api.h
 
 # Python
 __pycache__/

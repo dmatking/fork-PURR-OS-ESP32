@@ -1,5 +1,5 @@
-# PURR OS — v0.12.0
-# Disclaimer! apps and scripts written for 0.11.0 and older will need adjustments to work with 0.12.0+
+# PURR OS — v0.12.1
+# A CRITICAL BUG WAS DISCOVERED, SORRY FOR THE INCONVIENCE 
 
 **P.U.R.R.** = Portable Unified Runtime & Radio Operating System
 **K.I.T.T** = Kernel Interface Translation Toolkit
@@ -180,8 +180,8 @@ All apps use `purr_win.h` — they work on any registered UI backend without cha
 
 | Component | Version |
 |-----------|---------|
-| PURR OS | v0.12.0 |
-| KITT | v0.9.0 |
+| PURR OS | v0.12.1 |
+| KITT | v0.9.1 |
 | .purr ABI | 1 |
 | Catcall API | 1 (+ catcall_ui as slot 6) |
 

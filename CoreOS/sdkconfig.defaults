@@ -1,0 +1,39 @@
+# PURR OS CoreOS — base sdkconfig defaults (all devices)
+# Per-device files (sdkconfig_<device>) layer on top via purrstrap.
+
+# Flash interface — DIO 80 MHz works on all target devices
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# Partition table — overridden per-device for correct flash size
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
+
+# SPIFFS
+CONFIG_SPIFFS_USE_MAGIC=y
+CONFIG_SPIFFS_USE_MAGIC_LENGTH=y
+CONFIG_SPIFFS_META_LENGTH=4
+CONFIG_SPIFFS_MAX_PARTITIONS=3
+
+# FAT + SPI SD
+CONFIG_FATFS_CODEPAGE_437=y
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+
+# NVS
+CONFIG_NVS_ASSERT_ERROR_CHECK=n
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=100
+CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS=1
+
+# Logging — INFO level by default, modules can raise to DEBUG
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# Main task stack — kernel spine parks in idle loop, needs minimal stack
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Watchdog — disable task WDT for long-running module init sequences
+CONFIG_ESP_TASK_WDT_EN=n

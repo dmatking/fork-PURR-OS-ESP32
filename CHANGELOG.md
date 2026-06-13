@@ -6,6 +6,30 @@
 
 ---
 
+## v0.12.1 — 2026-06-13
+
+### Summary
+Emergency hotfix: `CoreOS/` IDF project was absent from the repo, making `purrstrap build`
+unable to compile the kernel spine. This patch adds the full CoreOS project shell and
+corrects per-device SPIFFS offsets for 8 MB and 16 MB flash targets.
+
+### Fixed
+- **CoreOS/ missing** — created `CoreOS/CMakeLists.txt` and `CoreOS/main/CMakeLists.txt`
+  wrapping `source/kernel/core/` as the IDF main component; pulls in all registered
+  modules/drivers/apps via `cattobaked/components_manifest.cmake`
+- **Per-device partition tables** — `partitions_4mb.csv`, `partitions_8mb.csv`,
+  `partitions_16mb.csv`; correct SPIFFS offsets (0x290000 / 0x690000 / 0xD90000)
+- **Per-device sdkconfig** — `sdkconfig.defaults` (base) + 8 device override files;
+  purrstrap now chains `sdkconfig.defaults;sdkconfig_<device>` via `SDKCONFIG_DEFAULTS`
+- **spiffs_offset in device.pcat** — heltec (0x690000), tdeck/tdeck_plus/jc3248w535
+  (0xD90000) now correctly declared; 4 MB devices continue using the 0x290000 default
+
+### Versions
+- PURR OS: v0.12.1
+- KITT: v0.9.1
+
+---
+
 ## v0.12.0 — 2026-06-13
 
 ### Summary

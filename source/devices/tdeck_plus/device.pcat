@@ -9,6 +9,8 @@ flash_mb    = 16
 psram       = true
 psram_mb    = 8
 
+spiffs_offset  = "0xD90000"
+
 [drivers]
 display     = "st7789"
 touch       = "gt911"

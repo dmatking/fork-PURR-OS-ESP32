@@ -41,8 +41,8 @@ C_YLW  = "\033[93m"
 C_CYN  = "\033[96m"
 C_WHT  = "\033[97m"
 
-PURROS_VERSION = "0.12.0"
-KITT_VERSION   = "0.9.0"
+PURROS_VERSION = "0.12.1"
+KITT_VERSION   = "0.9.1"
 
 def info(msg):        print(f"{C_GRN}[purrstrap]{C_RST} {msg}")
 def warn(msg):        print(f"{C_YLW}[warn]     {C_RST} {msg}")
@@ -493,11 +493,15 @@ def _build_kernel_spine(device, cfg, out_dir):
     env["IDF_PATH"] = idf
     env["PURR_DEVICE"] = device
 
-    # Use per-device sdkconfig if present, otherwise default
+    # Chain sdkconfig: base defaults + device overrides (IDF v5 supports semicolons)
+    sdkconfig_base   = os.path.join(coreos_dir, "sdkconfig.defaults")
     sdkconfig_device = os.path.join(coreos_dir, f"sdkconfig_{device}")
-    sdkconfig_default = os.path.join(REPO_DIR, f"CoreOS/sdkconfig.defaults")
-    if os.path.isfile(sdkconfig_device):
+    if os.path.isfile(sdkconfig_base) and os.path.isfile(sdkconfig_device):
+        env["SDKCONFIG_DEFAULTS"] = f"{sdkconfig_base};{sdkconfig_device}"
+    elif os.path.isfile(sdkconfig_device):
         env["SDKCONFIG_DEFAULTS"] = sdkconfig_device
+    elif os.path.isfile(sdkconfig_base):
+        env["SDKCONFIG_DEFAULTS"] = sdkconfig_base
 
     build_dir = os.path.join(coreos_dir, f"build_{device}")
     firmware_out = os.path.join(out_dir, "firmware.bin")
