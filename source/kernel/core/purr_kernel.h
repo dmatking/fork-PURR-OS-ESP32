@@ -46,6 +46,10 @@ void purr_kernel_unload_module(const char *name);
 // Get loaded module header by name (NULL if not loaded).
 const purr_module_header_t *purr_kernel_get_module(const char *name);
 
+// Enumerate all registered modules (drivers, system, UI, and pre-linked apps).
+int purr_kernel_module_count(void);
+const purr_module_header_t *purr_kernel_module_at(int idx);
+
 // ── Catcall registry ──────────────────────────────────────────────────────────
 // Modules call these at init to register what they provide.
 // The kernel stores one pointer per catcall type. Last registered wins,

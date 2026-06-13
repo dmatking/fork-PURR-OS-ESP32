@@ -181,7 +181,12 @@ static int load_one_static(const purr_module_header_t *hdr)
                  hdr->name, hdr->abi_version, PURR_MODULE_ABI_VERSION);
         return -1;
     }
-    if (hdr->init) {
+
+    // Apps are registered in the module table for the app_manager to discover,
+    // but their init() is NOT called at boot — the app_manager launches them.
+    bool call_init = (hdr->module_type != PURR_MOD_APP);
+
+    if (call_init && hdr->init) {
         int rc = hdr->init();
         if (rc != 0) {
             ESP_LOGE(TAG, "static module '%s' init() returned %d", hdr->name, rc);
@@ -190,10 +195,11 @@ static int load_one_static(const purr_module_header_t *hdr)
     }
     module_slot_t *slot = &s_modules[s_module_count++];
     memcpy(&slot->header, hdr, sizeof(*hdr));
-    slot->loaded = true;
+    slot->loaded = call_init;
     const char *prio = hdr->load_priority == PURR_PRIORITY_REQUIRED  ? "P1" :
                        hdr->load_priority == PURR_PRIORITY_IMPORTANT ? "P2" : "P3";
-    ESP_LOGI(TAG, "loaded %s: %s v%s [static]", prio, hdr->name, hdr->version);
+    const char *badge = call_init ? "[static]" : "[app/deferred]";
+    ESP_LOGI(TAG, "loaded %s: %s v%s %s", prio, hdr->name, hdr->version, badge);
     return 0;
 }
 
@@ -431,6 +437,17 @@ const purr_module_header_t *purr_kernel_get_module(const char *name)
         if (strcmp(s_modules[i].header.name, name) == 0)
             return &s_modules[i].header;
     return NULL;
+}
+
+int purr_kernel_module_count(void)
+{
+    return s_module_count;
+}
+
+const purr_module_header_t *purr_kernel_module_at(int idx)
+{
+    if (idx < 0 || idx >= s_module_count) return NULL;
+    return &s_modules[idx].header;
 }
 
 // ── System info ───────────────────────────────────────────────────────────────

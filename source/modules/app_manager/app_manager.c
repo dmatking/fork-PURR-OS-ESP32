@@ -3,11 +3,13 @@
 #include "app_manager.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "../../kernel/core/purr_module.h"
+#include "../../kernel/catcalls/purr_win.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <string.h>
+#include <stdint.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -204,9 +206,29 @@ static int launch_native(app_entry_t *app, int idx)
 int app_manager_scan(void)
 {
     s_app_count = 0;
+
+    // Discover pre-linked apps registered in the kernel module table
+    int n = purr_kernel_module_count();
+    for (int i = 0; i < n && s_app_count < MAX_APPS; i++) {
+        const purr_module_header_t *hdr = purr_kernel_module_at(i);
+        if (!hdr || hdr->module_type != PURR_MOD_APP) continue;
+
+        app_entry_t *app = &s_apps[s_app_count];
+        memset(app, 0, sizeof(*app));
+        strncpy(app->name, hdr->name, sizeof(app->name) - 1);
+        snprintf(app->path, sizeof(app->path), "prelinked:/%s", hdr->name);
+        app->tier  = APP_TIER_CLAW;
+        app->state = APP_STATE_IDLE;
+
+        ESP_LOGI(TAG, "found [claw/pre-linked] %s", app->name);
+        s_app_count++;
+    }
+
+    // Also scan filesystem paths for .meow / .paws / .claw files (SD extras)
     for (int i = 0; s_scan_paths[i]; i++) {
         scan_dir(s_scan_paths[i]);
     }
+
     ESP_LOGI(TAG, "scan complete: %d apps found", s_app_count);
     return s_app_count;
 }
@@ -273,17 +295,46 @@ const app_entry_t *app_manager_get(int idx)
     return &s_apps[idx];
 }
 
+// ── Launcher button callback ──────────────────────────────────────────────────
+
+static void launcher_btn_cb(purr_wid_t wid, purr_event_t event, void *user)
+{
+    if (event != PURR_EVENT_CLICKED) return;
+    int idx = (int)(intptr_t)user;
+    if (idx >= 0 && idx < s_app_count) {
+        ESP_LOGI(TAG, "launcher: launching %s", s_apps[idx].name);
+        app_manager_launch_idx(idx);
+    }
+}
+
 void app_manager_open_launcher(void)
 {
-    // Log the app list — UI layer (kittenui/miniwin/oled_ui) picks this up
-    // and draws the launcher on its next redraw cycle.
-    ESP_LOGI(TAG, "cat apps launcher: %d app(s) available", s_app_count);
-    for (int i = 0; i < s_app_count; i++) {
-        ESP_LOGI(TAG, "  [%d] %s (%s) — %s",
-                 i, s_apps[i].name,
-                 tier_name(s_apps[i].tier),
-                 s_apps[i].state == APP_STATE_RUNNING ? "running" : "idle");
+    ESP_LOGI(TAG, "cat apps launcher: %d app(s)", s_app_count);
+
+    if (!purr_kernel_ui()) {
+        ESP_LOGW(TAG, "no UI registered — launcher running in serial-only mode");
+        for (int i = 0; i < s_app_count; i++) {
+            ESP_LOGI(TAG, "  [%d] %s (%s)", i, s_apps[i].name, tier_name(s_apps[i].tier));
+        }
+        return;
     }
+
+    purr_win_t win = purr_win_create("Cat Apps");
+    if (!win) {
+        ESP_LOGE(TAG, "launcher: failed to create window");
+        return;
+    }
+
+    if (s_app_count == 0) {
+        purr_win_label(win, "No apps installed.\nCopy .meow or .paws files to /sdcard/apps");
+    } else {
+        for (int i = 0; i < s_app_count; i++) {
+            purr_win_button(win, s_apps[i].name, launcher_btn_cb, (void *)(intptr_t)i);
+        }
+    }
+
+    purr_win_show(win);
+    ESP_LOGI(TAG, "launcher window open");
 }
 
 int app_manager_init(void)

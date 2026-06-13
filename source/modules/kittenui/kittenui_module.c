@@ -13,9 +13,12 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 #include <string.h>
 
 static const char *TAG = "kittenui";
+
+extern void kittenui_win_register(void);
 
 // ── Theme registry ────────────────────────────────────────────────────────────
 
@@ -153,9 +156,15 @@ static const kittenui_theme_t *load_theme_from_nvs(void)
 
 static TaskHandle_t s_task = NULL;
 
+extern void app_manager_open_launcher(void);
+
 static void kittenui_task(void *arg)
 {
     (void)arg;
+    // Open Cat Apps launcher on first tick — LVGL is fully up by now
+    if (purr_kernel_get_module("app_manager")) {
+        app_manager_open_launcher();
+    }
     while (1) {
         lv_timer_handler();
         vTaskDelay(pdMS_TO_TICKS(5));
@@ -166,6 +175,16 @@ static void kittenui_task(void *arg)
 
 int kittenui_init(void)
 {
+#ifndef CONFIG_PURR_UI_BACKEND_KITTENUI
+    ESP_LOGI(TAG, "KittenUI built-in but not selected for this device — skipping");
+    return 0;
+#endif
+
+    if (purr_kernel_ui()) {
+        ESP_LOGW(TAG, "UI catcall already registered — skipping KittenUI");
+        return 0;
+    }
+
     // Register built-in themes
     kittenui_register_theme(kittenui_theme_wce());
     kittenui_register_theme(kittenui_theme_luna());
@@ -188,6 +207,8 @@ int kittenui_init(void)
         ESP_LOGE(TAG, "failed to create kittenui task");
         return -1;
     }
+
+    kittenui_win_register();
 
     ESP_LOGI(TAG, "KittenUI ready (%ux%u, theme=%s)",
              kittenui_hal_width(), kittenui_hal_height(), s_active->name);

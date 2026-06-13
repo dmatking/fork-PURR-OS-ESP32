@@ -142,6 +142,7 @@ void app_main(void)
     ESP_LOGI(TAG, "boot complete — %u bytes free", (unsigned)purr_kernel_free_ram());
 
     // Kernel spine parks here. All work happens in module FreeRTOS tasks.
+    // The active UI module opens the Cat Apps launcher after its WM is ready.
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
     }

@@ -1,0 +1,30 @@
+menu "PURR OS"
+
+    choice PURR_UI_BACKEND
+        prompt "UI Backend"
+        default PURR_UI_BACKEND_KITTENUI
+        help
+            Select the windowing system for this device. All UI modules are
+            compiled into every firmware; only the selected one is activated.
+
+        config PURR_UI_BACKEND_KITTENUI
+            bool "KittenUI (LVGL 8)"
+            help
+                KittenUI uses LVGL for rich touch-based UI. Best for devices
+                with sufficient RAM and a colour touchscreen.
+
+        config PURR_UI_BACKEND_MINIWIN
+            bool "MiniWin"
+            help
+                MiniWin is a lightweight windowing system for smaller devices
+                or when LVGL's footprint is unwanted.
+
+        config PURR_UI_BACKEND_OLED
+            bool "OLED UI (headless/SSD1306)"
+            help
+                Minimal OLED UI for devices with monochrome displays or
+                no display at all.
+
+    endchoice
+
+endmenu
