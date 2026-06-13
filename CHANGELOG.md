@@ -9,11 +9,14 @@
 ## v0.12.1 — 2026-06-13
 
 ### Summary
-Emergency hotfix: `CoreOS/` IDF project was absent from the repo, making `purrstrap build`
-unable to compile the kernel spine. This patch adds the full CoreOS project shell and
-corrects per-device SPIFFS offsets for 8 MB and 16 MB flash targets.
+Hotfix release: `CoreOS/` IDF project was absent from the repo and all driver/module source
+files had a cascade of compiler errors preventing any firmware from being built. This patch
+adds the full CoreOS project shell, fixes every compiler error across all drivers and modules,
+and produces the first complete full-device-set bake (8 targets, all flashable merged images).
 
 ### Fixed
+
+#### Build system
 - **CoreOS/ missing** — created `CoreOS/CMakeLists.txt` and `CoreOS/main/CMakeLists.txt`
   wrapping `source/kernel/core/` as the IDF main component; pulls in all registered
   modules/drivers/apps via `cattobaked/components_manifest.cmake`
@@ -23,6 +26,49 @@ corrects per-device SPIFFS offsets for 8 MB and 16 MB flash targets.
   purrstrap now chains `sdkconfig.defaults;sdkconfig_<device>` via `SDKCONFIG_DEFAULTS`
 - **spiffs_offset in device.pcat** — heltec (0x690000), tdeck/tdeck_plus/jc3248w535
   (0xD90000) now correctly declared; 4 MB devices continue using the 0x290000 default
+- **purrstrap firmware binary name** — `CoreOS.bin` → `purr_os.bin` (IDF project name)
+
+#### MiniWin module
+- **CMakeLists** — added all 75 MiniWin source files and include directories (previously
+  only `miniwin_module.c` was listed, causing every MiniWin header to fail to resolve)
+- **miniwin_win.c** — complete rewrite using the actual MiniWin API (`mw_handle_t`,
+  `mw_add_window`, `mw_ui_label_add_new`, `mw_ui_button_add_new`, `mw_ui_text_box_add_new`,
+  `mw_set_window_visible`, `mw_remove_window/control`); replaced a hallucinated `MwAdd*`/
+  `MwCreate*` API layer that had never existed in the library
+- **miniwin_config.h** — added missing colour constants (`MW_TITLE_BAR_COLOUR_*`,
+  `MW_CONTROL_UP/DOWN/DISABLED_COLOUR`) from the MiniWin template; MiniWin core was
+  referencing these at compile time
+- **hal_timer.h** — added `#include <stdint.h>` (`uint32_t` was undeclared)
+- **hal_touch.c** — cast `int16_t*` → `uint16_t*` for `catcall_touch_t.read_point` call
+- **miniwin_module.c** — added missing `hal_touch.h` and `hal_init.h` includes
+
+#### KittenUI module
+- **kittenui_win.c** — fixed LVGL 8 API: `lv_win_create` requires a second `header_height`
+  argument; removed non-existent `lv_layout_t` type (replaced with `LV_LAYOUT_FLEX` direct);
+  added `#include "esp_heap_caps.h"` for `heap_caps_malloc` / `MALLOC_CAP_DEFAULT`
+- **kittenui_hal.c** — cast `int16_t*` → `uint16_t*` for `catcall_touch_t.read_point`
+
+#### Display drivers
+- **ili9341, st7789, ssd1306** — moved kernel/catcall `#include` statements to the top of
+  each file; they were placed after first use of `display_config_t` / `catcall_display_t`,
+  causing "unknown type name" errors
+- **axs15231b** — added `#include "esp_check.h"` for `ESP_RETURN_ON_ERROR`; removed
+  duplicate `spi_clock_hz` field (renamed to `pclk_hz` in IDF v5); added
+  `purr_kernel_register_display` call that was missing from `drv_init`; added `esp_lcd` to
+  CMakeLists REQUIRES
+
+#### Touch drivers (gt911, xpt2046, cst816s)
+- Added `#include "esp_check.h"` for `ESP_RETURN_ON_ERROR`
+- Added forward declaration `static const catcall_touch_t s_catcall` before the init
+  function (definition was after first use)
+- Replaced stack-allocated compound literal `&(catcall_touch_t){...}` passed to
+  `purr_kernel_register_touch` with `&s_catcall` (compound literal goes out of scope
+  immediately — would have been a dangling pointer at runtime)
+
+#### Other drivers
+- **generic_nmea** — added forward declaration to fix `s_catcall` ordering
+- **trackball, sx1262, sx1276 CMakeLists** — added `esp_timer` to REQUIRES
+  (`esp_timer.h` was not resolvable without it)
 
 ### Versions
 - PURR OS: v0.12.1

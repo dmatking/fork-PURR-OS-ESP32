@@ -1,5 +1,4 @@
 # PURR OS — v0.12.1
-# A CRITICAL BUG WAS DISCOVERED, SORRY FOR THE INCONVIENCE 
 
 **P.U.R.R.** = Portable Unified Runtime & Radio Operating System
 **K.I.T.T** = Kernel Interface Translation Toolkit
