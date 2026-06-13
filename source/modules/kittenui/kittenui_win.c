@@ -2,6 +2,7 @@
 // Registers via purr_kernel_register_ui() during kittenui module init.
 
 #include "lvgl.h"
+#include "esp_heap_caps.h"
 #include "../../kernel/catcalls/catcall_ui.h"
 #include "../../kernel/core/purr_kernel.h"
 
@@ -60,7 +61,7 @@ static void ta_event_cb(lv_event_t *e) {
 // ── Window ────────────────────────────────────────────────────────────────────
 
 static purr_win_t kw_win_create(const char *title) {
-    lv_obj_t *win = lv_win_create(lv_scr_act());
+    lv_obj_t *win = lv_win_create(lv_scr_act(), 40);
     lv_win_add_title(win, title);
     lv_obj_set_size(win, LV_PCT(100), LV_PCT(100));
     lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
@@ -196,9 +197,7 @@ static purr_wid_t kw_layout_begin(purr_win_t h, purr_layout_t dir, uint8_t pad) 
     lv_obj_set_size(cont, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(cont, pad, 0);
     lv_obj_set_style_border_width(cont, 0, 0);
-    lv_layout_t lv_dir = (dir == PURR_LAYOUT_ROW)
-        ? LV_LAYOUT_FLEX : LV_LAYOUT_FLEX;
-    lv_obj_set_layout(cont, lv_dir);
+    lv_obj_set_layout(cont, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(cont,
         (dir == PURR_LAYOUT_ROW) ? LV_FLEX_FLOW_ROW : LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);

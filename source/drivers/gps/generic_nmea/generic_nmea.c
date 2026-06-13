@@ -128,6 +128,8 @@ static void nmea_task(void *arg) {
     vTaskDelete(NULL);
 }
 
+static const catcall_gps_t s_catcall;
+
 static esp_err_t nmea_init(void) {
     s_mutex = xSemaphoreCreateMutex();
     if (!s_mutex) return ESP_ERR_NO_MEM;

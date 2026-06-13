@@ -194,8 +194,8 @@ def _spiffsgen(idf_path):
         return candidate
     return None
 
-def run_live(cmd, cwd=None):
-    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+def run_live(cmd, cwd=None, env=None):
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace")
     try:
         for line in proc.stdout:
@@ -526,7 +526,7 @@ def _build_kernel_spine(device, cfg, out_dir):
     # Copy binaries to out_dir
     import shutil as _sh
     for src_name, dst in (
-        (f"CoreOS.bin",         firmware_out),
+        (f"purr_os.bin",        firmware_out),
         ("bootloader/bootloader.bin", bootloader_out),
         ("partition_table/partition-table.bin", partitions_out),
     ):
