@@ -1,4 +1,5 @@
 # PURR OS — v0.12.0
+# Disclaimer! apps and scripts written for 0.11.0 and older will need adjustments to work with 0.12.0+
 
 **P.U.R.R.** = Portable Unified Runtime & Radio Operating System
 **K.I.T.T** = Kernel Interface Translation Toolkit
