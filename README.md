@@ -219,6 +219,7 @@ Bundled on all medium and large-screen devices:
 | [docs/11_KittenUI.md](docs/11_KittenUI.md) | KittenUI LVGL 8 module in depth |
 | [docs/12_AppAPI.md](docs/12_AppAPI.md) | purr_win.h complete API reference + backend writing guide |
 | [docs/13_Kernels.md](docs/13_Kernels.md) | Specialized kernel system — when to use, how to write, all existing kernels |
+| [docs/14_Driverstrap.md](docs/14_Driverstrap.md) | driverstrap — driver template generator CLI + wizard reference |
 
 ---
 

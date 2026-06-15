@@ -147,3 +147,4 @@ archive/               legacy scripts, old docs, old build artifacts
 - [11_KittenUI.md](11_KittenUI.md) — KittenUI LVGL 8 module in depth
 - [12_AppAPI.md](12_AppAPI.md) — purr_win.h complete API reference + backend writing guide
 - [13_Kernels.md](13_Kernels.md) — specialized kernel system: when to use, how to write, existing kernels
+- [14_Driverstrap.md](14_Driverstrap.md) — driverstrap driver template generator: CLI, wizard, generated files
