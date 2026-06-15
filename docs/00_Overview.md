@@ -2,17 +2,18 @@
 
 ## What is PURR OS?
 
-**PURR OS** (Portable Unified Runtime & Radio Operating System) is an embedded operating system for ESP32 and ESP32-S3 devices. It runs on small, cheap, readily available hardware — CYD (Cheap Yellow Display) boards, LilyGo T-Deck Plus, JC3248W535, and similar ESP32-based devices with a display and touch screen.
+**PURR OS** (Portable Unified Runtime & Radio Operating System) is an embedded operating system for ESP32 and ESP32-S3 devices. It runs on small, affordable, readily available hardware — CYD (Cheap Yellow Display) boards, LilyGo T-Deck Plus, JC3248W535, Heltec LoRa nodes, and similar ESP32-based devices with a display, radio, or both.
 
 The kernel is called **KITT** (Kernel Interface Translation Toolkit).
 
 PURR OS is not a bare-metal sketch. It has:
-- A proper kernel boot sequence
-- A plug-and-play driver system
-- A windowed UI (MiniWin window manager)
-- An app runtime supporting three app tiers
-- Built-in radio (LoRa/sub-GHz), WiFi, GPS, and HID support
-- Two in-house "exclusive" emulator apps: MagicMac (68k Mac Plus) and MagiDOS (8086 DOS)
+- A proper kernel boot sequence with a hardware abstraction layer
+- A plug-and-play driver system — drivers compile to `.purr` blobs, loaded at runtime
+- A unified windowed UI layer (KittenUI/LVGL or MiniWin) with a single app-facing API
+- An app runtime with three isolation tiers (`.meow` Lua, `.paws` userland, `.claw` kernel-access)
+- Built-in support for LoRa radio, WiFi, GPS, keyboard HID, and trackball input
+- Specialized device kernels for hardware that needs direct driver access at boot
+- Two in-house exclusive apps: MagicMac (68k Mac Plus emulator) and MagiDOS (8086 DOS emulator)
 
 ---
 
@@ -20,9 +21,9 @@ PURR OS is not a bare-metal sketch. It has:
 
 The guiding inspiration is **QubesOS** — compartmentalization and isolation above all else.
 
-In PURR OS v0.11 and earlier, the kernel had device-specific knowledge baked directly into `CMakeLists.txt`, `lib_miniwin`, and `device_config.cpp`. Adding a new device meant touching kernel files. The IDF two-pass cmake system made conditional driver dependencies fragile. Every build was one monolithic blob.
+In PURR OS v0.11 and earlier, the kernel had device-specific knowledge baked directly into `CMakeLists.txt`, `lib_miniwin`, and `device_config.cpp`. Adding a new device meant editing kernel files. The IDF two-pass CMake system made conditional driver dependencies fragile. Every build was one monolithic blob.
 
-**v0.12.0 changes this completely.** The kernel spine is intentionally tiny and knows nothing about hardware. Every driver, every UI framework, every system service is a precompiled binary module loaded at runtime. The kernel's only job is to:
+**v0.12.0 changed this completely.** The kernel spine is intentionally tiny and knows nothing about hardware. Every driver, UI framework, and system service is a precompiled binary module (`.purr`) loaded at runtime. The kernel's only job is to:
 
 1. Mount the flash filesystem
 2. Scan for modules
@@ -31,14 +32,16 @@ In PURR OS v0.11 and earlier, the kernel had device-specific knowledge baked dir
 
 Everything else is a module.
 
+**v0.13.0 adds specialized kernels.** For devices with hardware that cannot be reached through the standard IDF driver stack (e.g., IDF 5.3 i2c_master regressions on T-Deck Plus), a specialized kernel can bypass the generic module loader and talk to hardware directly using any available API — including Arduino Wire. The catcall interface stays the same; only the boot path changes.
+
 ---
 
 ## Versions
 
 | Component | Version |
 |-----------|---------|
-| PURR OS | v0.12.0 |
-| KITT | v0.9.0 |
+| PURR OS | v0.13.0 |
+| KITT | v0.9.2 |
 | `.purr` ABI | 1 |
 | Catcall API | 1 |
 
@@ -46,78 +49,101 @@ Everything else is a module.
 
 ## Supported Hardware
 
-| Device slug | Chip | Display | Touch | Notes |
-|-------------|------|---------|-------|-------|
-| `jc3248w535` | ESP32-S3 | AXS15231B 480×320 QSPI | AXS15231B cap I2C | 8MB PSRAM, best for MagiDOS/MagicMac |
-| `tdeck_plus` | ESP32-S3 | ST7789 320×240 | GT911 cap | Keyboard, trackball, SD, GPS, SX1276 LoRa |
-| `cyd_s024c` | ESP32 | ILI9341 240×320 | CST816S cap | Backlight GPIO27 |
-| `cyd` | ESP32 | ILI9341 320×240 | XPT2046 resistive | Original CYD |
+| Device slug | Chip | Display | Touch | Input | Radio | Notes |
+|-------------|------|---------|-------|-------|-------|-------|
+| `jc3248w535` | ESP32-S3 | 3.5" AXS15231B 480×320 QSPI | Cap I2C | — | WiFi + BT | 8MB PSRAM, best for MagicMac/MagiDOS |
+| `tdeck_plus` | ESP32-S3 | 3.2" ST7789 320×240 SPI | GT911 cap | Trackball + BBQ20 keyboard | WiFi + BT + SX1276 LoRa + GPS | Full field device; specialized Arduino kernel |
+| `tdeck` | ESP32-S3 | 3.2" ST7789 320×240 SPI | — | Trackball | WiFi + BT + SX1262 LoRa | No touch; trackball navigation only |
+| `cyd` | ESP32 | 2.8" ILI9341 320×240 SPI | XPT2046 resistive | — | WiFi + BT | Classic Cheap Yellow Display |
+| `cyd_s024c` | ESP32 | 2.4" ILI9341 240×320 SPI | CST816S cap | — | WiFi + BT | Backlight GPIO 27 |
+| `cyd_s028r` | ESP32 | 2.8" ILI9341 320×240 SPI | XPT2046 resistive | — | WiFi + BT | Portrait-flip MADCTL variant |
+| `heltec` | ESP32-S3 | 128×64 SSD1306 OLED I2C | — | — | WiFi + BT + SX1262 LoRa | LoRa-first node; text-mode UI only |
+| `waveshare169` | ESP32-S3 | 1.69" ST7789 240×280 SPI | CST816S cap | — | WiFi + BT | Small badge/wearable device |
+
+### Specialized build targets (dev/debug)
+
+| Target slug | Based on | Purpose |
+|-------------|----------|---------|
+| `tdeck_plus_arduino` | T-Deck Plus | Production kernel using Arduino Wire for I2C — bypasses IDF 5.3 regression |
+| `tdeck_plus_test` | T-Deck Plus | Input test mode — boots to a visualizer showing all touch, trackball, and keyboard events |
 
 ---
 
 ## Repo Structure at a Glance
 
 ```
-source/              all source code — the only thing you build
-  kernel/            kernel spine (boot, catcall registry, module loader)
-  drivers/           driver source + .pcat manifests
-  modules/           system modules (driver_manager, app_manager, miniwin)
-  devices/           device.pcat manifests
+source/
+  kernel/
+    catcalls/          catcall headers (display, touch, input, radio, gps, ui, purr_win.h)
+    core/              generic kernel (boot.c, purr_kernel.h/.c, purr_module.h)
+    kernel_arduino/    shared helpers for Arduino-backed kernels
+    kernel_tdeck/      specialized kernel for T-Deck
+    kernel_tdeck_plus/ specialized kernel for T-Deck Plus (IDF path)
+    kernel_tdeck_plus_arduino/   Arduino Wire kernel for T-Deck Plus (production)
+    kernel_tdeck_plus_test/      input test mode kernel
+  drivers/             display/, touch/, input/, radio/, gps/
+  modules/
+    driver_manager/    scans + loads .purr driver blobs
+    app_manager/       launches .meow/.paws/.claw apps
+    kittenui/          LVGL 8 UI module
+    miniwin/           MiniWin WM module
+    oled_ui/           text-mode OLED UI
+  devices/             device.pcat manifests (8 production + 2 dev targets)
   apps/
-    system/          built-in system apps
-    exclusive/       in-house exclusives
-      magicmac/      Mac Plus emulator (.claw)
-      magidos/       DOS emulator (.claw)
+    system/            settings, about, terminal, fileman, calculator
+    exclusive/         magicmac, magidos
 
-purrstrap/           builds the final flashable firmware image
-modulestrap/         compiles .purr kernel module + driver blobs
-catstrap/            user app builder + SDK
+purrstrap/             final flashable firmware image builder
+modulestrap/           .purr module + driver blob compiler
+catstrap/              user app builder + SDK
 
-cattobaked/          all build output
-user_drivers/        community/custom driver drop zone
+cattobaked/            all build output (firmware, blobs, merged images)
+user_drivers/          drop custom/community drivers here — auto-scanned
 
-PURR-OS-0.11/        full v0.11 codebase archive
-archive/             legacy scripts, old docs
+CoreOS/                IDF project shell (CMake, sdkconfig per device, partition tables)
+PURR-OS-0.11/          archived v0.11 codebase
+archive/               legacy scripts, old docs, old build artifacts
 ```
 
 ---
 
-## Key Concepts at a Glance
+## Key Concepts
 
 | Term | Meaning |
 |------|---------|
-| `.purr` | Precompiled kernel module binary |
-| `catcall` | Kernel interface contract (like a syscall, but for hardware) |
-| `catcall_ui_t` | Unified widget/windowing catcall — new in v0.12.0 |
-| `purr_win.h` | App-facing dispatch header for `catcall_ui_t` — use this in all apps |
-| `driver_manager` | System module that loads and validates `.purr` driver blobs |
-| `app_manager` | System module that scans and launches apps |
-| `kittenui` | LVGL-based UI module for small/medium screens |
-| `miniwin` | MiniWin WM module for large screens (480x320+) |
-| `oled_ui` | Text-mode UI module for 128x64 OLED displays |
-| `.meow` | Lua script app |
-| `.paws` | Compiled userland app (purr_win.h + sd.* only) |
-| `.claw` | Compiled kernel-access app (full purr_kernel_* API) |
-| `purrstrap` | Builds the final flashable image per device |
-| `modulestrap` | Registers .purr module + driver blobs as IDF components |
-| `catstrap` | Builds user apps (.meow/.paws/.claw) + manages the SDK |
+| `.purr` | Precompiled kernel module binary (driver, system service, UI framework) |
+| `catcall` | Kernel hardware interface contract — PURR OS's version of a syscall |
+| `catcall_ui_t` | Unified widget/windowing catcall — apps never call LVGL or MiniWin directly |
+| `purr_win.h` | App-facing dispatch header for `catcall_ui_t` — the only UI header apps need |
+| `driver_manager` | System module that loads and validates `.purr` driver blobs from SPIFFS/SD |
+| `app_manager` | System module that scans and launches `.meow`/`.paws`/`.claw` apps |
+| `kittenui` | LVGL 8-based UI module for medium and large screens |
+| `miniwin` | MiniWin window-manager module (480×320+) |
+| `oled_ui` | Text-mode UI module for 128×64 OLED displays |
+| `.meow` | Lua 5.4 script app — sandboxed VM, `win.*` / `sd.*` / `kitt.*` API |
+| `.paws` | Compiled userland app — `purr_win.h` + `sd.*` only |
+| `.claw` | Compiled kernel-access app — full `purr_kernel_*` + `purr_win.h` |
+| `purrstrap` | Builds the final merged flashable image per device |
+| `modulestrap` | Registers `.purr` module + driver blobs as IDF components |
+| `catstrap` | Builds user apps and manages the catstrap SDK |
 | `cattobaked/` | All build output from all three tools |
 | `device.pcat` | Per-device manifest: chip, drivers, radio, apps, pins |
-| `purr_device_glue.c` | Auto-generated by purrstrap — pin #defines + radio flags |
+| `purr_device_glue.c` | Auto-generated by purrstrap — pin `#defines` + radio capability flags |
+| Specialized kernel | A `kernel_<device>/` directory that replaces the generic core for one device |
 
 ---
 
 ## See Also
 
-- [01_Architecture.md](01_Architecture.md) — kernel spine, module loader, .purr ABI, catcall registry
-- [02_Catcalls.md](02_Catcalls.md) — all six catcalls including catcall_ui_t; glue layer; driver tables
+- [01_Architecture.md](01_Architecture.md) — kernel spine, specialized kernels, module loader, .purr ABI, catcall registry
+- [02_Catcalls.md](02_Catcalls.md) — all six catcalls with full struct + function docs, driver tables, glue layer
 - [03_Modules.md](03_Modules.md) — driver_manager, app_manager, kittenui, miniwin, oled_ui
-- [04_Devices.md](04_Devices.md) — device.pcat format, all 8 devices, screen classification, pin reference
-- [05_Drivers.md](05_Drivers.md) — driver.pcat format, all existing drivers, writing a new driver
-- [06_Apps.md](06_Apps.md) — purr_win.h API reference, .meow/.paws/.claw guide, built-in system apps
-- [07_Build_Tools.md](07_Build_Tools.md) — purrstrap/modulestrap/catstrap full pipeline + command reference
+- [04_Devices.md](04_Devices.md) — device.pcat format, all devices, pin reference, screen classification
+- [05_Drivers.md](05_Drivers.md) — driver.pcat format, all drivers, writing a new driver
+- [06_Apps.md](06_Apps.md) — app tiers, purr_win.h API reference, system apps guide
+- [07_Build_Tools.md](07_Build_Tools.md) — purrstrap, modulestrap, catstrap — full pipeline and command reference
 - [08_Exclusives.md](08_Exclusives.md) — MagicMac and MagiDOS in depth
-- [09_BuildTools.md](09_BuildTools.md) — extended build tools reference
 - [10_ModuleLoading.md](10_ModuleLoading.md) — module priority system, SD fallback, panic screen
-- [11_KittenUI.md](11_KittenUI.md) — KittenUI LVGL module in depth
+- [11_KittenUI.md](11_KittenUI.md) — KittenUI LVGL 8 module in depth
 - [12_AppAPI.md](12_AppAPI.md) — purr_win.h complete API reference + backend writing guide
+- [13_Kernels.md](13_Kernels.md) — specialized kernel system: when to use, how to write, existing kernels

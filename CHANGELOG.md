@@ -6,6 +6,67 @@
 
 ---
 
+## v0.13.0 — 2026-06-15
+
+### Summary
+Architecture stabilization release. Introduces specialized kernels — per-device `kernel_<device>/` directories that replace the generic core for hardware that cannot be reached through the standard IDF driver stack. T-Deck Plus is fully functional: display, touch, trackball, and keyboard all confirmed working. Adds an input test mode kernel for hardware bring-up. Resolves IDF 5.3 i2c_master regression for GT911 via Arduino Wire. Extensive documentation update covering all new concepts.
+
+### Added
+
+#### Specialized kernel system
+- **`kernel_<device>/` selection in CMake** — `CoreOS/main/CMakeLists.txt` now checks for `source/kernel/kernel_${PURR_DEVICE}/` and globs `*.c` + `*.cpp`; falls back to generic `core/` if not found
+- **`kernel_arduino/kernel_arduino.h`** — shared static-inline helpers for all Arduino-backed kernels (`arduino_kernel_nvs_init`, `arduino_kernel_spiffs_init`)
+- **`kernel_tdeck_plus_arduino/kernel_atdp_boot.cpp`** — production kernel for T-Deck Plus using Arduino Wire for all I2C; bypasses IDF 5.3 i2c_master regression completely
+  - GT911 touch found at 0x5D via Wire probe
+  - GT911 status register 0x814E always cleared after buffer-ready reads
+  - GT911 power-save keepalive: write `0x00` to 0x8040 every 2 s
+  - BBQ20 keyboard polled via plain `Wire.requestFrom(0x55, 1)` — no write preamble
+  - `Wire.setTimeOut(50)` prevents BBQ20 NACK from hanging the shared I2C bus
+  - Serial console via `Serial.begin(115200)` — avoids `uart_driver_install` conflict
+- **`kernel_tdeck_plus_test/kernel_tdp_test.cpp`** — input test mode kernel for T-Deck Plus
+  - Boots to 3-panel visualizer: touch coordinates / trackball events / keyboard keypresses
+  - Built-in 6×8 bitmap font — no external font dependency
+  - All events also printed over serial at 115200 baud
+  - GT911 keepalive every 2 s, `Wire.setTimeOut(50)` on shared bus
+
+#### New device targets
+- **`tdeck_plus_arduino`** — `source/devices/tdeck_plus_arduino/device.pcat` + `CoreOS/sdkconfig_tdeck_plus_arduino`
+- **`tdeck_plus_test`** — `source/devices/tdeck_plus_test/device.pcat` + `CoreOS/sdkconfig_tdeck_plus_test`
+- Both sdkconfigs include `CONFIG_FREERTOS_HZ=1000` and all Arduino component settings
+
+#### Documentation
+- **`docs/13_Kernels.md`** — new: complete specialized kernel reference (when to use, how CMake selects, Arduino requirements, all existing kernels with boot sequence and code examples)
+- **`docs/00_Overview.md`** — updated: v0.13.0 version table, all 8 devices + 2 dev targets, specialized kernel concept, new key concepts table
+- **`docs/01_Architecture.md`** — updated: two-kernel-path diagram, specialized kernel selection logic, static vs dynamic modules, IDF 5.3 known issue, source file map with all kernel dirs
+- **`docs/04_Devices.md`** — updated: full T-Deck Plus detail (BOARD_POWERON sequence, GT911 protocol, BBQ20 protocol), all 8 production devices, dev/debug target section, complete T-Deck Plus GPIO table
+- **`docs/05_Drivers.md`** — updated: GT911 IDF 5.3 regression documented with workaround, BBQ20 bus interaction note, ssd1306 and bbq20 driver entries added, compat matrix updated
+- **`docs/07_Build_Tools.md`** — merged with former `09_BuildTools.md`; added `--erase` flag docs, `monitor` command, two-layer CLI/UI architecture, `.catt` tier, full `cattobaked/` layout
+- **`README.md`** — updated: v0.13.0, specialized kernel column in device table, all 10 build targets, updated docs index (13 entries, no duplicate 09)
+- **Deleted `docs/09_BuildTools.md`** — content merged into `07_Build_Tools.md`
+
+### Fixed
+
+#### T-Deck Plus touch (GT911)
+- **Root cause:** IDF 5.3 `i2c_master_probe()` returns `ESP_ERR_INVALID_STATE` instead of NACK — breaks GT911 discovery on `kernel_tdeck_plus`
+- **Fix:** `kernel_tdeck_plus_arduino` uses Arduino Wire; GT911 found at 0x5D immediately
+- **GT911 sleep lockout** — fixed with periodic keepalive write to 0x8040
+- **GT911 status register** — always write `0x00` to 0x814E when buffer-ready bit set (was missing on some code paths)
+
+#### T-Deck Plus keyboard (BBQ20)
+- **Root cause:** `Wire.beginTransmission(0x55)` + `Wire.endTransmission(false)` before `requestFrom` confuses the RP2040 bridge
+- **Fix:** Changed to plain `Wire.requestFrom(0x55, 1)` — returns key byte directly, 0x00 when idle
+- **Bus hang** — fixed with `Wire.setTimeOut(50)` preventing BBQ20 NACK from blocking GT911 read timing
+
+#### Build system
+- **CMake kernel selection** — now globs `.c` AND `.cpp` from specialized kernel dirs (previously `.c` only, breaking C++ Arduino kernels)
+- **Arduino IDF component name** — `espressif__arduino-esp32` (not `arduino`) in CMake REQUIRES
+
+### Versions
+- PURR OS: v0.13.0
+- KITT: v0.9.2
+
+---
+
 ## v0.12.1 — 2026-06-13
 
 ### Summary

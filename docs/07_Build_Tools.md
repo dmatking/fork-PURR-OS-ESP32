@@ -1,6 +1,6 @@
 # PURR OS — Build Tools
 
-Three separate tools handle the three distinct build concerns. All output goes to `cattobaked/` at the repo root.
+Three separate tools handle three distinct build concerns. All output lands in `cattobaked/` at the repo root.
 
 ```
 purrstrap/       final flashable firmware image per device
@@ -8,276 +8,362 @@ modulestrap/     .purr kernel module + driver blobs
 catstrap/        user apps (.meow/.paws/.claw) + SDK
 ```
 
-All three tools accept `--help` for a full option list.
+A master launcher (`purr.py` / `purr.sh` / `purr.ps1`) ties all three together with an interactive menu or CLI pass-through.
 
 ---
 
-## purrstrap
+## Quick Start
+
+```bash
+# Interactive launcher — pick your tool from a menu
+./purr.sh                         # bash (Linux/macOS)
+.\purr.ps1                        # PowerShell (Windows)
+python3 purr.py                   # Python directly
+
+# Jump to a specific tool's interactive UI
+./purr.sh purrstrap
+./purr.sh modulestrap
+./purr.sh catstrap
+
+# CLI pass-through (no UI) — fully scriptable, CI-friendly
+python3 purrstrap/purrstrap.py build tdeck_plus_arduino
+python3 modulestrap/modulestrap.py list
+python3 catstrap/catstrap.py sdk info
+
+# Build + flash a device
+python3 purrstrap/purrstrap.py flash tdeck_plus_arduino -p /dev/ttyACM0 --erase
+```
+
+---
+
+## Two-Layer Architecture
+
+Every tool comes in two files:
+
+| File | Role |
+|------|------|
+| `<tool>.py` | Pure CLI — argparse, all logic, no interactive prompts |
+| `<tool>_ui.py` | Interactive wrapper — numbered menus → calls `<tool>.py` |
+
+The UI layer never reimplements logic. It collects choices, assembles CLI arguments, and delegates via `subprocess`. This keeps the CLI always scriptable and the UI always optional.
+
+`purr.py` is the master launcher:
+- No args → tool picker menu
+- Tool name only → opens that tool's interactive UI
+- Tool name + args → passes args straight to the underlying CLI
+
+---
+
+## purrstrap — Firmware Image Builder
 
 **File:** `purrstrap/purrstrap.py`
 **Output:** `cattobaked/<device>/`
 
 purrstrap is the top-level image builder. It:
 1. Reads `source/devices/<device>/device.pcat`
-2. Calls modulestrap to build all .purr module + driver blobs
+2. Calls modulestrap to build all `.purr` module + driver blobs
 3. Calls catstrap to register all app blobs
-4. Generates `purr_device_glue.c` with pin #defines and radio flags
-5. Assembles a SPIFFS image from the [flash] + [apps] manifest
-6. Invokes IDF to compile the kernel spine (if IDF_PATH is set)
-7. Merges everything into a single flashable `PURR_OS_<device>.bin`
+4. Generates `purr_device_glue.c` with pin `#defines` and radio capability flags
+5. Stages blobs into a SPIFFS image (`flash.bin`)
+6. Invokes IDF to compile the kernel spine
+7. Merges everything into `PURR_OS_<device>.bin`
 
 ### Commands
 
 ```
-purrstrap build <device>       build firmware for a device
-purrstrap flash <device> [-p PORT]  build + flash to connected device
-purrstrap clean <device>       remove build artifacts for device
-purrstrap list                 list all supported devices
-purrstrap status               show current workspace config
-purrstrap doctor               check environment health
+purrstrap build <device>               build firmware
+purrstrap flash <device> [-p PORT]     build + flash to connected device
+purrstrap flash <device> --erase       erase entire chip before flashing (recommended)
+purrstrap clean <device>               remove build artifacts for device
+purrstrap monitor <device> [-p PORT]   open serial monitor after flash
+purrstrap list                         list all supported devices + radio capabilities
+purrstrap status                       show .purrstrap workspace config
+purrstrap doctor                       check IDF + environment health
 ```
 
-### `purrstrap list`
+### `--erase` flag
 
-Reads all `source/devices/*/device.pcat` and prints a table of devices, chips, and radio capabilities:
+Always use `--erase` when flashing after a kernel or partition table change. It performs a full chip erase before writing, preventing stale SPIFFS data from causing boot issues:
+
+```bash
+python3 purrstrap/purrstrap.py flash tdeck_plus_arduino -p /dev/ttyACM0 --erase
+```
+
+### `purrstrap list` example output
 
 ```
-device          chip        wifi  bt    lora
-cyd             esp32       yes   yes   -
-cyd_s024c       esp32       yes   yes   -
-cyd_s028r       esp32       yes   yes   -
-tdeck           esp32s3     yes   yes   sx1262
-tdeck_plus      esp32s3     yes   yes   sx1276
-jc3248w535      esp32s3     yes   yes   -
-heltec          esp32s3     yes   yes   sx1262
-waveshare169    esp32s3     yes   yes   -
+device                  chip        wifi  bt    lora      sd
+cyd                     esp32       yes   yes   -         yes
+cyd_s024c               esp32       yes   yes   -         yes
+cyd_s028r               esp32       yes   yes   -         yes
+tdeck                   esp32s3     yes   yes   sx1262    yes
+tdeck_plus              esp32s3     yes   yes   sx1276    yes
+tdeck_plus_arduino      esp32s3     yes   yes   sx1276    yes
+jc3248w535              esp32s3     yes   yes   -         no
+heltec                  esp32s3     yes   yes   sx1262    no
+waveshare169            esp32s3     yes   yes   -         no
 ```
 
 ### `purrstrap doctor`
 
-Checks: `idf.py` in PATH, `python3`, `git`, `IDF_PATH` set and valid, `source/kernel/core/boot.c` exists, `spiffsgen.py` available.
+Checks: `idf.py` on PATH, `python3`, `git`, `IDF_PATH` set and valid, `source/kernel/core/boot.c` exists, `spiffsgen.py` available.
 
-### `purrstrap build <device>`
+### `purrstrap build <device>` — full sequence
 
-Full build sequence:
 1. Reads `device.pcat`
 2. Writes `.purrstrap` workspace JSON
-3. Calls `modulestrap build all` → produces .purr blobs
+3. Calls `modulestrap build all` → produces `.purr` blobs
 4. Calls `catstrap build all` → registers app blobs
 5. Generates `cattobaked/<device>/glue/purr_device_glue.c`
-6. Stages files into `cattobaked/<device>/spiffs_staging/`:
-   - `modules/` — system modules (.purr)
-   - `drivers/<type>/` — driver blobs (.purr)
-   - `apps/` — app blobs (.claw/.paws/.meow) or .meta.json registrations
+6. Stages into `cattobaked/<device>/spiffs_staging/`:
+   - `modules/` — system modules (`.purr`)
+   - `drivers/<type>/` — driver blobs (`.purr`)
+   - `apps/` — app blobs (`.claw`/`.paws`/`.meow`) + `.meta.json`
 7. Runs `spiffsgen.py` → `cattobaked/<device>/flash.bin`
 8. Runs `idf.py set-target` + `idf.py build` on `CoreOS/` → `firmware.bin`
 9. Runs `esptool.py merge_bin` → `PURR_OS_<device>.bin`
 
-### `purrstrap flash <device>`
-
-Runs build then flashes:
-```bash
-esptool.py --port /dev/ttyUSB0 --baud 460800 write_flash <offset> flash.bin
-```
-
-Add `-p /dev/ttyACM0` to specify a port.
-
 ### Output: `cattobaked/<device>/`
 
 ```
-PURR_OS_<device>.bin        complete merged flash image
+PURR_OS_<device>.bin        merged flash image (bootloader + kernel + SPIFFS)
 firmware.bin                kernel spine only
 bootloader.bin
 partition-table.bin
-flash.bin                   SPIFFS filesystem image
-glue/purr_device_glue.c     generated pin + radio glue
-spiffs_staging/             staged files before spiffsgen
+flash.bin                   SPIFFS filesystem image (modules + drivers + apps)
+glue/purr_device_glue.c     generated pin + radio #defines
+spiffs_staging/             staged files before spiffsgen runs
 build.json                  build metadata (device, versions, timestamps)
 ```
 
-### Without IDF
+### Building without IDF
 
-If `IDF_PATH` is not set, purrstrap skips the kernel spine build and merge steps. The `flash.bin` SPIFFS image is still produced and can be flashed manually:
+If `IDF_PATH` is not set, purrstrap skips the kernel spine build and merge. `flash.bin` is still produced and can be flashed manually to the SPIFFS partition:
 ```bash
-esptool.py write_flash 0x290000 cattobaked/<device>/flash.bin
+esptool.py write_flash 0xD90000 cattobaked/tdeck_plus_arduino/flash.bin
 ```
 
 ---
 
-## modulestrap
+## modulestrap — Module + Driver Blob Compiler
 
 **File:** `modulestrap/modulestrap.py`
 **Output:** `cattobaked/modules/`, `cattobaked/drivers/`
 
-modulestrap compiles all `.purr` kernel module and driver blobs. It scans `source/modules/` and `source/drivers/`, generates IDF component `CMakeLists.txt` fragments, and writes `cattobaked/components_manifest.cmake` so CoreOS can include all modules in one IDF build.
+modulestrap compiles all `.purr` kernel module and driver blobs. It scans `source/modules/`, `source/drivers/`, and `user_drivers/` (community drop zone), generates IDF component `CMakeLists.txt` fragments, and writes `cattobaked/components_manifest.cmake` so CoreOS includes everything in one IDF build.
 
 ### Commands
 
 ```
-modulestrap build all         register all modules and drivers
-modulestrap build modules      register system modules only
-modulestrap build drivers      register drivers only
-modulestrap build <name>       register one target (e.g. "kittenui", "display/ili9341")
-modulestrap list               list all buildable targets
-modulestrap list --drivers D   list targets from an external driver directory
-modulestrap clean [all]        remove .purr blobs from cattobaked/
+modulestrap build all               register all modules and drivers
+modulestrap build modules           system modules only
+modulestrap build drivers           drivers only
+modulestrap build <name>            one target (e.g. "kittenui", "display/ili9341")
+modulestrap list                    list all buildable targets
+modulestrap list --drivers PATH     also list from an external driver directory
+modulestrap clean [name|all]        remove .purr blobs from cattobaked/
 ```
 
 ### What "register" means
 
-modulestrap does not invoke IDF directly (that is purrstrap's job). Instead it:
-1. Finds all C source files in the module directory
-2. Generates `CMakeLists.txt` as an IDF component fragment (include dirs pointing to `source/kernel/`)
-3. Writes `.meta.json` with source list, version, and status="registered"
-4. Writes `cattobaked/components_manifest.cmake` listing all EXTRA_COMPONENT_DIRS
+modulestrap does not invoke IDF directly — that is purrstrap's job. Instead it:
+1. Finds all `.c`/`.cpp` source files in the module directory
+2. Generates `CMakeLists.txt` as an IDF component fragment (include dirs point to `source/kernel/`)
+3. Writes `cattobaked/components_manifest.cmake` listing all `EXTRA_COMPONENT_DIRS`
 
-When purrstrap later runs `idf.py build` on `CoreOS/`, it includes `components_manifest.cmake` which pulls in every registered module as an IDF component.
+When purrstrap runs `idf.py build` on `CoreOS/`, it includes `components_manifest.cmake` which pulls every registered module in as an IDF component.
 
 ### Output structure
 
 ```
 cattobaked/
   modules/
-    app_manager.purr           (placeholder until IDF builds real binary)
+    driver_manager.purr
     kittenui.purr
     miniwin.purr
     oled_ui.purr
-    driver_manager.purr
+    app_manager.purr
   drivers/
-    display/
-      ili9341.purr
-      st7789.purr
-      axs15231b.purr
-      ssd1306.purr
-    touch/
-      xpt2046.purr
-      cst816s.purr
-      gt911.purr
-    input/
-      trackball.purr
-    radio/
-      sx1262.purr
-      sx1276.purr
-    gps/
-      generic_nmea.purr
-  components_manifest.cmake    included by CoreOS/CMakeLists.txt
+    display/  ili9341.purr  st7789.purr  axs15231b.purr  ssd1306.purr
+    touch/    xpt2046.purr  cst816s.purr  gt911.purr
+    input/    trackball.purr  bbq20.purr
+    radio/    sx1262.purr  sx1276.purr
+    gps/      generic_nmea.purr
+  components_manifest.cmake
 ```
 
-### Custom drivers
+### Custom / community drivers
 
-Drop a directory containing `driver.pcat` and C source into `user_drivers/` — modulestrap auto-scans it:
+Drop a directory containing `driver.pcat` and C source into `user_drivers/`:
 ```
 user_drivers/
   my_sensor/
     driver.pcat
     my_sensor.c
+    CMakeLists.txt
 ```
-
-Or point to an external directory:
+modulestrap auto-scans `user_drivers/`. Or point to an external path:
 ```bash
-modulestrap build all --drivers /path/to/my_drivers
+python3 modulestrap/modulestrap.py build all --drivers /path/to/community_drivers
 ```
 
 ---
 
-## catstrap
+## catstrap — App Builder + SDK
 
 **File:** `catstrap/catstrap.py`
 **Output:** `cattobaked/apps/`
 
-catstrap builds user apps (.meow/.paws/.claw) and manages the catstrap SDK (headers for app development).
+catstrap builds user apps and the in-house system exclusives. It also manages the catstrap SDK headers that app developers build against.
 
 ### Commands
 
 ```
-catstrap build all              build/register all apps + MagicMac + MagiDOS
-catstrap build <name>           build/register one app by name
-catstrap build magicmac         build MagicMac (.claw, in-house exclusive)
-catstrap build magidos           build MagiDOS (.claw, in-house exclusive)
-catstrap validate <file.meow>   syntax-check a Lua script
-catstrap sdk info               show SDK version and API surface
+catstrap build all              build/register all user apps + exclusives
+catstrap build <name>           build one app by name
+catstrap build magicmac         build MagicMac (.catt exclusive)
+catstrap build magidos          build MagiDOS (.catt exclusive)
+catstrap validate <file.meow>   syntax-check a Lua script without running it
+catstrap sdk info               show SDK version + API surface
 catstrap sdk install            copy SDK headers to catstrap/sdk/include/
 catstrap list                   list all buildable apps
-catstrap clean [all|<name>]     remove app output from cattobaked/apps/
+catstrap clean [name|all]       remove app output from cattobaked/apps/
 ```
 
-### What "build" does for .paws/.claw apps
+### App tiers
 
-1. Finds all `.c`/`.cpp` files in the app directory
-2. Generates `CMakeLists.txt` as an IDF component fragment (include dirs include `source/kernel/core/` and `source/kernel/catcalls/` for .claw tier)
-3. Writes `cattobaked/apps/<name>.<tier>.meta.json` with registration metadata
-4. Status: "registered" — included in the next `purrstrap build`
-
-`.meow` scripts are copied directly to `cattobaked/apps/<name>.meow`.
+| Extension | Tier | API access |
+|-----------|------|-----------|
+| `.meow` | Lua sandbox | `win.*`, `sd.*`, `kitt.*`, `purr.info()` |
+| `.paws` | Compiled userland | `purr_win.h`, `sd.*` |
+| `.claw` | Compiled kernel-access | `purr_win.h`, `sd.*`, `purr_kernel_*`, `purr_module_*` |
+| `.catt` | In-house exclusive | Same as `.claw` — precompiled by the PURR OS team |
 
 ### SDK
 
-The catstrap SDK provides headers that app developers build against. Run `catstrap sdk install` to populate `catstrap/sdk/include/`:
+`catstrap sdk install` populates `catstrap/sdk/include/`:
 
 ```
 catstrap/sdk/include/
-  purr_sdk.h              tier gate — includes the right sub-header
-  purr_sdk_paws.h         .paws: catcall_display_t, catcall_touch_t, purr_win.h
-  purr_sdk_claw.h         .claw: all above + purr_kernel.h + purr_module.h
-  catcall_display.h       copied from source/kernel/catcalls/
+  purr_sdk.h           tier gate — picks the right sub-header at compile time
+  purr_sdk_paws.h      catcall_display_t, catcall_touch_t, purr_win.h
+  purr_sdk_claw.h      all above + purr_kernel.h + purr_module.h
+  catcall_display.h    copied from source/kernel/catcalls/
   catcall_touch.h
   catcall_input.h
   catcall_radio.h
   catcall_gps.h
-  catcall_ui.h            (new in v0.12.0)
+  catcall_ui.h
   catcalls.h
-  purr_win.h              (new in v0.12.0)
-  purr_module.h
-  purr_kernel.h           (.claw only)
+  purr_win.h
+  purr_kernel.h        (.claw only)
+  purr_module.h        (.claw only)
 ```
 
-Use `purr_sdk.h` in app code — it selects the right tier based on the compile-time define:
-- `-DPURR_TIER_PAWS` → includes `purr_sdk_paws.h`
-- `-DPURR_TIER_CLAW` → includes `purr_sdk_claw.h`
+Compile your app with `-DPURR_TIER_PAWS` or `-DPURR_TIER_CLAW` to get the right API surface.
 
 ### Output structure
 
 ```
 cattobaked/apps/
-  settings.claw
-  settings.claw.meta.json
-  about.claw
-  about.claw.meta.json
-  terminal.claw
-  terminal.claw.meta.json
-  fileman.claw
-  fileman.claw.meta.json
-  calculator.paws
-  calculator.paws.meta.json
-  magicmac.claw
-  magicmac.claw.meta.json
+  settings.claw             settings.claw.meta.json
+  about.claw                about.claw.meta.json
+  terminal.claw             terminal.claw.meta.json
+  fileman.claw              fileman.claw.meta.json
+  calculator.paws           calculator.paws.meta.json
+  magicmac.catt             magicmac.catt.meta.json
+  magidos.catt              magidos.catt.meta.json
 ```
 
 ---
 
-## Full Build Flow
+## Full Build Pipeline
+
+```bash
+# One-time SDK setup
+python3 catstrap/catstrap.py sdk install
+
+# Full build for a device
+python3 purrstrap/purrstrap.py build tdeck_plus_arduino
+
+# Build + flash with chip erase
+python3 purrstrap/purrstrap.py flash tdeck_plus_arduino -p /dev/ttyACM0 --erase
+
+# Open serial monitor
+python3 purrstrap/purrstrap.py monitor tdeck_plus_arduino -p /dev/ttyACM0
+```
+
+purrstrap calls modulestrap and catstrap automatically as part of `purrstrap build`. Run them separately for incremental work:
+```bash
+python3 modulestrap/modulestrap.py build display/st7789   # rebuild just one driver
+python3 catstrap/catstrap.py build settings               # rebuild just one app
+python3 purrstrap/purrstrap.py build tdeck_plus_arduino   # re-assemble image
+```
+
+---
+
+## Complete `cattobaked/` Layout
 
 ```
-catstrap sdk install             # one-time: set up SDK headers
-
-modulestrap build all            # register all modules + drivers
-catstrap build all               # register all apps
-
-purrstrap build tdeck_plus       # build full image for T-Deck Plus
-purrstrap flash tdeck_plus       # build + flash
+cattobaked/
+├── <device>/                ← purrstrap output (one dir per device built)
+│   ├── PURR_OS_<device>.bin
+│   ├── firmware.bin
+│   ├── bootloader.bin
+│   ├── partition-table.bin
+│   ├── flash.bin
+│   ├── glue/purr_device_glue.c
+│   ├── spiffs_staging/
+│   └── build.json
+├── modules/                 ← modulestrap: system module blobs
+│   ├── driver_manager.purr
+│   ├── kittenui.purr
+│   ├── miniwin.purr
+│   ├── oled_ui.purr
+│   └── app_manager.purr
+├── drivers/                 ← modulestrap: hardware driver blobs
+│   ├── display/
+│   ├── touch/
+│   ├── input/
+│   ├── radio/
+│   └── gps/
+├── apps/                    ← catstrap: app packages
+│   ├── settings.claw
+│   ├── terminal.claw
+│   └── …
+└── components_manifest.cmake  ← modulestrap: included by CoreOS CMake
 ```
 
-purrstrap runs modulestrap and catstrap automatically as part of `purrstrap build`, so you only need to run them separately for incremental development.
+---
+
+## Workspace Config — `.purrstrap`
+
+purrstrap saves the last-used device and build metadata to `.purrstrap` (JSON) at the repo root. The interactive UI reads this to pre-fill the device picker. It is gitignored.
+
+---
+
+## Master Launcher — `purr.py` / `purr.sh` / `purr.ps1`
+
+| File | Platform |
+|------|---------|
+| `purr.py` | Python directly — all platforms |
+| `purr.sh` | bash — Linux / macOS |
+| `purr.ps1` | PowerShell — Windows |
+
+`purr.sh` and `purr.ps1` both `cd` to the repo root before launching so they work from any directory.
 
 ---
 
 ## Environment Requirements
 
-| Tool | Required for | Install |
-|------|-------------|---------|
-| Python 3.8+ | all three tools | system |
-| ESP-IDF 5.x | kernel spine build | idf.py |
-| esptool.py | flash + merge | included with IDF |
-| spiffsgen.py | SPIFFS image | included with IDF |
+Run `python3 purrstrap/purrstrap.py doctor` to check your environment.
 
-Set `IDF_PATH` to your ESP-IDF root before building the kernel spine. All three tools gracefully degrade without IDF — they will register blobs and produce SPIFFS images but skip the IDF-dependent steps.
+| Requirement | Minimum | Notes |
+|-------------|---------|-------|
+| Python | 3.8+ | System install |
+| ESP-IDF | 5.3.x | `IDF_PATH` must be set; virtualenv activated |
+| `idf.py` | — | Must be on PATH or resolvable from `IDF_PATH` |
+| `esptool.py` | — | Included with IDF |
+| `spiffsgen.py` | — | Included with IDF (`$IDF_PATH/components/spiffs/spiffsgen.py`) |
+| `git` | — | Used for version tagging |
+| `pyserial` | — | Needed for flash/monitor; installed in IDF venv |
