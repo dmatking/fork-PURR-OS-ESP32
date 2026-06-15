@@ -2,7 +2,7 @@
 // Interface: I2C, address 0x5D (primary) or 0x14 (alternate)
 //
 // Used on:
-//   tdeck_plus — SDA=18, SCL=8, INT=16, RST=-1 (not connected)
+//   tdeck_plus — SDA=18, SCL=8, INT=16, RST=38
 //
 // Register map:
 //   0x814E = touch status (bits[3:0] = touch count; write 0 to clear)
@@ -56,21 +56,20 @@ static esp_err_t gt911_deinit(void);
 #define GT911_REG_STATUS         0x814E
 #define GT911_REG_POINT1         0x8150
 
-// Status register bitmask
 #define GT911_STATUS_TOUCH_MASK  0x0F
-#define GT911_STATUS_BUFFER_STAT 0x80   // buffer ready bit
+#define GT911_STATUS_BUFFER_STAT 0x80
 
 // Default pins (tdeck_plus)
 #define GT911_DEFAULT_SDA    18
 #define GT911_DEFAULT_SCL     8
 #define GT911_DEFAULT_INT    16
-#define GT911_DEFAULT_RST  0xFF   // not connected
+#define GT911_DEFAULT_RST    38
 
 // Override set by gt911_configure() before drv_init
 static int s_cfg_sda      = GT911_DEFAULT_SDA;
 static int s_cfg_scl      = GT911_DEFAULT_SCL;
 static int s_cfg_int      = GT911_DEFAULT_INT;
-static int s_cfg_rst      = (int)GT911_DEFAULT_RST;
+static int s_cfg_rst      = GT911_DEFAULT_RST;
 static int s_cfg_i2c_port = 0;
 
 // ── Touch point struct ────────────────────────────────────────────────────────
@@ -102,7 +101,6 @@ static void IRAM_ATTR gt911_int_isr(void *arg)
 
 // ── I2C helpers ───────────────────────────────────────────────────────────────
 
-// Write to a 16-bit register address (big-endian)
 static esp_err_t gt911_write_reg(uint16_t reg, const uint8_t *data, size_t len)
 {
     uint8_t buf[2 + len];
@@ -112,7 +110,6 @@ static esp_err_t gt911_write_reg(uint16_t reg, const uint8_t *data, size_t len)
     return i2c_master_transmit(s_dev_handle, buf, sizeof(buf), pdMS_TO_TICKS(50));
 }
 
-// Read from a 16-bit register address
 static esp_err_t gt911_read_reg(uint16_t reg, uint8_t *data, size_t len)
 {
     uint8_t addr[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
@@ -120,7 +117,6 @@ static esp_err_t gt911_read_reg(uint16_t reg, uint8_t *data, size_t len)
                                        data, len, pdMS_TO_TICKS(50));
 }
 
-// Clear the touch status register (write 0x00 to 0x814E)
 static esp_err_t gt911_clear_status(void)
 {
     uint8_t zero = 0x00;
@@ -139,7 +135,7 @@ static esp_err_t gt911_init(const touch_config_t *cfg)
     int sda   = cfg ? cfg->sda_pin  : GT911_DEFAULT_SDA;
     int scl   = cfg ? cfg->scl_pin  : GT911_DEFAULT_SCL;
     s_int_pin = cfg ? (cfg->int_pin != 0xFF ? (int)cfg->int_pin : -1) : GT911_DEFAULT_INT;
-    s_rst_pin = cfg ? (cfg->rst_pin != 0xFF ? (int)cfg->rst_pin : -1) : -1;
+    s_rst_pin = cfg ? (cfg->rst_pin != 0xFF ? (int)cfg->rst_pin : -1) : GT911_DEFAULT_RST;
     int port  = cfg ? cfg->i2c_port : 0;
 
     s_poll_mode = (s_int_pin < 0);
@@ -157,7 +153,7 @@ static esp_err_t gt911_init(const touch_config_t *cfg)
         gpio_set_level(s_rst_pin, 0);
         vTaskDelay(pdMS_TO_TICKS(20));
         gpio_set_level(s_rst_pin, 1);
-        vTaskDelay(pdMS_TO_TICKS(100));  // GT911 needs ~100ms after reset
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     // I2C master bus
@@ -172,36 +168,37 @@ static esp_err_t gt911_init(const touch_config_t *cfg)
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &s_bus_handle),
                         TAG, "I2C bus init failed");
 
-    // Try primary address first, fall back to alternate
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address  = GT911_I2C_ADDR_PRIMARY,
         .scl_speed_hz    = GT911_I2C_FREQ_HZ,
     };
-    esp_err_t ret = i2c_master_bus_add_device(s_bus_handle, &dev_cfg, &s_dev_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "0x5D failed (%s), trying 0x14", esp_err_to_name(ret));
-        dev_cfg.device_address = GT911_I2C_ADDR_ALT;
-        ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_bus_handle, &dev_cfg, &s_dev_handle),
-                            TAG, "I2C add device failed (both addresses)");
-    }
+    i2c_master_bus_add_device(s_bus_handle, &dev_cfg, &s_dev_handle);
 
-    // Verify device responds — read product ID (0x8140, 6 bytes = "911\0" + version)
-    {
-        uint8_t pid[6] = {0};
-        esp_err_t probe = gt911_read_reg(0x8140, pid, sizeof(pid));
-        if (probe != ESP_OK) {
-            ESP_LOGE(TAG, "I2C probe failed (%s) — GT911 not responding", esp_err_to_name(probe));
+    // Read product ID to verify device is alive — log result either way
+    uint8_t pid[4] = {0};
+    esp_err_t probe = gt911_read_reg(0x8140, pid, sizeof(pid));
+    if (probe == ESP_OK) {
+        ESP_LOGI(TAG, "GT911 at 0x5D — ID: %.4s", pid);
+    } else {
+        ESP_LOGW(TAG, "0x5D read ID: %s — trying 0x14", esp_err_to_name(probe));
+        i2c_master_bus_rm_device(s_dev_handle);
+        s_dev_handle = NULL;
+        dev_cfg.device_address = GT911_I2C_ADDR_ALT;
+        i2c_master_bus_add_device(s_bus_handle, &dev_cfg, &s_dev_handle);
+        probe = gt911_read_reg(0x8140, pid, sizeof(pid));
+        if (probe == ESP_OK) {
+            ESP_LOGI(TAG, "GT911 at 0x14 — ID: %.4s", pid);
+        } else {
+            ESP_LOGE(TAG, "GT911 not found at 0x5D or 0x14 (%s)", esp_err_to_name(probe));
             i2c_master_bus_rm_device(s_dev_handle);
             i2c_del_master_bus(s_bus_handle);
             s_dev_handle = NULL;
             s_bus_handle = NULL;
             return probe;
         }
-        ESP_LOGI(TAG, "GT911 product ID: %.6s", pid);
     }
 
-    // Clear any stale status
     gt911_clear_status();
 
     // INT pin setup
@@ -229,16 +226,11 @@ static bool gt911_is_pressed(void)
 {
     if (!s_initialized) return false;
 
-    if (!s_poll_mode) {
-        // INT pin: active low = finger down
+    if (!s_poll_mode)
         return gpio_get_level(s_int_pin) == 0;
-    }
 
-    // Polling: read status register
     uint8_t status = 0;
     if (gt911_read_reg(GT911_REG_STATUS, &status, 1) != ESP_OK) return false;
-
-    // Buffer-ready bit must be set and touch count > 0
     if (!(status & GT911_STATUS_BUFFER_STAT)) return false;
     return (status & GT911_STATUS_TOUCH_MASK) > 0;
 }
@@ -247,17 +239,13 @@ static bool gt911_read_point(uint16_t *x, uint16_t *y)
 {
     if (!s_initialized || !x || !y) return false;
 
-    // In interrupt mode: only proceed if ISR flagged data or INT pin is still low
     if (!s_poll_mode && !s_data_ready) {
         if (gpio_get_level(s_int_pin) != 0) return false;
-        // INT is still asserted — fall through and read
     }
 
-    // Read status register
     uint8_t status = 0;
     if (gt911_read_reg(GT911_REG_STATUS, &status, 1) != ESP_OK) return false;
 
-    // Check buffer ready + at least one touch
     if (!(status & GT911_STATUS_BUFFER_STAT)) return false;
     uint8_t touch_count = status & GT911_STATUS_TOUCH_MASK;
     if (touch_count == 0) {
@@ -266,7 +254,6 @@ static bool gt911_read_point(uint16_t *x, uint16_t *y)
         return false;
     }
 
-    // Read first touch point (5 bytes at 0x8150)
     gt911_point_t pt;
     esp_err_t ret = gt911_read_reg(GT911_REG_POINT1, (uint8_t *)&pt, sizeof(pt));
     if (ret != ESP_OK) {
@@ -278,7 +265,6 @@ static bool gt911_read_point(uint16_t *x, uint16_t *y)
     *x = (uint16_t)pt.x_low | ((uint16_t)pt.x_high << 8);
     *y = (uint16_t)pt.y_low | ((uint16_t)pt.y_high << 8);
 
-    // Mandatory: clear status so the GT911 can report the next event
     gt911_clear_status();
     s_data_ready = false;
     return true;
@@ -288,9 +274,8 @@ static esp_err_t gt911_deinit(void)
 {
     if (!s_initialized) return ESP_OK;
 
-    if (!s_poll_mode && s_int_pin >= 0) {
+    if (!s_poll_mode && s_int_pin >= 0)
         gpio_isr_handler_remove((gpio_num_t)s_int_pin);
-    }
     if (s_dev_handle) {
         i2c_master_bus_rm_device(s_dev_handle);
         s_dev_handle = NULL;
@@ -320,8 +305,8 @@ void gt911_configure(int sda, int scl, int int_pin, int rst_pin, int i2c_port)
 {
     s_cfg_sda      = sda;
     s_cfg_scl      = scl;
-    s_cfg_int      = int_pin;         // -1 → polling mode
-    s_cfg_rst      = rst_pin;         // -1 → no RST pin
+    s_cfg_int      = int_pin;
+    s_cfg_rst      = rst_pin;
     s_cfg_i2c_port = i2c_port;
 }
 
@@ -331,8 +316,8 @@ int gt911_drv_init(void)
         .i2c_port = s_cfg_i2c_port,
         .sda_pin  = (uint8_t)s_cfg_sda,
         .scl_pin  = (uint8_t)s_cfg_scl,
-        .int_pin  = (uint8_t)(s_cfg_int  < 0 ? 0xFF : s_cfg_int),
-        .rst_pin  = (uint8_t)(s_cfg_rst  < 0 ? 0xFF : s_cfg_rst),
+        .int_pin  = (uint8_t)(s_cfg_int < 0 ? 0xFF : s_cfg_int),
+        .rst_pin  = (uint8_t)(s_cfg_rst < 0 ? 0xFF : s_cfg_rst),
     };
     esp_err_t ret = gt911_init(&cfg);
     return (ret == ESP_OK) ? 0 : -1;

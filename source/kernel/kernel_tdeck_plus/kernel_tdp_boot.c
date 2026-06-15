@@ -6,7 +6,7 @@
 //
 // Baked-in (Layer 0, initialized here, NOT via module loader):
 //   ST7789  — SPI display  (CS=12 DC=11 MOSI=41 SCLK=40 RST=-1 BL=42)
-//   GT911   — I2C touch    (SDA=18 SCL=8 INT=16 RST=-1)
+//   GT911   — I2C touch    (SDA=18 SCL=8 INT=16 RST=NC)
 //   Trackball — GPIO       (UP=3 DN=15 LT=1 RT=2 CLK=0)
 //   BB Q20  — I2C keyboard (SDA=18 SCL=8 addr=0x55)
 //
@@ -30,6 +30,7 @@
 #include "../../drivers/input/trackball/trackball.h"
 #include "../../drivers/input/bbq20/bbq20.h"
 #include "driver/i2c_master.h"
+#include "esp_rom_sys.h"
 
 static const char *TAG = "tdp_boot";
 
@@ -118,9 +119,9 @@ static void kb_test_loop(void)
 static void i2c_scan_cmd(void)
 {
     i2c_master_bus_handle_t bus = NULL;
+    bool created = false;
     esp_err_t r = i2c_master_get_bus_handle(I2C_NUM_0, &bus);
     if (r != ESP_OK) {
-        // No driver owns the bus yet — create a temporary one
         i2c_master_bus_config_t cfg = {
             .i2c_port          = I2C_NUM_0,
             .sda_io_num        = 18,
@@ -133,19 +134,24 @@ static void i2c_scan_cmd(void)
             printf("[SCAN] failed to acquire I2C bus\r\n");
             return;
         }
+        created = true;
     }
-    printf("[SCAN] I2C bus SDA=18 SCL=8\r\n");
-    const struct { uint8_t addr; const char *name; } devs[] = {
-        { 0x5D, "GT911 touch (primary)" },
-        { 0x14, "GT911 touch (alt)"     },
-        { 0x55, "BBQ20 keyboard"        },
-    };
-    for (int d = 0; d < 3; d++) {
-        esp_err_t res = i2c_master_probe(bus, devs[d].addr, pdMS_TO_TICKS(30));
-        printf("[SCAN] 0x%02X [%s]: %s\r\n",
-               devs[d].addr, devs[d].name,
-               res == ESP_OK ? "ACK" : "NACK");
+    printf("[SCAN] full I2C sweep SDA=18 SCL=8:\r\n");
+    int found = 0;
+    for (uint8_t addr = 0x03; addr <= 0x77; addr++) {
+        esp_err_t res = i2c_master_probe(bus, addr, pdMS_TO_TICKS(10));
+        if (res == ESP_OK) {
+            const char *name = "";
+            if (addr == 0x5D) name = " (GT911 primary)";
+            else if (addr == 0x14) name = " (GT911 alt)";
+            else if (addr == 0x55) name = " (BBQ20 keyboard)";
+            printf("[SCAN]   0x%02X ACK%s\r\n", addr, name);
+            found++;
+        }
     }
+    if (found == 0) printf("[SCAN]   no devices found\r\n");
+    printf("[SCAN] done (%d device(s))\r\n", found);
+    if (created) i2c_del_master_bus(bus);
 }
 
 static void serial_console_task(void *arg)
@@ -210,12 +216,20 @@ void app_main(void)
 
     ESP_LOGI(TAG, "=== phase 0: baked-in drivers ===");
 
-    // GPIO 10 = BOARD_POWERON — gates all SPI peripherals on T-Deck Plus.
-    // Must be HIGH before any SPI bus init or nothing will respond.
+    // GT911 has no RST pin on T-Deck Plus (NC per LilyGO utilities.h).
+    // INT=16, BOARD_POWERON=10.
+    // Drive INT LOW before BOARD_POWERON so GT911 latches address 0x5D on power-up,
+    // then release INT to input after 50ms startup margin.
+    gpio_set_direction(GPIO_NUM_16, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_16, 0);
+
     gpio_set_direction(GPIO_NUM_10, GPIO_MODE_OUTPUT);
     gpio_set_level(GPIO_NUM_10, 1);
-    vTaskDelay(pdMS_TO_TICKS(10));  // voltage stabilize
     ESP_LOGI(TAG, "BOARD_POWERON HIGH");
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    gpio_set_direction(GPIO_NUM_16, GPIO_MODE_INPUT);
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     // Display — ST7789 SPI
     // ST7789 init includes a ~120ms SLPOUT delay internally, which counts
@@ -232,7 +246,8 @@ void app_main(void)
     // Wait the remainder — 400ms gives comfortable margin.
     // Use polling mode (int_pin=-1): avoids GPIO ISR and is simpler to diagnose.
     vTaskDelay(pdMS_TO_TICKS(400));
-    gt911_configure(18, 8, -1, -1, 0);   // SDA=18 SCL=8 poll-mode no-RST port=0
+
+    gt911_configure(18, 8, -1, -1, 0);   // SDA=18 SCL=8 poll-mode RST=NC port=0
     if (gt911_drv_init() != 0) {
         ESP_LOGW(TAG, "GT911 touch init failed — continuing without touch");
     }
@@ -241,6 +256,7 @@ void app_main(void)
     if (trackball_drv_init() != 0) {
         ESP_LOGW(TAG, "trackball init failed — continuing without trackball");
     }
+
 
     // Keyboard — BB Q20 (joins GT911's I2C bus on port 0)
     if (bbq20_drv_init() != 0) {

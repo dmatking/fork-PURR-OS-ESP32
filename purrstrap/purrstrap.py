@@ -758,6 +758,7 @@ def cmd_flash(args):
         chip     = cfg_flash.get("device.chip", "esp32s3")
         flash_mb = cfg_flash.get("device.flash_mb", "4")
         info(f"flashing full image {os.path.basename(merged_bin)} → 0x0 ...")
+        erase_flag = ["--erase-all"] if getattr(args, "erase", False) else []
         cmd = _esptool + [
             "--chip", chip,
             "--port", esptool_port,
@@ -765,6 +766,7 @@ def cmd_flash(args):
             "--before", "default_reset",
             "--after", "hard_reset",
             "write_flash",
+        ] + erase_flag + [
             "--flash_mode", "dio",
             "--flash_size", f"{flash_mb}MB",
             "--flash_freq", "80m",
@@ -939,6 +941,7 @@ def main():
     p_flash = sub.add_parser("flash",  help="Build + flash to device")
     p_flash.add_argument("device")
     p_flash.add_argument("-p", "--port", default=None)
+    p_flash.add_argument("--erase", action="store_true", help="Erase flash before writing")
 
     p_monitor = sub.add_parser("monitor", help="Open serial monitor for a device")
     p_monitor.add_argument("device")

@@ -12,7 +12,6 @@
 #include "Arduino.h"
 #include "Wire.h"
 #include "driver/gpio.h"
-#include "driver/uart.h"
 #include <sys/stat.h>
 #include <string.h>
 
@@ -165,39 +164,41 @@ static const catcall_input_t s_kb_catcall = {
 
 static void serial_console_task(void *arg)
 {
-    esp_err_t ret = uart_driver_install(UART_NUM_0, 256, 0, 0, NULL, 0);
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) { vTaskDelete(NULL); return; }
+    // Use Arduino Serial — avoids uart_driver_install conflict with Arduino framework
+    Serial.begin(115200);
+    while (!Serial) vTaskDelay(pdMS_TO_TICKS(10));
 
     char line[32]; int len = 0;
-    printf("\r\nPURR OS console (atdp) — commands: scan\r\n> ");
-    fflush(stdout);
+    Serial.print("\r\nPURR OS console (atdp) — commands: scan\r\n> ");
 
     for (;;) {
-        uint8_t c = 0;
-        if (uart_read_bytes(UART_NUM_0, &c, 1, pdMS_TO_TICKS(50)) <= 0) continue;
-        if (c == '\r' || c == '\n') {
-            printf("\r\n");
-            line[len] = '\0'; len = 0;
-            if (strcmp(line, "scan") == 0) {
-                printf("[SCAN] Wire I2C scan (SDA=18 SCL=8):\r\n");
-                int found = 0;
-                for (uint8_t a = 0x03; a <= 0x77; a++) {
-                    Wire.beginTransmission(a);
-                    if (Wire.endTransmission() == 0) {
-                        printf("[SCAN]   0x%02X ACK\r\n", a);
-                        found++;
+        vTaskDelay(pdMS_TO_TICKS(20));
+        while (Serial.available()) {
+            char c = (char)Serial.read();
+            if (c == '\r' || c == '\n') {
+                Serial.print("\r\n");
+                line[len] = '\0'; len = 0;
+                if (strcmp(line, "scan") == 0) {
+                    Serial.print("[SCAN] Wire I2C scan (SDA=18 SCL=8):\r\n");
+                    int found = 0;
+                    for (uint8_t a = 0x03; a <= 0x77; a++) {
+                        Wire.beginTransmission(a);
+                        if (Wire.endTransmission() == 0) {
+                            Serial.printf("[SCAN]   0x%02X ACK\r\n", a);
+                            found++;
+                        }
                     }
+                    if (!found) Serial.print("[SCAN]   no devices found\r\n");
+                    Serial.printf("[SCAN] done (%d device(s))\r\n", found);
+                } else if (line[0]) {
+                    Serial.printf("unknown: %s\r\n", line);
                 }
-                if (!found) printf("[SCAN]   no devices found\r\n");
-                printf("[SCAN] done (%d device(s))\r\n", found);
-            } else if (line[0]) {
-                printf("unknown: %s\r\n", line);
+                Serial.print("> ");
+            } else if ((c == 0x7F || c == '\b') && len > 0) {
+                len--; Serial.print("\b \b");
+            } else if (len < (int)sizeof(line) - 1 && c >= 0x20) {
+                line[len++] = c; Serial.print(c);
             }
-            printf("> "); fflush(stdout);
-        } else if ((c == 0x7F || c == '\b') && len > 0) {
-            len--; printf("\b \b"); fflush(stdout);
-        } else if (len < (int)sizeof(line) - 1 && c >= 0x20) {
-            line[len++] = (char)c; putchar(c); fflush(stdout);
         }
     }
 }
