@@ -29,7 +29,9 @@ static const char *TAG = "purr_kernel";
 
 static const catcall_display_t *s_display = NULL;
 static const catcall_touch_t   *s_touch   = NULL;
-static const catcall_input_t   *s_input   = NULL;
+#define MAX_INPUTS 4
+static const catcall_input_t   *s_inputs[MAX_INPUTS];
+static int                      s_input_count = 0;
 static const catcall_radio_t   *s_radio   = NULL;
 static const catcall_gps_t     *s_gps     = NULL;
 static const catcall_ui_t      *s_ui      = NULL;
@@ -43,8 +45,11 @@ void purr_kernel_register_touch(const catcall_touch_t *drv) {
     ESP_LOGI(TAG, "touch registered: %s", drv ? drv->name : "null");
 }
 void purr_kernel_register_input(const catcall_input_t *drv) {
-    s_input = drv;
-    ESP_LOGI(TAG, "input registered: %s", drv ? drv->name : "null");
+    if (!drv) return;
+    if (s_input_count < MAX_INPUTS) {
+        s_inputs[s_input_count++] = drv;
+    }
+    ESP_LOGI(TAG, "input registered: %s (%d total)", drv->name, s_input_count);
 }
 void purr_kernel_register_radio(const catcall_radio_t *drv) {
     s_radio = drv;
@@ -61,7 +66,9 @@ void purr_kernel_register_ui(const catcall_ui_t *ui) {
 
 const catcall_display_t *purr_kernel_display(void) { return s_display; }
 const catcall_touch_t   *purr_kernel_touch(void)   { return s_touch; }
-const catcall_input_t   *purr_kernel_input(void)   { return s_input; }
+const catcall_input_t   *purr_kernel_input(void)    { return s_input_count > 0 ? s_inputs[0] : NULL; }
+int                       purr_kernel_input_count(void) { return s_input_count; }
+const catcall_input_t    *purr_kernel_input_at(int i)   { return (i >= 0 && i < s_input_count) ? s_inputs[i] : NULL; }
 const catcall_radio_t   *purr_kernel_radio(void)   { return s_radio; }
 const catcall_gps_t     *purr_kernel_gps(void)     { return s_gps; }
 const catcall_ui_t      *purr_kernel_ui(void)      { return s_ui; }
@@ -207,7 +214,10 @@ static int cmp_reg_priority(const void *a, const void *b)
 {
     const purr_module_header_t *ha = *(const purr_module_header_t **)a;
     const purr_module_header_t *hb = *(const purr_module_header_t **)b;
-    return (int)ha->load_priority - (int)hb->load_priority;
+    // Primary: load_priority (1=REQUIRED first). Secondary: module_type (DRIVER < SYSTEM < UI < APP).
+    int ka = (int)ha->load_priority * 10 + (int)ha->module_type;
+    int kb = (int)hb->load_priority * 10 + (int)hb->module_type;
+    return ka - kb;
 }
 
 int purr_kernel_load_static_modules(void)
@@ -290,13 +300,17 @@ int purr_kernel_load_module(const char *path)
 typedef struct {
     char                 path[512];
     uint8_t              priority;      // from peeked header
+    uint8_t              module_type;   // PURR_MOD_* from peeked header
     char                 name[32];
 } scan_entry_t;
 
 static int scan_entry_cmp(const void *a, const void *b)
 {
-    return (int)((const scan_entry_t *)a)->priority -
-           (int)((const scan_entry_t *)b)->priority;
+    const scan_entry_t *sa = (const scan_entry_t *)a;
+    const scan_entry_t *sb = (const scan_entry_t *)b;
+    int ka = (int)sa->priority * 10 + (int)sa->module_type;
+    int kb = (int)sb->priority * 10 + (int)sb->module_type;
+    return ka - kb;
 }
 
 // Collect all .purr files in dir (non-recursive for this level).
@@ -312,10 +326,12 @@ static int collect_dir(const char *dir, scan_entry_t *entries, int max_entries, 
         snprintf(e->path, sizeof(e->path), "%s/%s", dir, ent->d_name);
         purr_module_header_t hdr = {0};
         if (peek_module_header(e->path, &hdr)) {
-            e->priority = hdr.load_priority ? hdr.load_priority : PURR_PRIORITY_OPTIONAL;
+            e->priority    = hdr.load_priority ? hdr.load_priority : PURR_PRIORITY_OPTIONAL;
+            e->module_type = hdr.module_type   ? hdr.module_type   : PURR_MOD_SYSTEM;
             strncpy(e->name, hdr.name, sizeof(e->name) - 1);
         } else {
-            e->priority = PURR_PRIORITY_OPTIONAL;
+            e->priority    = PURR_PRIORITY_OPTIONAL;
+            e->module_type = PURR_MOD_SYSTEM;
             strncpy(e->name, ent->d_name, sizeof(e->name) - 1);
         }
         count++;

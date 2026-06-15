@@ -8,6 +8,7 @@
 #include "../../kernel/core/purr_kernel.h"
 #include "lvgl.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -35,8 +36,13 @@ static uint16_t s_disp_h = 240;
 
 // ── Display flush callback ────────────────────────────────────────────────────
 
+static int s_flush_count = 0;
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p)
 {
+    if (++s_flush_count <= 2) {
+        ESP_LOGI(TAG, "flush #%d (%d,%d)-(%d,%d)", s_flush_count,
+                 area->x1, area->y1, area->x2, area->y2);
+    }
     const catcall_display_t *d = purr_kernel_display();
     if (d && d->push_pixels) {
         int32_t w = area->x2 - area->x1 + 1;
@@ -52,10 +58,16 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 {
     const catcall_touch_t *t = purr_kernel_touch();
     if (t && t->is_pressed()) {
-        int16_t x = 0, y = 0;
-        t->read_point((uint16_t*)&x, (uint16_t*)&y);
-        data->point.x = x;
-        data->point.y = y;
+        uint16_t x = 0, y = 0;
+        t->read_point(&x, &y);
+#ifdef CONFIG_PURR_TOUCH_FLIP_X
+        x = (uint16_t)((s_disp_w > x) ? (s_disp_w - 1 - x) : 0);
+#endif
+#ifdef CONFIG_PURR_TOUCH_FLIP_Y
+        y = (uint16_t)((s_disp_h > y) ? (s_disp_h - 1 - y) : 0);
+#endif
+        data->point.x = (lv_coord_t)x;
+        data->point.y = (lv_coord_t)y;
         data->state   = LV_INDEV_STATE_PR;
     } else {
         data->state = LV_INDEV_STATE_REL;
@@ -67,6 +79,7 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 static void lv_tick_task(void *arg)
 {
     (void)arg;
+    ESP_LOGI("kittenui_hal", "lv_tick_task running");
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5));
         lv_tick_inc(5);
@@ -119,8 +132,10 @@ int kittenui_hal_init(void)
         ESP_LOGW(TAG, "no touch catcall — KittenUI will run touchless");
     }
 
-    // LVGL tick task — must run at 5ms intervals
-    xTaskCreate(lv_tick_task, "lv_tick", 1024, NULL, configMAX_PRIORITIES - 1, NULL);
+    // LVGL tick task — low priority, wakes every 5ms to advance LVGL clock
+    ESP_LOGI(TAG, "creating tick task");
+    BaseType_t tr = xTaskCreate(lv_tick_task, "lv_tick", 4096, NULL, 1, NULL);
+    ESP_LOGI(TAG, "tick task ret=%d heap=%u", (int)tr, (unsigned)esp_get_free_heap_size());
 
     ESP_LOGI(TAG, "HAL init complete");
     return 0;

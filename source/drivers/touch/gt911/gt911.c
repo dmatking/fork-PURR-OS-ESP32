@@ -294,7 +294,7 @@ static const catcall_touch_t s_catcall = {
 
 // ── Module lifecycle ──────────────────────────────────────────────────────────
 
-static int gt911_drv_init(void)
+int gt911_drv_init(void)
 {
     touch_config_t default_cfg = {
         .i2c_port = 0,
@@ -307,7 +307,7 @@ static int gt911_drv_init(void)
     return (ret == ESP_OK) ? 0 : -1;
 }
 
-static void gt911_drv_deinit(void)
+void gt911_drv_deinit(void)
 {
     gt911_deinit();
 }

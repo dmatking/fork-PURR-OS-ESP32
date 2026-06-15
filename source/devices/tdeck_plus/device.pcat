@@ -6,6 +6,7 @@
 name        = "tdeck_plus"
 chip        = "esp32s3"
 flash_mb    = 16
+port        = "/dev/ttyACM0"
 psram       = true
 psram_mb    = 8
 
@@ -15,6 +16,7 @@ spiffs_offset  = "0xD90000"
 display     = "st7789"
 touch       = "gt911"
 input       = "trackball"
+keyboard    = "bbq20"
 radio       = "sx1276"
 gps         = "generic_nmea"
 
@@ -24,7 +26,7 @@ bt          = true
 lora        = "sx1276"
 
 [modules]
-ui          = "kittenui"
+ui          = "miniwin"
 app_manager = "app_manager"
 
 [ui]
@@ -41,7 +43,7 @@ calculator  = true
 display/st7789    = 1
 touch/gt911       = 1
 input/trackball   = 1
-kittenui          = 2
+miniwin           = 2
 app_manager       = 2
 radio/sx1276      = 2
 gps/generic_nmea  = 3

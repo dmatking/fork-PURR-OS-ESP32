@@ -251,6 +251,19 @@ def generate_components_manifest(targets):
         if c_files:
             rel = os.path.relpath(src_dir, REPO_DIR)
             lines.append(f"    ${{CMAKE_SOURCE_DIR}}/../{rel}")
+
+    # System apps: source/apps/system/<name>/app.pcat + CMakeLists.txt
+    # These are compiled into firmware as static modules, not loaded from SPIFFS.
+    apps_system_dir = os.path.join(SOURCE_DIR, "apps", "system")
+    if os.path.isdir(apps_system_dir):
+        for app_name in sorted(os.listdir(apps_system_dir)):
+            app_dir = os.path.join(apps_system_dir, app_name)
+            if (os.path.isdir(app_dir)
+                    and os.path.isfile(os.path.join(app_dir, "app.pcat"))
+                    and os.path.isfile(os.path.join(app_dir, "CMakeLists.txt"))):
+                rel = os.path.relpath(app_dir, REPO_DIR)
+                lines.append(f"    ${{CMAKE_SOURCE_DIR}}/../{rel}")
+
     lines += [")", ""]
     lines += [
         "foreach(comp_dir ${PURR_MODULE_DIRS})",

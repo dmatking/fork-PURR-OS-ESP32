@@ -63,7 +63,7 @@ typedef struct {
     void (*deinit)(void);
 } purr_module_header_t;
 
-// Register a module with the kernel using a C constructor (runs before app_main).
+// Declare a static module descriptor.
 //
 // Usage (in exactly one .c file per module):
 //   PURR_MODULE_REGISTER(my_driver) = {
@@ -71,19 +71,10 @@ typedef struct {
 //       ...
 //   };
 //
-// 'id' must be a valid C identifier (no slashes — use underscore for
-// hierarchical names: display_st7789, touch_gt911, etc.).
-//
-// The macro emits:
-//   1. An extern forward declaration so the constructor can reference the variable.
-//   2. A __attribute__((constructor)) function that calls
-//      purr_kernel_register_module_static() before app_main runs.
-//   3. The variable declaration — the caller appends "= { ... };" to complete it.
+// purrstrap reads device.pcat and generates purr_register_static_modules() in
+// the device glue file, which explicitly calls purr_kernel_register_module_static()
+// for each module the device needs. No linker tricks required.
 void purr_kernel_register_module_static(const purr_module_header_t *hdr);
 
-#define PURR_MODULE_REGISTER(id)                                          \
-    extern purr_module_header_t purr_module_##id;                         \
-    static void __attribute__((constructor, used)) _purr_reg_##id(void) { \
-        purr_kernel_register_module_static(&purr_module_##id);            \
-    }                                                                     \
+#define PURR_MODULE_REGISTER(id) \
     purr_module_header_t purr_module_##id

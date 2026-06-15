@@ -6,5 +6,6 @@ idf_component_register(
         .
         ../../../kernel/core
         ../../../kernel/catcalls
-    REQUIRES esp_common driver freertos nvs_flash esp_vfs fatfs spiffs
+    REQUIRES esp_common driver freertos nvs_flash vfs fatfs spiffs miniwin app_manager
 )
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-format-truncation)

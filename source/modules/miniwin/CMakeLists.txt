@@ -3,6 +3,8 @@ idf_component_register(
     SRCS
         miniwin_module.c
         miniwin_win.c
+        miniwin_cursor.c
+        miniwin_keyboard.c
         MiniWin/miniwin.c
         MiniWin/miniwin_debug.c
         MiniWin/miniwin_message_queue.c

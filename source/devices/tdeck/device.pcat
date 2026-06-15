@@ -14,6 +14,7 @@ spiffs_offset  = "0xD90000"
 display     = "st7789"
 touch       = ""
 input       = "trackball"
+keyboard    = "bbq20"
 radio       = "sx1262"
 gps         = ""
 
@@ -23,7 +24,7 @@ bt          = true
 lora        = "sx1262"
 
 [modules]
-ui          = "kittenui"
+ui          = "miniwin"
 app_manager = "app_manager"
 
 [ui]
@@ -40,7 +41,7 @@ calculator  = true
 display/st7789   = 1
 input/trackball  = 1
 radio/sx1262     = 2
-kittenui         = 2
+miniwin          = 2
 app_manager      = 2
 apps/settings    = 3
 apps/about       = 3

@@ -4,5 +4,7 @@ idf_component_register(
         calculator.c
     INCLUDE_DIRS
         .
-    REQUIRES esp_common freertos
+        ../../../kernel/core
+        ../../../kernel/catcalls
+    REQUIRES esp_common freertos miniwin app_manager
 )

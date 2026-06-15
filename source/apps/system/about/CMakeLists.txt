@@ -6,5 +6,5 @@ idf_component_register(
         .
         ../../../kernel/core
         ../../../kernel/catcalls
-    REQUIRES esp_common driver freertos esp_chip_info
+    REQUIRES esp_common driver freertos esp_hw_support spi_flash miniwin app_manager
 )

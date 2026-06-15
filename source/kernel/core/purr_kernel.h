@@ -17,8 +17,8 @@ extern "C" {
 
 // ── Version ───────────────────────────────────────────────────────────────────
 
-#define PURR_KERNEL_VERSION  "0.12.1"
-#define KITT_VERSION         "0.9.1"
+#define PURR_KERNEL_VERSION  "0.13.0"
+#define KITT_VERSION         "0.9.2"
 
 // ── Module loader ─────────────────────────────────────────────────────────────
 
@@ -65,7 +65,9 @@ void purr_kernel_register_ui     (const catcall_ui_t      *ui);
 // Retrieve registered catcall implementations (NULL if none registered).
 const catcall_display_t *purr_kernel_display(void);
 const catcall_touch_t   *purr_kernel_touch(void);
-const catcall_input_t   *purr_kernel_input(void);
+const catcall_input_t   *purr_kernel_input(void);       // first registered (legacy)
+int                       purr_kernel_input_count(void); // total registered inputs
+const catcall_input_t    *purr_kernel_input_at(int idx); // iterate all inputs
 const catcall_radio_t   *purr_kernel_radio(void);
 const catcall_gps_t     *purr_kernel_gps(void);
 const catcall_ui_t      *purr_kernel_ui(void);

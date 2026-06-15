@@ -1,9 +1,9 @@
 idf_component_register(
     SRCS
-        st7789.c
+        bbq20.c
     INCLUDE_DIRS
         .
         ../../../kernel/core
         ../../../kernel/catcalls
-    REQUIRES esp_common esp_lcd driver freertos nvs_flash heap
+    REQUIRES esp_common driver freertos nvs_flash
 )

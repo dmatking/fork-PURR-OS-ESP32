@@ -72,13 +72,12 @@ void kittenui_apply_theme_styles(void)
     const kittenui_style_flags_t *f = &t->flags;
     const lv_font_t *font_body = t->fonts.body ? t->fonts.body : LV_FONT_DEFAULT;
 
-    // Screen / window background
+    // Screen / window background (applied to screen objects by kittenui_desktop_init)
     lv_style_reset(&s_style_screen);
     lv_style_set_bg_color(&s_style_screen, p->window_bg);
     lv_style_set_bg_opa(&s_style_screen, LV_OPA_COVER);
     lv_style_set_text_color(&s_style_screen, p->text);
     lv_style_set_text_font(&s_style_screen, font_body);
-    lv_obj_add_style(lv_scr_act(), &s_style_screen, 0);
 
     // Button normal
     lv_style_reset(&s_style_btn);
@@ -126,9 +125,6 @@ void kittenui_apply_theme_styles(void)
 
     // Let the theme's apply_fn do anything else (gradients, custom widgets, etc.)
     if (t->apply_fn) t->apply_fn(t);
-
-    // Refresh all screens
-    lv_obj_report_style_change(NULL);
 }
 
 // ── NVS theme loader ──────────────────────────────────────────────────────────
@@ -161,13 +157,16 @@ static TaskHandle_t s_task = NULL;
 static void kittenui_task(void *arg)
 {
     (void)arg;
-    // Boot the XP desktop shell — LVGL is fully initialised by now
+    ESP_LOGI(TAG, "task started");
+    kittenui_apply_theme_styles();
+    ESP_LOGI(TAG, "theme applied, starting desktop");
     kittenui_desktop_init();
+    ESP_LOGI(TAG, "desktop init done");
     uint32_t tick = 0;
     while (1) {
+        lv_tick_inc(5);
         lv_timer_handler();
-        // Update clock every ~30 s (6000 × 5 ms)
-        if (++tick % 6000 == 0) kittenui_desktop_tick();
+        if (++tick % 1000 == 0) kittenui_desktop_tick();
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
@@ -198,18 +197,19 @@ int kittenui_init(void)
     ESP_LOGI(TAG, "active theme: %s", s_active->name);
 
     if (kittenui_hal_init() != 0) return -1;
-
-    // Apply theme styles after lv_init() (called inside kittenui_hal_init)
-    kittenui_apply_theme_styles();
+    ESP_LOGI(TAG, "HAL done, creating task");
 
     // LVGL handler task — separate from tick task created in HAL
-    BaseType_t ret = xTaskCreate(kittenui_task, "kittenui", 8192, NULL, 4, &s_task);
+    // Theme styles are applied inside the task (see kittenui_task above)
+    BaseType_t ret = xTaskCreatePinnedToCore(kittenui_task, "kittenui", 32768, NULL, 4, &s_task, 1);
+    ESP_LOGI(TAG, "xTaskCreate ret=%d", (int)ret);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "failed to create kittenui task");
         return -1;
     }
 
     kittenui_win_register();
+    ESP_LOGI(TAG, "win registered");
 
     ESP_LOGI(TAG, "KittenUI ready (%ux%u, theme=%s)",
              kittenui_hal_width(), kittenui_hal_height(), s_active->name);

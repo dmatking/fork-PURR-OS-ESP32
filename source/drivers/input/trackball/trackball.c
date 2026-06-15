@@ -221,13 +221,15 @@ static const catcall_input_t s_catcall = {
 
 // ── Module lifecycle ──────────────────────────────────────────────────────────
 
-static int module_init(void)
+int trackball_drv_init(void)
 {
     esp_err_t ret = trackball_init();
     if (ret != ESP_OK) return -1;
     purr_kernel_register_input(&s_catcall);
     return 0;
 }
+
+static int module_init(void) { return trackball_drv_init(); }
 
 static void module_deinit(void)
 {

@@ -1,0 +1,9 @@
+[driver]
+name        = "bbq20"
+type        = "input"
+description = "LilyGO T-Deck keyboard (RP2040 I2C bridge at 0x55)"
+chips       = ["esp32", "esp32s3"]
+
+[pins]
+sda = 18
+scl = 8
