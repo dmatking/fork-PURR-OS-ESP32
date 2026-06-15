@@ -66,6 +66,13 @@ static esp_err_t gt911_deinit(void);
 #define GT911_DEFAULT_INT    16
 #define GT911_DEFAULT_RST  0xFF   // not connected
 
+// Override set by gt911_configure() before drv_init
+static int s_cfg_sda      = GT911_DEFAULT_SDA;
+static int s_cfg_scl      = GT911_DEFAULT_SCL;
+static int s_cfg_int      = GT911_DEFAULT_INT;
+static int s_cfg_rst      = (int)GT911_DEFAULT_RST;
+static int s_cfg_i2c_port = 0;
+
 // ── Touch point struct ────────────────────────────────────────────────────────
 
 typedef struct __attribute__((packed)) {
@@ -177,6 +184,21 @@ static esp_err_t gt911_init(const touch_config_t *cfg)
         dev_cfg.device_address = GT911_I2C_ADDR_ALT;
         ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_bus_handle, &dev_cfg, &s_dev_handle),
                             TAG, "I2C add device failed (both addresses)");
+    }
+
+    // Verify device responds — read product ID (0x8140, 6 bytes = "911\0" + version)
+    {
+        uint8_t pid[6] = {0};
+        esp_err_t probe = gt911_read_reg(0x8140, pid, sizeof(pid));
+        if (probe != ESP_OK) {
+            ESP_LOGE(TAG, "I2C probe failed (%s) — GT911 not responding", esp_err_to_name(probe));
+            i2c_master_bus_rm_device(s_dev_handle);
+            i2c_del_master_bus(s_bus_handle);
+            s_dev_handle = NULL;
+            s_bus_handle = NULL;
+            return probe;
+        }
+        ESP_LOGI(TAG, "GT911 product ID: %.6s", pid);
     }
 
     // Clear any stale status
@@ -294,16 +316,25 @@ static const catcall_touch_t s_catcall = {
 
 // ── Module lifecycle ──────────────────────────────────────────────────────────
 
+void gt911_configure(int sda, int scl, int int_pin, int rst_pin, int i2c_port)
+{
+    s_cfg_sda      = sda;
+    s_cfg_scl      = scl;
+    s_cfg_int      = int_pin;         // -1 → polling mode
+    s_cfg_rst      = rst_pin;         // -1 → no RST pin
+    s_cfg_i2c_port = i2c_port;
+}
+
 int gt911_drv_init(void)
 {
-    touch_config_t default_cfg = {
-        .i2c_port = 0,
-        .sda_pin  = GT911_DEFAULT_SDA,
-        .scl_pin  = GT911_DEFAULT_SCL,
-        .int_pin  = GT911_DEFAULT_INT,
-        .rst_pin  = GT911_DEFAULT_RST,
+    touch_config_t cfg = {
+        .i2c_port = s_cfg_i2c_port,
+        .sda_pin  = (uint8_t)s_cfg_sda,
+        .scl_pin  = (uint8_t)s_cfg_scl,
+        .int_pin  = (uint8_t)(s_cfg_int  < 0 ? 0xFF : s_cfg_int),
+        .rst_pin  = (uint8_t)(s_cfg_rst  < 0 ? 0xFF : s_cfg_rst),
     };
-    esp_err_t ret = gt911_init(&default_cfg);
+    esp_err_t ret = gt911_init(&cfg);
     return (ret == ESP_OK) ? 0 : -1;
 }
 

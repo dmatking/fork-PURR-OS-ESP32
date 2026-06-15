@@ -29,6 +29,7 @@
 #include "../../drivers/touch/gt911/gt911.h"
 #include "../../drivers/input/trackball/trackball.h"
 #include "../../drivers/input/bbq20/bbq20.h"
+#include "driver/i2c_master.h"
 
 static const char *TAG = "tdp_boot";
 
@@ -52,7 +53,7 @@ static void mount_flash_vfs(void)
         .base_path              = "/flash",
         .partition_label        = NULL,
         .max_files              = 12,
-        .format_if_mount_failed = false,
+        .format_if_mount_failed = true,
     };
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK) {
@@ -114,6 +115,39 @@ static void kb_test_loop(void)
     printf("[KB TEST] done.\r\n");
 }
 
+static void i2c_scan_cmd(void)
+{
+    i2c_master_bus_handle_t bus = NULL;
+    esp_err_t r = i2c_master_get_bus_handle(I2C_NUM_0, &bus);
+    if (r != ESP_OK) {
+        // No driver owns the bus yet — create a temporary one
+        i2c_master_bus_config_t cfg = {
+            .i2c_port          = I2C_NUM_0,
+            .sda_io_num        = 18,
+            .scl_io_num        = 8,
+            .clk_source        = I2C_CLK_SRC_DEFAULT,
+            .glitch_ignore_cnt = 7,
+            .flags.enable_internal_pullup = true,
+        };
+        if (i2c_new_master_bus(&cfg, &bus) != ESP_OK) {
+            printf("[SCAN] failed to acquire I2C bus\r\n");
+            return;
+        }
+    }
+    printf("[SCAN] I2C bus SDA=18 SCL=8\r\n");
+    const struct { uint8_t addr; const char *name; } devs[] = {
+        { 0x5D, "GT911 touch (primary)" },
+        { 0x14, "GT911 touch (alt)"     },
+        { 0x55, "BBQ20 keyboard"        },
+    };
+    for (int d = 0; d < 3; d++) {
+        esp_err_t res = i2c_master_probe(bus, devs[d].addr, pdMS_TO_TICKS(30));
+        printf("[SCAN] 0x%02X [%s]: %s\r\n",
+               devs[d].addr, devs[d].name,
+               res == ESP_OK ? "ACK" : "NACK");
+    }
+}
+
 static void serial_console_task(void *arg)
 {
     esp_err_t ret = uart_driver_install(UART_NUM_0, 256, 0, 0, NULL, 0);
@@ -124,7 +158,7 @@ static void serial_console_task(void *arg)
 
     char line[32];
     int  len = 0;
-    printf("\r\nPURR OS console (tdp) — commands: kb\r\n> ");
+    printf("\r\nPURR OS console (tdp) — commands: kb, scan\r\n> ");
     fflush(stdout);
 
     for (;;) {
@@ -136,6 +170,7 @@ static void serial_console_task(void *arg)
             line[len] = '\0';
             len = 0;
             if (strcmp(line, "kb") == 0)       kb_test_loop();
+            else if (strcmp(line, "scan") == 0) i2c_scan_cmd();
             else if (line[0] != '\0')           printf("unknown: %s\r\n", line);
             printf("> ");
             fflush(stdout);
@@ -193,8 +228,11 @@ void app_main(void)
 
     // Touch — GT911 I2C (creates I2C bus on port 0)
     // GT911 needs ~300ms from BOARD_POWERON before I2C responds.
-    // Display init takes ~120ms+; wait the remainder here.
-    vTaskDelay(pdMS_TO_TICKS(200));
+    // Display init (SWRESET 150ms + ~30ms GRAM clear) counts toward that budget.
+    // Wait the remainder — 400ms gives comfortable margin.
+    // Use polling mode (int_pin=-1): avoids GPIO ISR and is simpler to diagnose.
+    vTaskDelay(pdMS_TO_TICKS(400));
+    gt911_configure(18, 8, -1, -1, 0);   // SDA=18 SCL=8 poll-mode no-RST port=0
     if (gt911_drv_init() != 0) {
         ESP_LOGW(TAG, "GT911 touch init failed — continuing without touch");
     }
