@@ -1,4 +1,12 @@
 # PURR OS — tdeck_plus (ESP32-S3, 16 MB flash, 8 MB PSRAM)
+
+# espressif__arduino-esp32's CMakeLists.txt unconditionally demands this
+# (validated at CMake-configure time) even on devices that don't use the
+# Arduino kernel — managed_components/ gets scanned regardless of device.
+# 1000Hz is a safe tick rate for any ESP-IDF project, so just satisfy it
+# here rather than fight the component scan.
+CONFIG_FREERTOS_HZ=1000
+
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16mb.csv"
 CONFIG_SPIRAM=y
@@ -8,10 +16,9 @@ CONFIG_SPIRAM_SIZE=8388608
 CONFIG_SPIRAM_USE_MALLOC=y
 
 # PURR OS UI Backend
-CONFIG_PURR_UI_BACKEND_MINIWIN=y
+CONFIG_PURR_UI_BACKEND_LVGLDEBUG=y
 
-# LVGL: swap color bytes so LVGL outputs big-endian RGB565 for SPI display
-CONFIG_LV_COLOR_16_SWAP=y
-
-# Touch: GT911 X axis is mirrored relative to display (mirror_x=true on panel)
-CONFIG_PURR_TOUCH_FLIP_X=y
+# LV_COLOR_16_SWAP intentionally NOT set: st7789_push_pixels() already
+# byte-swaps every pixel unconditionally before sending over SPI. Enabling
+# this on top of that double-swaps and corrupts every color LVGL renders
+# (confirmed on hardware during W10M/Meow420 bring-up on the Arduino kernel).

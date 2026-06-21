@@ -6,5 +6,5 @@ idf_component_register(
         .
         ../../../kernel/core
         ../../../kernel/catcalls
-    REQUIRES esp_common driver freertos nvs_flash
+    REQUIRES esp_common driver freertos nvs_flash esp_timer
 )

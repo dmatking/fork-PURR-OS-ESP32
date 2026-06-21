@@ -1,0 +1,14 @@
+[module]
+name        = "lvgldebug"
+version     = "0.1.0"
+type        = "ui"
+description = "LVGL Debug — touch/HAL diagnostic screen, not a real desktop"
+author      = "PURR OS"
+
+[requires]
+catcalls    = "display"
+kernel_min  = "0.9.0"
+
+[build]
+sources     = "lvgldebug_module.c lvgldebug_hal.c lvgldebug_screen.c"
+requires    = "lvgl"

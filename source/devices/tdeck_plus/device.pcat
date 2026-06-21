@@ -26,32 +26,15 @@ bt          = true
 lora        = "sx1276"
 
 [modules]
-ui          = "miniwin"
-app_manager = "app_manager"
-
-[ui]
-theme       = "wce"
-
-[apps]
-settings    = true
-about       = true
-terminal    = true
-fileman     = true
-calculator  = true
+ui          = "lvgldebug"
 
 [flash]
 display/st7789    = 1
 touch/gt911       = 1
 input/trackball   = 1
-miniwin           = 2
-app_manager       = 2
+lvgldebug         = 2
 radio/sx1276      = 2
 gps/generic_nmea  = 3
-apps/settings     = 3
-apps/about        = 3
-apps/terminal     = 3
-apps/fileman      = 3
-apps/calculator   = 3
 
 [pins]
 display_cs    = 12

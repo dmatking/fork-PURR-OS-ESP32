@@ -25,6 +25,52 @@ menu "PURR OS"
                 Minimal OLED UI for devices with monochrome displays or
                 no display at all.
 
+        config PURR_UI_BACKEND_BLACKPURR
+            bool "BlackPURR (LVGL 8, dark hybrid UI)"
+            help
+                BlackPURR is the PURR OS flagship UI shell — dark theme, icon
+                ribbon + app drawer inspired by BlackBerry OS 6/7. Supports
+                hybrid touch/trackball input, software cursor overlay for
+                legacy apps. Requires LVGL 8. Best on T-Deck Plus.
+
+        config PURR_UI_BACKEND_W10M
+            bool "W10M (LVGL 8, Windows 10 Mobile-style)"
+            help
+                Lock screen with a photo background and an accent-colored
+                Live Tile start screen, in the style of Windows 10 Mobile
+                (Lumia). Re-laid-out for landscape rather than the source
+                inspiration's native portrait canvas. Requires LVGL 8.
+                On the backburner — touch calibration and LV_COLOR_16_SWAP
+                were not wired up for the arduino kernel when this was last
+                tested; see Meow420 for the fixed-up version of both.
+
+        config PURR_UI_BACKEND_MEOW420
+            bool "Meow420 (LVGL 8, Android 1.5-style)"
+            help
+                Wallpaper home screen with a few shortcuts and a bottom dock
+                with a pull-tab that opens a full app drawer, modeled on the
+                Android 1.5 (Cupcake) launcher. Requires LVGL 8.
+
+        config PURR_UI_BACKEND_LVGLDEBUG
+            bool "LVGL Debug (touch/HAL diagnostics)"
+            help
+                Minimal LVGL screen for diagnosing touch mapping: shows live
+                raw + mapped coordinates as text and draws a dot exactly
+                where a tap is detected, so misalignment is visible
+                immediately instead of read from serial logs. Not a real
+                desktop shell — purely a debugging tool.
+
     endchoice
+
+    config PURR_UI_WINCE_SHELL
+        bool "WinCE shell baked directly into kernel (no .purr module wrapper)"
+        default n
+        depends on PURR_UI_BACKEND_MINIWIN
+        help
+            For devices that bake the WinCE-style shell (ported from PURR OS
+            0.11) directly into their specialized kernel instead of using
+            MiniWin's own desktop module. Tells miniwin_module.c to skip
+            starting its own desktop/task since the kernel already started
+            its own.
 
 endmenu

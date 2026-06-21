@@ -235,7 +235,7 @@ void app_main(void)
     // ST7789 init includes a ~120ms SLPOUT delay internally, which counts
     // toward the GT911's required 300ms startup time after BOARD_POWERON.
     st7789_configure(TDP_DISPLAY_CS, TDP_DISPLAY_DC, TDP_DISPLAY_MOSI,
-                     TDP_DISPLAY_SCLK, TDP_DISPLAY_RST, TDP_DISPLAY_BL);
+                     -1, TDP_DISPLAY_SCLK, TDP_DISPLAY_RST, TDP_DISPLAY_BL);
     if (st7789_drv_init() != 0) {
         purr_kernel_panic("ST7789 display init failed");
     }
@@ -247,7 +247,13 @@ void app_main(void)
     // Use polling mode (int_pin=-1): avoids GPIO ISR and is simpler to diagnose.
     vTaskDelay(pdMS_TO_TICKS(400));
 
-    gt911_configure(18, 8, -1, -1, 0);   // SDA=18 SCL=8 poll-mode RST=NC port=0
+    // RST=17, matching PURR OS 0.11's devices/tdeck_plus/hal_touch.cpp
+    // exactly — this "plug and play" driver previously configured RST as
+    // not-connected (-1), skipping the hardware reset pulse 0.11 always
+    // did before talking to the chip. Found by direct comparison against
+    // 0.11's code once the touch instability traced back to "this only
+    // started after the driver became plug-and-play."
+    gt911_configure(18, 8, -1, 17, 0);   // SDA=18 SCL=8 poll-mode RST=17 port=0
     if (gt911_drv_init() != 0) {
         ESP_LOGW(TAG, "GT911 touch init failed — continuing without touch");
     }
