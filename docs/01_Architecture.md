@@ -56,6 +56,30 @@ All files matching `*.c` and `*.cpp` in the specialized kernel directory are com
 
 See [13_Kernels.md](13_Kernels.md) for the full specialized kernel reference.
 
+### Rule: Specialized Kernels Consume Drivers, They Don't Reimplement Them
+
+A specialized kernel is a different **loading path** for a driver, not a
+different **implementation** of it. The driver's register-level protocol logic
+lives in exactly one place — `source/drivers/<type>/<name>/<name>.c` — and a
+specialized kernel is only allowed to consume it by calling that driver's public
+functions (`<name>_drv_init()`, `<name>_configure()`, `<name>_drv_deinit()`)
+directly, the same way `driver_manager` calls them indirectly through the
+`.purr` module ABI. A specialized kernel must never hand-roll a driver's
+register reads/writes, keepalive timers, or status-clear logic from scratch.
+
+`kernel_tdeck_plus` (`source/kernel/kernel_tdeck_plus/kernel_tdp_boot.c`)
+is the canonical example — it `#include`s `source/drivers/touch/gt911/gt911.h`
+and calls `gt911_configure(...)` / `gt911_drv_init()` directly instead of
+talking to the GT911 registers itself. `purrstrap` already knows to skip
+loading a driver as a `.purr` module when a specialized kernel has baked it in
+(see `purrstrap.py`'s static-module glue generation), so there is no double-init
+risk in following this rule.
+
+The one exception in the tree today, `kernel_tdeck_plus_arduino`, predates this
+rule — it was written as a stopgap when the IDF `i2c_master` stack had a GT911
+regression, before a driver-level fix landed. See `docs/13_Kernels.md` and
+`PURR_OS_1.0_CHECKLIST.md` §1 for its consolidation status.
+
 ---
 
 ## Kernel Spine (`source/kernel/core/`)
@@ -195,6 +219,24 @@ purr_kernel_ui()->create_window("My App", 320, 240);
 ```
 
 See [02_Catcalls.md](02_Catcalls.md) for the full interface spec for all six catcalls.
+
+---
+
+## Two UI Tiers
+
+`catcall_ui_t` only covers window/widget/keyboard dispatch — it has no touch
+slots. This is intentional: PURR OS has two distinct kinds of UI module, and
+only one of them needs `catcall_ui_t` at all.
+
+| Tier | Registers `catcall_ui_t`? | Modules | Use case |
+|------|---------------------------|---------|----------|
+| **Windowed** | Yes | `kittenui` (LVGL), `miniwin` | Full widget/window apps — buttons, labels, text areas, layout. Reads `catcall_touch_t` internally to drive its own hit-testing; apps never touch the touch catcall directly. |
+| **Shell** | No | `blackpurr`, `oled_ui` | Lightweight text-mode or grid shells that draw directly via `catcall_display_t.fill_rect`/`push_pixels` and read `catcall_touch_t`/`catcall_input_t` themselves. No window manager, no widget tree. |
+
+A device picks exactly one UI module via `device.pcat`'s `ui = "..."` field,
+same as today — this table just makes explicit which contract that module is
+expected to honor. A shell-tier module registering `catcall_ui_t` (or a
+windowed-tier module skipping it) would be a bug.
 
 ---
 

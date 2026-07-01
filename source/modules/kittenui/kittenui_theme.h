@@ -8,7 +8,6 @@
 //
 // Built-in themes shipped with KittenUI:
 //   kittenui_theme_wce()   — WCE Classic (silver/navy, PURR OS default)
-//   kittenui_theme_luna()  — Luna XP (blue/parchment, rounded)
 //   kittenui_theme_dark()  — Dark (VS Code dark, easy on OLED panels)
 
 #include "lvgl.h"
@@ -53,9 +52,9 @@ typedef struct {
 // ── Widget style flags ────────────────────────────────────────────────────────
 
 typedef struct {
-    bool raised_buttons;    // 3D raised look (WCE) vs flat (Luna, Dark)
+    bool raised_buttons;    // 3D raised look (WCE) vs flat (Dark)
     bool rounded_corners;   // corner radius on buttons/windows
-    uint8_t corner_radius;  // pixels (0 = square, 4 = WCE slight, 8 = Luna rounded)
+    uint8_t corner_radius;  // pixels (0 = square, 4 = WCE slight)
     bool show_scrollbars;   // auto-hide or always-visible scrollbars
     bool shadow_windows;    // drop shadow on popup windows
     uint8_t padding;        // default inner padding for widgets (px)
@@ -93,7 +92,6 @@ const kittenui_theme_t *kittenui_active_theme(void);
 // ── Built-in themes ───────────────────────────────────────────────────────────
 
 const kittenui_theme_t *kittenui_theme_wce(void);   // WCE Classic
-const kittenui_theme_t *kittenui_theme_luna(void);  // Luna XP blue
 const kittenui_theme_t *kittenui_theme_dark(void);  // Dark
 
 #ifdef __cplusplus

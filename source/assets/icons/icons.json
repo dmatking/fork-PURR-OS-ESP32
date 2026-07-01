@@ -1,0 +1,49 @@
+{
+  "_comment": "BlackPURR icon manifest — MDI slugs mapped to PURR OS usage",
+  "_sizes": {
+    "24": "status bar indicators",
+    "48": "app grid / drawer icons"
+  },
+
+  "status_bar": {
+    "battery_full":     { "mdi": "battery",           "sizes": [24] },
+    "battery_high":     { "mdi": "battery-80",        "sizes": [24] },
+    "battery_mid":      { "mdi": "battery-50",        "sizes": [24] },
+    "battery_low":      { "mdi": "battery-20",        "sizes": [24] },
+    "battery_alert":    { "mdi": "battery-alert",     "sizes": [24] },
+    "battery_charging": { "mdi": "battery-charging",  "sizes": [24] },
+    "wifi":             { "mdi": "wifi",               "sizes": [24] },
+    "wifi_off":         { "mdi": "wifi-off",           "sizes": [24] },
+    "signal_full":      { "mdi": "signal",             "sizes": [24] },
+    "signal_off":       { "mdi": "signal-off",         "sizes": [24] },
+    "gps_active":       { "mdi": "crosshairs-gps",    "sizes": [24] },
+    "gps_searching":    { "mdi": "crosshairs",         "sizes": [24] },
+    "gps_off":          { "mdi": "crosshairs-off",    "sizes": [24] },
+    "sd_card":          { "mdi": "sd",                 "sizes": [24] },
+    "sd_off":           { "mdi": "micro-sd",            "sizes": [24] },
+    "bell":             { "mdi": "bell",               "sizes": [24] },
+    "bell_off":         { "mdi": "bell-off",           "sizes": [24] },
+    "volume_on":        { "mdi": "volume-high",        "sizes": [24] },
+    "volume_off":       { "mdi": "volume-off",         "sizes": [24] },
+    "bluetooth":        { "mdi": "bluetooth",          "sizes": [24] },
+    "radio_tower":      { "mdi": "radio-tower",        "sizes": [24] },
+    "antenna":          { "mdi": "antenna",            "sizes": [24] }
+  },
+
+  "apps": {
+    "settings":         { "mdi": "cog",                "sizes": [48] },
+    "about":            { "mdi": "information-outline", "sizes": [48] },
+    "terminal":         { "mdi": "console",            "sizes": [48] },
+    "fileman":          { "mdi": "folder-open",        "sizes": [48] },
+    "calculator":       { "mdi": "calculator",         "sizes": [48] },
+    "radio":            { "mdi": "radio-tower",        "sizes": [48] },
+    "gps":              { "mdi": "map-marker-radius",  "sizes": [48] },
+    "messages":         { "mdi": "message-text",       "sizes": [48] },
+    "add_app":          { "mdi": "plus-circle-outline","sizes": [48] },
+    "all_apps":         { "mdi": "apps",               "sizes": [48] },
+    "sd_card":          { "mdi": "sd",                 "sizes": [48] },
+    "tools":            { "mdi": "tools",              "sizes": [48] },
+    "magicmac":         { "mdi": "apple",              "sizes": [48] },
+    "magidos":          { "mdi": "microsoft-windows-classic", "sizes": [48] }
+  }
+}

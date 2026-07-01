@@ -3,7 +3,7 @@
   "chip": "esp32s3",
   "purros_version": "0.12.0",
   "kitt_version": "0.9.0",
-  "last_build": "2026-06-13T08:40:47.526004",
+  "last_build": "2026-06-13T10:13:11.306141",
   "pcat": "/home/Catto/Documents/Projects/PURR-OS-ESP32/source/devices/heltec/device.pcat",
   "flash_bin": "/home/Catto/Documents/Projects/PURR-OS-ESP32/cattobaked/heltec/flash.bin",
   "firmware_bin": "not built",

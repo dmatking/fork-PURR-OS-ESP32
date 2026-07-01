@@ -1,0 +1,14 @@
+[module]
+name        = "blackpurr"
+version     = "0.1.0"
+type        = "ui"
+description = "BlackPURR — minimal text-mode Palm OS-style launcher, no LVGL"
+author      = "PURR OS"
+
+[requires]
+catcalls    = "display"
+kernel_min  = "0.9.0"
+
+[build]
+sources     = "blackpurr_module.c blackpurr_shell.c"
+requires    = ""

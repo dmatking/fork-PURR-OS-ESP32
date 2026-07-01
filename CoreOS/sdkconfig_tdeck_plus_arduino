@@ -15,11 +15,20 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_SIZE=8388608
 CONFIG_SPIRAM_USE_MALLOC=y
 
+# Bluetooth — deferred (see kernel_atdp_boot.cpp bt_init_ble comment). Arduino's
+# BLEDevice wrapper needs extra Kconfig this build doesn't carry; re-enable when
+# BT is wired up directly against IDF/NimBLE instead of the Arduino shim.
+
+# LV_COLOR_16_SWAP intentionally NOT set: st7789_push_pixels() (this panel's
+# driver, source/drivers/display/st7789/st7789.c) already byte-swaps every
+# pixel unconditionally before sending over SPI. Enabling this Kconfig on
+# top of that double-swaps and corrupts every color LVGL renders — confirmed
+# on hardware during W10M/Meow420 bring-up earlier.
+
 # PURR OS UI Backend
 CONFIG_PURR_UI_BACKEND_MINIWIN=y
 
-# LVGL: swap color bytes so LVGL outputs big-endian RGB565 for SPI display
-CONFIG_LV_COLOR_16_SWAP=y
-
-# Touch: GT911 X axis is mirrored relative to display (mirror_x=true on panel)
-CONFIG_PURR_TOUCH_FLIP_X=y
+# WinCE shell baked directly into kernel_atdp_boot.cpp's wince_*.cpp files —
+# no .purr module wrapper. Tells miniwin_module.c to skip starting its own
+# desktop/task for this device since the kernel already started its own.
+CONFIG_PURR_UI_WINCE_SHELL=y

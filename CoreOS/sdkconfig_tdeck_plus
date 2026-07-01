@@ -16,9 +16,4 @@ CONFIG_SPIRAM_SIZE=8388608
 CONFIG_SPIRAM_USE_MALLOC=y
 
 # PURR OS UI Backend
-CONFIG_PURR_UI_BACKEND_LVGLDEBUG=y
-
-# LV_COLOR_16_SWAP intentionally NOT set: st7789_push_pixels() already
-# byte-swaps every pixel unconditionally before sending over SPI. Enabling
-# this on top of that double-swaps and corrupts every color LVGL renders
-# (confirmed on hardware during W10M/Meow420 bring-up on the Arduino kernel).
+CONFIG_PURR_UI_BACKEND_BLACKPURR=y

@@ -3,6 +3,10 @@
 #include <stdbool.h>
 #include "../../kernel/catcalls/catcall_input.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Cursor position and click state — read by hal_touch to inject pointer events.
 void     miniwin_cursor_init(int display_w, int display_h);
 // Called by miniwin_input_pump for each event — returns true if event was consumed.
@@ -13,3 +17,7 @@ uint16_t miniwin_cursor_x(void);
 uint16_t miniwin_cursor_y(void);
 bool     miniwin_cursor_pressed(void);  // trackball click active
 bool     miniwin_cursor_visible(void);  // false when real touch is active
+
+#ifdef __cplusplus
+}
+#endif

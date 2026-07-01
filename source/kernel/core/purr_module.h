@@ -74,7 +74,13 @@ typedef struct {
 // purrstrap reads device.pcat and generates purr_register_static_modules() in
 // the device glue file, which explicitly calls purr_kernel_register_module_static()
 // for each module the device needs. No linker tricks required.
+#ifdef __cplusplus
+extern "C" {
+#endif
 void purr_kernel_register_module_static(const purr_module_header_t *hdr);
+#ifdef __cplusplus
+}
+#endif
 
 #define PURR_MODULE_REGISTER(id) \
     purr_module_header_t purr_module_##id

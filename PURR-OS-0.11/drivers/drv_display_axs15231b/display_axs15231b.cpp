@@ -1,0 +1,241 @@
+// display_axs15231b.cpp — AXS15231B QSPI display + integrated touch (JC3248W535)
+// Vendor init sequence and pin assignments verified from community driver (issue #2).
+
+#include "display_axs15231b.h"
+#include "display_font5x7.h"
+#include "purr_sys_drv.h"
+
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "driver/i2c_master.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_axs15231b.h"
+#include "esp_lcd_touch.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <string.h>
+
+static const char* TAG = "axs15231b";
+
+#define LCD_HOST     SPI2_HOST
+#define PIN_PCLK     47
+#define PIN_D0       21
+#define PIN_D1       48
+#define PIN_D2       40
+#define PIN_D3       39
+#define PIN_CS       45
+#define PIN_RST      (-1)
+#define PIN_BL       AXS15231B_BL_PIN
+
+#define PIN_TOUCH_SDA  4
+#define PIN_TOUCH_SCL  8
+
+// Row buffer in internal SRAM — DMA-accessible, avoids PSRAM DMA restrictions.
+// 320 px * 2 bytes = 640 bytes per row.
+static uint16_t s_row[AXS15231B_WIDTH];
+
+static esp_lcd_panel_handle_t    s_panel  = NULL;
+static esp_lcd_panel_io_handle_t s_io     = NULL;
+static esp_lcd_touch_handle_t    s_touch  = NULL;
+static bool s_ready = false;
+
+// Vendor init sequence (AXS15231B / Guition JC3248W535).
+// Sourced and verified by community contributor (issue #2, bbnmn4800).
+static const axs15231b_lcd_init_cmd_t s_init_cmds[] = {
+    {0xBB, (uint8_t[]){0x00,0x00,0x00,0x00,0x00,0x00,0x5A,0xA5}, 8, 0},
+    {0xA0, (uint8_t[]){0xC0,0x10,0x00,0x02,0x00,0x00,0x04,0x3F,0x20,0x05,0x3F,0x3F,0x00,0x00,0x00,0x00,0x00}, 17, 0},
+    {0xA2, (uint8_t[]){0x30,0x3C,0x24,0x14,0xD0,0x20,0xFF,0xE0,0x40,0x19,0x80,0x80,0x80,0x20,0xF9,0x10,0x02,0xFF,0xFF,0xF0,0x90,0x01,0x32,0xA0,0x91,0xE0,0x20,0x7F,0xFF,0x00,0x5A}, 31, 0},
+    {0xD0, (uint8_t[]){0xE0,0x40,0x51,0x24,0x08,0x05,0x10,0x01,0x20,0x15,0x42,0xC2,0x22,0x22,0xAA,0x03,0x10,0x12,0x60,0x14,0x1E,0x51,0x15,0x00,0x8A,0x20,0x00,0x03,0x3A,0x12}, 30, 0},
+    {0xA3, (uint8_t[]){0xA0,0x06,0xAA,0x00,0x08,0x02,0x0A,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x00,0x55,0x55}, 22, 0},
+    {0xC1, (uint8_t[]){0x31,0x04,0x02,0x02,0x71,0x05,0x24,0x55,0x02,0x00,0x41,0x00,0x53,0xFF,0xFF,0xFF,0x4F,0x52,0x00,0x4F,0x52,0x00,0x45,0x3B,0x0B,0x02,0x0D,0x00,0xFF,0x40}, 30, 0},
+    {0xC3, (uint8_t[]){0x00,0x00,0x00,0x50,0x03,0x00,0x00,0x00,0x01,0x80,0x01}, 11, 0},
+    {0xC4, (uint8_t[]){0x00,0x24,0x33,0x80,0x00,0xEA,0x64,0x32,0xC8,0x64,0xC8,0x32,0x90,0x90,0x11,0x06,0xDC,0xFA,0x00,0x00,0x80,0xFE,0x10,0x10,0x00,0x0A,0x0A,0x44,0x50}, 29, 0},
+    {0xC5, (uint8_t[]){0x18,0x00,0x00,0x03,0xFE,0x3A,0x4A,0x20,0x30,0x10,0x88,0xDE,0x0D,0x08,0x0F,0x0F,0x01,0x3A,0x4A,0x20,0x10,0x10,0x00}, 23, 0},
+    {0xC6, (uint8_t[]){0x05,0x0A,0x05,0x0A,0x00,0xE0,0x2E,0x0B,0x12,0x22,0x12,0x22,0x01,0x03,0x00,0x3F,0x6A,0x18,0xC8,0x22}, 20, 0},
+    {0xC7, (uint8_t[]){0x50,0x32,0x28,0x00,0xA2,0x80,0x8F,0x00,0x80,0xFF,0x07,0x11,0x9C,0x67,0xFF,0x24,0x0C,0x0D,0x0E,0x0F}, 20, 0},
+    {0xC9, (uint8_t[]){0x33,0x44,0x44,0x01}, 4, 0},
+    {0xCF, (uint8_t[]){0x2C,0x1E,0x88,0x58,0x13,0x18,0x56,0x18,0x1E,0x68,0x88,0x00,0x65,0x09,0x22,0xC4,0x0C,0x77,0x22,0x44,0xAA,0x55,0x08,0x08,0x12,0xA0,0x08}, 27, 0},
+    {0xD5, (uint8_t[]){0x40,0x8E,0x8D,0x01,0x35,0x04,0x92,0x74,0x04,0x92,0x74,0x04,0x08,0x6A,0x04,0x46,0x03,0x03,0x03,0x03,0x82,0x01,0x03,0x00,0xE0,0x51,0xA1,0x00,0x00,0x00}, 30, 0},
+    {0xD6, (uint8_t[]){0x10,0x32,0x54,0x76,0x98,0xBA,0xDC,0xFE,0x93,0x00,0x01,0x83,0x07,0x07,0x00,0x07,0x07,0x00,0x03,0x03,0x03,0x03,0x03,0x03,0x00,0x84,0x00,0x20,0x01,0x00}, 30, 0},
+    {0xD7, (uint8_t[]){0x03,0x01,0x0B,0x09,0x0F,0x0D,0x1E,0x1F,0x18,0x1D,0x1F,0x19,0x40,0x8E,0x04,0x00,0x20,0xA0,0x1F}, 19, 0},
+    {0xD8, (uint8_t[]){0x02,0x00,0x0A,0x08,0x0E,0x0C,0x1E,0x1F,0x18,0x1D,0x1F,0x19}, 12, 0},
+    {0xD9, (uint8_t[]){0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F}, 12, 0},
+    {0xDD, (uint8_t[]){0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F}, 12, 0},
+    {0xDF, (uint8_t[]){0x44,0x73,0x4B,0x69,0x00,0x0A,0x02,0x90}, 8, 0},
+    {0xE0, (uint8_t[]){0x3B,0x28,0x10,0x16,0x0C,0x06,0x11,0x28,0x5C,0x21,0x0D,0x35,0x13,0x2C,0x33,0x28,0x0D}, 17, 0},
+    {0xE1, (uint8_t[]){0x37,0x28,0x10,0x16,0x0B,0x06,0x11,0x28,0x5C,0x21,0x0D,0x35,0x14,0x2C,0x33,0x28,0x0F}, 17, 0},
+    {0xE2, (uint8_t[]){0x3B,0x07,0x12,0x18,0x0E,0x0D,0x17,0x35,0x44,0x32,0x0C,0x14,0x14,0x36,0x3A,0x2F,0x0D}, 17, 0},
+    {0xE3, (uint8_t[]){0x37,0x07,0x12,0x18,0x0E,0x0D,0x17,0x35,0x44,0x32,0x0C,0x14,0x14,0x36,0x32,0x2F,0x0F}, 17, 0},
+    {0xE4, (uint8_t[]){0x3B,0x07,0x12,0x18,0x0E,0x0D,0x17,0x39,0x44,0x2E,0x0C,0x14,0x14,0x36,0x3A,0x2F,0x0D}, 17, 0},
+    {0xE5, (uint8_t[]){0x37,0x07,0x12,0x18,0x0E,0x0D,0x17,0x39,0x44,0x2E,0x0C,0x14,0x14,0x36,0x3A,0x2F,0x0F}, 17, 0},
+    {0xA4, (uint8_t[]){0x85,0x85,0x95,0x82,0xAF,0xAA,0xAA,0x80,0x10,0x30,0x40,0x40,0x20,0xFF,0x60,0x30}, 16, 0},
+    {0xA4, (uint8_t[]){0x85,0x85,0x95,0x85}, 4, 0},
+    {0xBB, (uint8_t[]){0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, 8, 0},
+    {0x13, (uint8_t[]){0x00}, 0, 0},
+    {0x11, (uint8_t[]){0x00}, 0, 120},  // sleep out — 120ms required
+    {0x29, (uint8_t[]){0x00}, 0, 10},   // display on
+};
+
+static void bl_set(bool on) {
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << PIN_BL,
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&cfg);
+    gpio_set_level((gpio_num_t)PIN_BL, on ? 1 : 0);
+}
+
+static void draw_pixel_fn(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+    display_axs15231b_fill_rect(x, y, w, h, color);
+}
+
+void display_axs15231b_init() {
+    if (s_ready) return;
+
+    // Manual struct init — avoids C99 out-of-order designated initializers
+    // which are illegal in C++ (the component header macros use them).
+    spi_bus_config_t bus_cfg = {};
+    bus_cfg.data0_io_num    = PIN_D0;
+    bus_cfg.data1_io_num    = PIN_D1;
+    bus_cfg.sclk_io_num     = PIN_PCLK;
+    bus_cfg.data2_io_num    = PIN_D2;
+    bus_cfg.data3_io_num    = PIN_D3;
+    bus_cfg.max_transfer_sz = AXS15231B_WIDTH * 40 * (int)sizeof(uint16_t);
+    ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
+
+    esp_lcd_panel_io_spi_config_t io_cfg =
+        AXS15231B_PANEL_IO_QSPI_CONFIG(PIN_CS, NULL, NULL);
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(
+        (esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &s_io));
+
+    const axs15231b_vendor_config_t vendor_cfg = {
+        .init_cmds      = s_init_cmds,
+        .init_cmds_size = sizeof(s_init_cmds) / sizeof(s_init_cmds[0]),
+        .flags = { .use_qspi_interface = 1 },
+    };
+    esp_lcd_panel_dev_config_t panel_cfg = {};
+    panel_cfg.reset_gpio_num = PIN_RST;
+    panel_cfg.rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB;
+    panel_cfg.data_endian    = LCD_RGB_DATA_ENDIAN_BIG;
+    panel_cfg.bits_per_pixel = 16;
+    panel_cfg.vendor_config  = (void *)&vendor_cfg;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_axs15231b(s_io, &panel_cfg, &s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
+    // Do NOT call esp_lcd_panel_disp_on_off() — 0x29 is already in the vendor
+    // init sequence. Re-issuing it corrupts the panel state on this chip.
+
+    bl_set(true);
+    s_ready = true;
+    ESP_LOGI(TAG, "OK %dx%d QSPI", AXS15231B_WIDTH, AXS15231B_HEIGHT);
+}
+
+void display_axs15231b_tick()  {}
+void display_axs15231b_deinit() {}
+
+void display_axs15231b_drv_register(bool enabled) {
+    static sys_drv_t drv = {
+        .name      = "axs15231b",
+        .subsystem = "display",
+        .enabled   = false,
+        .init      = NULL,
+        .tick      = NULL,
+        .deinit    = NULL,
+    };
+    drv.enabled = enabled;
+    sys_drv_register(&drv);
+}
+
+void display_axs15231b_set_brightness(uint8_t level) {
+    bl_set(level > 0);
+}
+
+void display_axs15231b_fill_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+    if (!s_ready || w <= 0 || h <= 0) return;
+    // Byte-swap for big-endian panel
+    uint16_t sw = (uint16_t)((color >> 8) | (color << 8));
+    int cols = (w <= AXS15231B_WIDTH) ? w : AXS15231B_WIDTH;
+    for (int i = 0; i < cols; i++) s_row[i] = sw;
+    for (int r = 0; r < h; r++)
+        esp_lcd_panel_draw_bitmap(s_panel, x, y + r, x + cols, y + r + 1, s_row);
+}
+
+void display_axs15231b_push_block(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
+    display_axs15231b_fill_rect(x, y, w, h, color);
+}
+
+void display_axs15231b_push_colors(int16_t x, int16_t y, int16_t w, int16_t h,
+                                    const uint16_t* colors) {
+    if (!s_ready || !colors || w <= 0 || h <= 0) return;
+    int cols = (w <= AXS15231B_WIDTH) ? w : AXS15231B_WIDTH;
+    for (int r = 0; r < h; r++) {
+        const uint16_t* src = colors + r * w;
+        for (int i = 0; i < cols; i++)
+            s_row[i] = (uint16_t)((src[i] >> 8) | (src[i] << 8));
+        esp_lcd_panel_draw_bitmap(s_panel, x, y + r, x + cols, y + r + 1, s_row);
+    }
+}
+
+void display_axs15231b_draw_string(int16_t x, int16_t y, const char* s,
+                                    uint16_t fg, uint16_t bg, uint8_t size) {
+    display_font5x7_draw_string(x, y, s, fg, bg, size, draw_pixel_fn);
+}
+
+// ── Touch ────────────────────────────────────────────────────────────────────
+
+bool display_axs15231b_touch_init() {
+    i2c_master_bus_handle_t bus = NULL;
+    const i2c_master_bus_config_t i2c_cfg = {
+        .i2c_port          = I2C_NUM_0,
+        .sda_io_num        = (gpio_num_t)PIN_TOUCH_SDA,
+        .scl_io_num        = (gpio_num_t)PIN_TOUCH_SCL,
+        .clk_source        = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags             = { .enable_internal_pullup = true },
+    };
+    esp_err_t err = i2c_new_master_bus(&i2c_cfg, &bus);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C bus init failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    esp_lcd_panel_io_handle_t tp_io = NULL;
+    esp_lcd_panel_io_i2c_config_t tp_cfg = ESP_LCD_TOUCH_IO_I2C_AXS15231B_CONFIG();
+    tp_cfg.scl_speed_hz = 400000;
+    err = esp_lcd_new_panel_io_i2c(bus, &tp_cfg, &tp_io);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Touch IO init failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    const esp_lcd_touch_config_t touch_cfg = {
+        .x_max = AXS15231B_WIDTH,
+        .y_max = AXS15231B_HEIGHT,
+        .rst_gpio_num = GPIO_NUM_NC,
+        .int_gpio_num = GPIO_NUM_NC,
+        .levels  = { .reset = 0, .interrupt = 0 },
+        .flags   = { .swap_xy = 0, .mirror_x = 0, .mirror_y = 0 },
+    };
+    err = esp_lcd_touch_new_i2c_axs15231b(tp_io, &touch_cfg, &s_touch);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Touch driver init failed: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Touch OK SDA=%d SCL=%d", PIN_TOUCH_SDA, PIN_TOUCH_SCL);
+    return true;
+}
+
+bool display_axs15231b_touch_read(uint16_t *x, uint16_t *y) {
+    if (!s_touch) return false;
+    esp_lcd_touch_read_data(s_touch);
+    uint16_t tx, ty;
+    uint8_t cnt = 0;
+    esp_lcd_touch_get_coordinates(s_touch, &tx, &ty, NULL, &cnt, 1);
+    if (cnt == 0) return false;
+    *x = tx;
+    *y = ty;
+    return true;
+}

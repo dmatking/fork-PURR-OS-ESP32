@@ -76,7 +76,6 @@ static void apply_theme_nvs(const char *id) {
 }
 
 static void on_theme_wce(purr_wid_t w, purr_event_t e, void *u)  { (void)w;(void)e;(void)u; apply_theme_nvs("wce");  }
-static void on_theme_luna(purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; apply_theme_nvs("luna"); }
 static void on_theme_dark(purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; apply_theme_nvs("dark"); }
 
 // ── Brightness ────────────────────────────────────────────────────────────────
@@ -123,7 +122,6 @@ static int settings_init(void) {
     purr_win_label(s_win, "Theme");
     purr_wid_t tr = purr_win_row(s_win, 4);
     purr_win_button(s_win, "WCE Classic", on_theme_wce,  NULL);
-    purr_win_button(s_win, "Luna",        on_theme_luna, NULL);
     purr_win_button(s_win, "Dark",        on_theme_dark, NULL);
     purr_win_layout_end(tr);
 

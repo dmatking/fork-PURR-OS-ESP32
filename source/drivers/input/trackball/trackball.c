@@ -42,6 +42,19 @@ static const char *TAG = "trackball";
 // Held-direction acceleration: after this many ms at delta ±1, jump to ±3
 #define TRACKBALL_ACCEL_MS  200
 
+// Minimum time a direction must stay (debounced-)pressed before it counts
+// as real input at all — see update_state()'s past_deadzone comment.
+#define TRACKBALL_DEADZONE_MS 40
+
+// Minimum time between emitted movement events. update_state() gets called
+// once per poll_event() call, which can happen many times per tick (the
+// caller drains its queue) — without this throttle, a held direction floods
+// the queue faster than it drains, producing the "darting"/erratic motion.
+// Now driving discrete focus-navigation steps (encoder indev) rather than
+// smooth pointer motion, so this can — and should — be much more
+// deliberate than a cursor would want.
+#define TRACKBALL_MOVE_INTERVAL_MS  120
+
 // Event queue depth
 #define EVENT_QUEUE_DEPTH   16
 
@@ -57,15 +70,39 @@ static const gpio_num_t s_pins[DIR_COUNT] = {
     TRACKBALL_PIN_CLICK,
 };
 
-static bool        s_prev_state[DIR_COUNT]; // true = pressed (pin low)
+static bool        s_prev_state[DIR_COUNT]; // true = pressed (pin low), debounced
 static int64_t     s_hold_start[DIR_COUNT]; // esp_timer_get_time() when press began
+static int64_t     s_last_move_emit;        // esp_timer_get_time() of last movement event
+static bool        s_raw_prev[DIR_COUNT];      // last raw GPIO reading, pre-debounce
+static int64_t     s_raw_change_time[DIR_COUNT]; // when the raw reading last changed
 static QueueHandle_t s_queue;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// This trackball's 4 directions are plain momentary contacts that chatter
+// for a few ms whenever the ball rolls — read raw and undebounced, that
+// chatter looks identical to the user continuously holding a direction,
+// which produced "moves on its own"/"scrolling on its own": each bounce
+// looked like a fresh hold. A first attempt only rejected edges arriving
+// within a fixed window of the *previous accepted* edge — insufficient,
+// since a bounce train longer than that window still slips through one
+// edge at a time. Proper debounce instead requires the raw reading to
+// stay constant for the full window before it's accepted as the real
+// state, regardless of how long the bounce train runs.
+#define TRACKBALL_DEBOUNCE_MS 20
+
 static inline bool pin_pressed(dir_t d)
 {
-    return gpio_get_level(s_pins[d]) == 0;
+    bool raw = gpio_get_level(s_pins[d]) == 0;
+    int64_t now = esp_timer_get_time();
+    if (raw != s_raw_prev[d]) {
+        s_raw_prev[d] = raw;
+        s_raw_change_time[d] = now;
+    }
+    if ((now - s_raw_change_time[d]) >= (int64_t)(TRACKBALL_DEBOUNCE_MS * 1000)) {
+        s_prev_state[d] = raw; // stable for the full window — accept it
+    }
+    return s_prev_state[d];
 }
 
 static void enqueue(const input_event_t *ev)
@@ -105,7 +142,10 @@ static esp_err_t trackball_init(void)
     for (int i = 0; i < DIR_COUNT; i++) {
         s_prev_state[i] = false;
         s_hold_start[i] = 0;
+        s_raw_prev[i] = false;
+        s_raw_change_time[i] = 0;
     }
+    s_last_move_emit = 0;
 
     ESP_LOGI(TAG, "init OK (UP=%d DN=%d LT=%d RT=%d CLK=%d)",
              TRACKBALL_PIN_UP, TRACKBALL_PIN_DOWN,
@@ -125,34 +165,62 @@ static void update_state(void)
     int64_t now = esp_timer_get_time(); // microseconds
 
     // Directions: UP/DOWN/LEFT/RIGHT
+    // Signs flipped from the "obvious" -1/+1 mapping — on this hardware the
+    // physical UP/DOWN/LEFT/RIGHT switches are wired such that the naive
+    // mapping moved the cursor opposite to the rolled direction (confirmed
+    // on-device: felt inverted on both axes).
     static const dir_t dirs[4]    = { DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT };
-    static const int8_t dx[4]     = {  0,  0, -1,  1 };
-    static const int8_t dy[4]     = { -1,  1,  0,  0 };
+    static const int8_t dx[4]     = {  0,  0,  1, -1 };
+    static const int8_t dy[4]     = {  1, -1,  0,  0 };
+
+    // Accumulate both axes across all held directions into one combined step
+    // (so e.g. UP+RIGHT held together moves diagonally in a single event,
+    // instead of two separate single-axis events landing out of order).
+    int16_t combined_dx = 0;
+    int16_t combined_dy = 0;
+    bool any_held = false;
 
     for (int i = 0; i < 4; i++) {
         dir_t d = dirs[i];
+        bool was_pressed = s_prev_state[d]; // capture before pin_pressed() mutates it
         bool pressed = pin_pressed(d);
 
-        if (pressed && !s_prev_state[d]) {
+        if (pressed && !was_pressed) {
             // Fresh press — record start time
             s_hold_start[d] = now;
         }
 
-        if (pressed) {
-            // Emit pointer event every call while held
+        // Deadzone: require the press to have been stably held for an
+        // additional window beyond debounce before it counts as real input
+        // at all. Debounce alone (TRACKBALL_DEBOUNCE_MS) filters contact
+        // chatter on a single edge, but a brief genuine-looking blip that
+        // happens to last just past that window would still fire one
+        // spurious step — this adds a no-op gap so only a deliberate hold
+        // produces movement.
+        bool past_deadzone = pressed &&
+            (now - s_hold_start[d]) > (int64_t)(TRACKBALL_DEADZONE_MS * 1000);
+
+        if (past_deadzone) {
             bool accel = (now - s_hold_start[d]) > (int64_t)(TRACKBALL_ACCEL_MS * 1000);
             int16_t step = accel ? 3 : 1;
-            input_event_t ev = {
-                .type    = INPUT_EVENT_POINTER,
-                .keycode = 0,
-                .delta_x = dx[i] * step,
-                .delta_y = dy[i] * step,
-                .modifiers = 0,
-            };
-            enqueue(&ev);
+            combined_dx += dx[i] * step;
+            combined_dy += dy[i] * step;
+            any_held = true;
         }
+    }
 
-        s_prev_state[d] = pressed;
+    // Throttle movement events to a fixed rate regardless of how often this
+    // function gets called — see TRACKBALL_MOVE_INTERVAL_MS.
+    if (any_held && (now - s_last_move_emit) >= (int64_t)(TRACKBALL_MOVE_INTERVAL_MS * 1000)) {
+        s_last_move_emit = now;
+        input_event_t ev = {
+            .type      = INPUT_EVENT_POINTER,
+            .keycode   = 0,
+            .delta_x   = combined_dx,
+            .delta_y   = combined_dy,
+            .modifiers = 0,
+        };
+        enqueue(&ev);
     }
 
     // Click

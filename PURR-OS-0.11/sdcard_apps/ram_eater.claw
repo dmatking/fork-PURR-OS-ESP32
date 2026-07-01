@@ -1,0 +1,112 @@
+-- ram_eater.claw — RAM stress tester
+-- Fills heap in 4 KB chunks to trigger the KITT RAM panic watchdog.
+-- Blue screen (SYSTEM UNSTABLE) at <= 30 KB free.
+-- Red screen (SYSTEM CRASHED) + reboot at <= 8 KB free.
+-- Place on SD card at: /sdcard/apps/ram_eater.claw
+
+local W = win.width()
+local H = win.height()
+
+-- Button layout (x, y, w, h, label)
+local BTNS = {
+    { x=4,   y=H-68, w=80, h=24, label="FREE ALL" },
+    { x=90,  y=H-68, w=80, h=24, label="REBOOT"   },
+    { x=4,   y=H-36, w=80, h=24, label="START"    },  -- index 3: toggles
+    { x=90,  y=H-36, w=80, h=24, label="EAT 4K"   },
+    { x=176, y=H-36, w=80, h=24, label="EAT 32K"  },
+}
+local BTN_FREE_ALL = 1
+local BTN_REBOOT   = 2
+local BTN_TOGGLE   = 3
+local BTN_EAT4     = 4
+local BTN_EAT32    = 5
+
+local function hit(btn, tx, ty)
+    return tx >= btn.x and tx < btn.x + btn.w
+       and ty >= btn.y and ty < btn.y + btn.h
+end
+
+local chunks = {}   -- held strings keep RAM consumed
+local eating = false
+local CHUNK  = 4096
+
+local function free_kb()
+    return math.floor(kitt.free_ram() / 1024)
+end
+
+local function draw(status)
+    win.clear()
+    win.rect(0, 0, W, H, 0x202020)
+
+    -- Title bar
+    win.rect(0, 0, W, 18, 0x800000)
+    win.label("RAM EATER  [admin]", 4, 3, 0xFFFFFF)
+
+    -- Free RAM readout
+    local fkb   = free_kb()
+    local color = 0x00FF00
+    if fkb <= 30 then color = 0xFFFF00 end
+    if fkb <= 8  then color = 0xFF4444 end
+    win.label(string.format("Free RAM: %d KB", fkb), 4, 26, color)
+
+    -- Gauge bar (width scales: 280 KB = full bar)
+    local bar_w = math.max(1, math.min(W - 8, math.floor(fkb * (W - 8) / 280)))
+    win.rect(4, 40, W - 8, 10, 0x333333)
+    win.rect(4, 40, bar_w, 10, color)
+
+    -- Stats
+    win.label(string.format("Held: %d chunks  (%d KB eaten)",
+              #chunks, #chunks * CHUNK / 1024), 4, 56, 0xAAAAAA)
+
+    -- Status
+    win.label(status or "", 4, 72, 0xFFAA00)
+
+    -- Buttons
+    BTNS[BTN_TOGGLE].label = eating and "STOP" or "START"
+    for _, b in ipairs(BTNS) do
+        win.button(b.label, b.x, b.y, b.w, b.h)
+    end
+end
+
+local function eat(bytes)
+    table.insert(chunks, string.rep("\xAA", bytes))
+end
+
+local status = "Tap EAT to allocate RAM.  STOP/START to auto-eat."
+draw(status)
+
+while true do
+    local t = win.wait_touch(500)
+
+    if t then
+        for i, b in ipairs(BTNS) do
+            if hit(b, t.x, t.y) then
+                if i == BTN_TOGGLE then
+                    eating = not eating
+                    status = eating and "Auto-eating 4 KB/tick..." or "Stopped."
+                elseif i == BTN_EAT4 then
+                    eat(4096)
+                    status = string.format("Ate 4 KB  (held: %d KB)", #chunks * CHUNK / 1024)
+                elseif i == BTN_EAT32 then
+                    for _ = 1, 8 do eat(4096) end
+                    status = string.format("Ate 32 KB  (held: %d KB)", #chunks * CHUNK / 1024)
+                elseif i == BTN_FREE_ALL then
+                    chunks = {}
+                    collectgarbage("collect")
+                    eating = false
+                    status = "Freed all chunks."
+                elseif i == BTN_REBOOT then
+                    kitt.reboot()
+                end
+                break
+            end
+        end
+    end
+
+    if eating then
+        eat(CHUNK)
+        status = string.format("Auto-eating... %d KB free", free_kb())
+    end
+
+    draw(status)
+end

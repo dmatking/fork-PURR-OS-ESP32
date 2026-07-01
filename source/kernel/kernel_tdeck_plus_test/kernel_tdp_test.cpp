@@ -299,7 +299,7 @@ extern "C" void app_main(void)
     delay(50);
 
     // Display
-    st7789_configure(12, 11, 41, 40, -1, 42);
+    st7789_configure(12, 11, 41, 38, 40, -1, 42);
     if (st7789_drv_init() != 0) {
         Serial.println("[ERROR] ST7789 init failed");
         while(1) delay(1000);

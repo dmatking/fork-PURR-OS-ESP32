@@ -8,7 +8,7 @@
 #include "nvs.h"
 
 #define NVS_NAMESPACE  "miniwin"
-#define NVS_KEY        "settings"
+#define NVS_KEY        "settings_v2"
 
 void mw_hal_non_vol_init(void)
 {

@@ -1,0 +1,296 @@
+-- PURR OS Terminal
+-- Full kernel access with Lua execution, shell commands, and file browsing
+
+local MAX_LINES = 256
+local LINE_HEIGHT = 12
+local INPUT_Y = 160
+local SCROLL_PAGE = 5
+
+local history = {}
+local history_idx = 0
+local output = {}
+local input = ""
+local scroll = 0
+local cursor_pos = 0
+
+-- Color constants
+local COLOR_BG = 0x000000
+local COLOR_FG = 0xFFFFFF
+local COLOR_PROMPT = 0x00FF00
+local COLOR_ERROR = 0xFF0000
+local COLOR_SUCCESS = 0x00FF00
+local COLOR_INFO = 0x00FFFF
+
+-- Persistent shell state (variables, functions)
+local shell_env = {
+    cwd = "/sdcard",
+    last_result = nil
+}
+
+function add_output(text, color)
+    color = color or COLOR_FG
+    table.insert(output, {text = text, color = color})
+    if #output > MAX_LINES then
+        table.remove(output, 1)
+    else
+        scroll = math.max(0, #output - ((INPUT_Y - 30) / LINE_HEIGHT))
+    end
+end
+
+function add_prompt()
+    add_output(shell_env.cwd .. "> ", COLOR_PROMPT)
+end
+
+function execute_command(cmd)
+    cmd = cmd:match("^%s*(.-)%s*$")
+    if cmd == "" then return end
+
+    -- Add to history
+    table.insert(history, cmd)
+    history_idx = #history + 1
+
+    -- Parse command
+    local parts = {}
+    for part in cmd:gmatch("%S+") do
+        table.insert(parts, part)
+    end
+
+    if #parts == 0 then add_prompt() return end
+
+    local cmd_name = parts[1]
+
+    -- Built-in commands
+    if cmd_name == "help" then
+        add_output("PURR Terminal Commands:", COLOR_INFO)
+        add_output("  help              - show this help", COLOR_FG)
+        add_output("  ls [dir]          - list directory", COLOR_FG)
+        add_output("  pwd               - print working directory", COLOR_FG)
+        add_output("  cd <dir>          - change directory", COLOR_FG)
+        add_output("  cat <file>        - read file", COLOR_FG)
+        add_output("  rm <file>         - delete file", COLOR_FG)
+        add_output("  clear             - clear screen", COLOR_FG)
+        add_output("  status            - system status", COLOR_FG)
+        add_output("  lora status       - LoRa radio status", COLOR_FG)
+        add_output("  lora send <text>  - send LoRa packet", COLOR_FG)
+        add_output("  lora freq <hz>    - set frequency", COLOR_FG)
+        add_output("  lora power <dbm>  - set transmit power", COLOR_FG)
+        add_output("  lora sf <factor>  - set spreading factor (7-12)", COLOR_FG)
+        add_output("  run <script.claw> - execute .claw script", COLOR_FG)
+        add_output("  lua <code>        - execute Lua code", COLOR_FG)
+        add_output("  kit.<cmd>         - KITT API (wifi_connected, sd_available, free_ram, reboot)", COLOR_FG)
+
+    elseif cmd_name == "clear" then
+        output = {}
+        scroll = 0
+        add_prompt()
+
+    elseif cmd_name == "pwd" then
+        add_output(shell_env.cwd, COLOR_FG)
+        add_prompt()
+
+    elseif cmd_name == "cd" then
+        if parts[2] then
+            shell_env.cwd = parts[2]
+            add_output("cwd: " .. shell_env.cwd, COLOR_SUCCESS)
+        else
+            add_output("usage: cd <directory>", COLOR_ERROR)
+        end
+        add_prompt()
+
+    elseif cmd_name == "ls" then
+        local dir = parts[2] or shell_env.cwd
+        add_output("Contents of " .. dir .. ":", COLOR_INFO)
+        local files = sd.list(dir)
+        if files then
+            for _, f in ipairs(files) do
+                local type_str = f.is_dir and "[DIR]" or "[FILE]"
+                add_output(string.format("  %-30s %s %d bytes", f.name, type_str, f.size), COLOR_FG)
+            end
+        else
+            add_output("  (directory not found)", COLOR_ERROR)
+        end
+        add_prompt()
+
+    elseif cmd_name == "cat" then
+        if parts[2] then
+            local path = parts[2]
+            local content, err = sd.read(path)
+            if content then
+                for line in content:gmatch("[^\n]+") do
+                    add_output(line, COLOR_FG)
+                end
+            else
+                add_output("Error: " .. (err or "unknown"), COLOR_ERROR)
+            end
+        else
+            add_output("usage: cat <file>", COLOR_ERROR)
+        end
+        add_prompt()
+
+    elseif cmd_name == "status" then
+        add_output("System Status:", COLOR_INFO)
+        add_output("  Free RAM: " .. kitt.free_ram() .. " bytes", COLOR_FG)
+        add_output("  SD Available: " .. (kitt.sd_available() and "yes" or "no"), COLOR_FG)
+        add_output("  WiFi Connected: " .. (kitt.wifi_connected() and "yes" or "no"), COLOR_FG)
+        add_output("  Uptime: " .. math.floor(kitt.time_ms() / 1000) .. "s", COLOR_FG)
+        add_prompt()
+
+    elseif cmd_name == "lora" then
+        if not parts[2] then
+            add_output("Usage: lora <status|send|freq|power|sf> [args]", COLOR_ERROR)
+        elseif parts[2] == "status" then
+            if lora.enabled() then
+                add_output("LoRa Status:", COLOR_INFO)
+                add_output("  Frequency: " .. lora.get_frequency() .. " Hz", COLOR_FG)
+                add_output("  Power: " .. lora.get_power() .. " dBm", COLOR_FG)
+                add_output("  RSSI: " .. lora.rssi() .. " dBm", COLOR_FG)
+                add_output("  SNR: " .. lora.snr() .. " dB", COLOR_FG)
+            else
+                add_output("LoRa not enabled", COLOR_ERROR)
+            end
+        elseif parts[2] == "send" then
+            if parts[3] then
+                local msg = cmd:sub(#cmd_name + 7 + string.len(parts[2]) + 1)
+                if lora.send(msg) then
+                    add_output("Sent: " .. msg, COLOR_SUCCESS)
+                else
+                    add_output("Send failed", COLOR_ERROR)
+                end
+            else
+                add_output("Usage: lora send <message>", COLOR_ERROR)
+            end
+        elseif parts[2] == "freq" then
+            if parts[3] then
+                local freq = tonumber(parts[3])
+                if freq then
+                    lora.set_frequency(freq)
+                    add_output("Frequency set to " .. freq .. " Hz", COLOR_SUCCESS)
+                else
+                    add_output("Invalid frequency", COLOR_ERROR)
+                end
+            else
+                add_output("Usage: lora freq <hz>", COLOR_ERROR)
+            end
+        elseif parts[2] == "power" then
+            if parts[3] then
+                local pow = tonumber(parts[3])
+                if pow then
+                    lora.set_power(pow)
+                    add_output("Power set to " .. pow .. " dBm", COLOR_SUCCESS)
+                else
+                    add_output("Invalid power", COLOR_ERROR)
+                end
+            else
+                add_output("Usage: lora power <dbm>", COLOR_ERROR)
+            end
+        elseif parts[2] == "sf" then
+            if parts[3] then
+                local sf = tonumber(parts[3])
+                if sf and sf >= 7 and sf <= 12 then
+                    lora.set_spreading_factor(sf)
+                    add_output("Spreading factor set to " .. sf, COLOR_SUCCESS)
+                else
+                    add_output("Invalid SF (7-12)", COLOR_ERROR)
+                end
+            else
+                add_output("Usage: lora sf <7-12>", COLOR_ERROR)
+            end
+        else
+            add_output("Unknown lora command", COLOR_ERROR)
+        end
+        add_prompt()
+
+    elseif cmd_name == "lua" then
+        -- Execute Lua code
+        if #parts > 1 then
+            local code = cmd:sub(#cmd_name + 2)
+            local ok, result = pcall(function()
+                return load(code, "terminal")()
+            end)
+            if ok then
+                if result then
+                    add_output("=> " .. tostring(result), COLOR_SUCCESS)
+                    shell_env.last_result = result
+                end
+            else
+                add_output("Error: " .. result, COLOR_ERROR)
+            end
+        else
+            add_output("usage: lua <code>", COLOR_ERROR)
+        end
+        add_prompt()
+
+    elseif cmd_name:sub(1, 4) == "kitt" then
+        -- KITT API calls: kitt.wifi_connected, kitt.sd_available, kitt.free_ram, kitt.reboot, etc.
+        local api_call = cmd_name:sub(6)
+        local ok, result = pcall(function()
+            if api_call == "wifi_connected" then
+                return kitt.wifi_connected()
+            elseif api_call == "sd_available" then
+                return kitt.sd_available()
+            elseif api_call == "free_ram" then
+                return kitt.free_ram()
+            elseif api_call == "time_ms" then
+                return kitt.time_ms()
+            elseif api_call == "reboot" then
+                add_output("Rebooting...", COLOR_INFO)
+                kitt.reboot()
+            else
+                error("Unknown API: " .. api_call)
+            end
+        end)
+        if ok and result ~= nil then
+            add_output("=> " .. tostring(result), COLOR_SUCCESS)
+        elseif not ok then
+            add_output("Error: " .. result, COLOR_ERROR)
+        end
+        add_prompt()
+
+    else
+        add_output("Unknown command: " .. cmd_name, COLOR_ERROR)
+        add_prompt()
+    end
+end
+
+function draw_screen()
+    win.clear()
+
+    -- Draw output area
+    local visible_lines = math.floor((INPUT_Y - 30) / LINE_HEIGHT)
+    local start_idx = math.max(1, #output - visible_lines - scroll + 1)
+
+    for i = start_idx, math.min(#output, start_idx + visible_lines - 1) do
+        local line = output[i]
+        local y = 30 + (i - start_idx) * LINE_HEIGHT
+        win.label(line.text, 5, y, line.color)
+    end
+
+    -- Draw input line
+    win.label(">>> " .. input, 5, INPUT_Y, COLOR_PROMPT)
+    win.rect(4, INPUT_Y + 10, 232, 2, 0x333333)
+
+    -- Draw status bar
+    local status = "Lines: " .. #output .. " | Cmd: " .. (history_idx - 1)
+    win.label(status, 5, 175, COLOR_INFO)
+end
+
+function main()
+    add_output("PURR OS Terminal v0.1", COLOR_INFO)
+    add_output("Type 'help' for commands", COLOR_INFO)
+    add_prompt()
+
+    -- Enable background mode so terminal persists
+    kitt.set_background(true)
+
+    while true do
+        draw_screen()
+
+        local touch = win.wait_touch(100)
+        if touch then
+            -- Simple touch-to-input (would need better UI for real typing)
+            -- For now, just wait for commands from serial/Lua
+        end
+    end
+end
+
+main()

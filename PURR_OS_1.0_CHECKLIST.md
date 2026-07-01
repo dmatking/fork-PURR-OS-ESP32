@@ -11,7 +11,7 @@
 
 All catcalls must be confirmed working on every supported device before 1.0.
 
-### T-Deck Plus (`tdeck_plus_arduino` kernel)
+### T-Deck Plus (`tdeck_plus` kernel — IDF path, canonical as of the consolidation pass below)
 - [ ] Display — ST7789 320×240, correct colors, no inversion
 - [ ] Touch — GT911 responds and stays awake (power-save keepalive confirmed)
 - [ ] Trackball — all 4 directions + click register correctly
@@ -19,8 +19,26 @@ All catcalls must be confirmed working on every supported device before 1.0.
 - [ ] LoRa SX1276 — send/receive/RSSI confirmed
 - [ ] GPS — NMEA fix acquired and surfaced through `catcall_gps_t`
 - [ ] SD card — mount, read, write confirmed
-- [ ] MiniWin — responds to touch correctly (currently broken — root cause needed)
-- [ ] KittenUI — LVGL touch dispatch confirmed
+- [ ] Cardstack — responds to touch/trackball/keyboard correctly, hosts app windows cleanly
+
+### T-Deck Plus IDF-kernel migration gate (must pass before `kernel_tdeck_plus_arduino` is archived)
+
+`kernel_tdeck_plus` (IDF i2c_master path) received a GT911 fix in commit `322159c6`
+that makes it functionally equivalent to `kernel_tdeck_plus_arduino` (the Wire-based
+workaround kernel, now deprecated — see `docs/13_Kernels.md`). Before deleting the
+Arduino kernel, confirm on real hardware:
+
+- [ ] Flash `tdeck_plus` (IDF kernel) to a physical unit via `purrstrap flash tdeck_plus -p <port> --erase`
+- [ ] No `ESP_ERR_INVALID_STATE` (the original IDF 5.3 regression symptom) appears in the serial log during GT911 init
+- [ ] Tap all 4 screen corners + center — coordinates are correct and non-mirrored (validates the byte-offset/signed-coordinate fix)
+- [ ] Power-cycle 10+ times consecutively — GT911 I2C address (0x5D) latches reliably every time, not just on a fresh boot
+- [ ] Trackball, BBQ20 keyboard, SD, LoRa (SX1276), and GPS all match current `tdeck_plus_arduino` behavior
+- [ ] Extended soak test (hours, not minutes) — no I2C bus lockups or touch-driver hangs under sustained use
+- [ ] WiFi STA and battery-status reporting confirmed working on the IDF kernel, or explicitly scoped out if not yet ported (the IDF kernel does not currently bring these up the way the Arduino kernel does — see `docs/13_Kernels.md`)
+- [ ] Independent sign-off — someone other than the original author flashes and confirms separately
+
+Once every item above is checked, proceed with archiving `kernel_tdeck_plus_arduino`
+to `archive/` per the consolidation plan.
 
 ### T-Deck (`tdeck` kernel)
 - [ ] Display, touch, trackball, keyboard
@@ -106,6 +124,7 @@ All catcalls must be confirmed working on every supported device before 1.0.
 - [ ] All driver `CMakeLists.txt` list correct REQUIRES (no missing IDF components)
 - [ ] All `.purr` driver blobs produce a valid `catcall_*_t` and call `purr_kernel_register_*()`
 - [ ] `user_drivers/` auto-scan path works end-to-end (drop a driver in, bake, it loads)
+- [ ] Every specialized kernel consumes drivers by calling `<name>_drv_init()`/`<name>_configure()` from `source/drivers/` — no specialized kernel reimplements register-level driver logic from scratch (see `docs/01_Architecture.md` — Specialized Kernels rule). `kernel_tdeck_plus_arduino` is the sole grandfathered exception pending §1's migration gate.
 
 ---
 
@@ -114,7 +133,7 @@ All catcalls must be confirmed working on every supported device before 1.0.
 - [ ] `driver_manager` — scans SPIFFS and SD, loads `.purr` blobs in correct order
 - [ ] `app_manager` — scans SPIFFS and SD, launches `.meow`/`.paws`/`.claw` apps
 - [ ] `kittenui` — LVGL 8 backend: window create, label, button, text box, show, destroy
-- [ ] `miniwin` — MiniWin backend: same surface, touch dispatch working (currently broken)
+- [ ] `miniwin` — MiniWin backend: same surface, touch dispatch (fixed in `hal_touch.c` — pending on-device confirmation on `jc3248w535`, see §11)
 - [ ] `oled_ui` — text-mode UI for 128×64 OLED (Heltec)
 - [ ] Static module registration (`purr_register_static_modules`) works without SD present
 - [ ] `.purr` ABI version check — mismatched ABI version is rejected cleanly with log message
@@ -183,9 +202,8 @@ All catcalls must be confirmed working on every supported device before 1.0.
 - [ ] `04_Devices.md` — all devices present including T-Deck Plus; pin tables complete
 - [ ] `05_Drivers.md` — all drivers documented; GT911/IDF 5.3 known issue noted
 - [ ] `06_Apps.md` — system apps + exclusives current
-- [ ] `07_Build_Tools.md` — purrstrap/modulestrap/catstrap current (check for duplicate `09_BuildTools.md` — likely stale, remove or merge)
+- [ ] `07_Build_Tools.md` — purrstrap/modulestrap/catstrap current (`09_BuildTools.md` duplicate already deleted in v0.13.0 — nothing further to do here)
 - [ ] `08_Exclusives.md` — MagicMac/MagiDOS status is accurate
-- [ ] `09_BuildTools.md` — **resolve duplication with `07_Build_Tools.md`** (merge or delete)
 - [ ] `10_ModuleLoading.md` — module loading pipeline current
 - [ ] `11_KittenUI.md` — LVGL 8 API current; XP desktop shell status
 - [ ] `12_AppAPI.md` — `purr_win.h` API reference complete and accurate
@@ -228,13 +246,12 @@ All catcalls must be confirmed working on every supported device before 1.0.
 
 | Issue | Status | Target |
 |-------|--------|--------|
-| MiniWin does not respond to touch | Open | v0.13.0 |
+| MiniWin does not respond to touch | Fixed in code (stale `>>6` digitiser-scale hack in `hal_touch.c` removed — was crushing already-pixel-space coordinates toward zero) — **needs on-device confirmation on `jc3248w535`** | v0.13.1 |
 | Serial console timeout on non-Arduino kernels | Open | v0.13.0 |
 | GT911 over IDF i2c_master (ESP_ERR_INVALID_STATE) | Workaround: Arduino kernel | Document in v0.13.0, fix or remove IDF path in 1.0 |
 | BBQ20 keyboard in test kernel | Fix flashed — needs confirm | v0.13.0 |
 | KittenUI XP desktop shell — touch dispatch | Partial | v0.13.0 |
 | MagicMac / MagiDOS rewrite | In progress | v0.14.0 or post-1.0 |
-| `09_BuildTools.md` duplicate of `07_Build_Tools.md` | Open | v0.13.0 cleanup |
 
 ---
 

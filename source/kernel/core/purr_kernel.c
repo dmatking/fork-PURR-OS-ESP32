@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <string.h>
 #include <stdlib.h>
 #include <dirent.h>
@@ -73,6 +74,33 @@ const catcall_radio_t   *purr_kernel_radio(void)   { return s_radio; }
 const catcall_gps_t     *purr_kernel_gps(void)     { return s_gps; }
 const catcall_ui_t      *purr_kernel_ui(void)      { return s_ui; }
 
+// ── UI thread safety ──────────────────────────────────────────────────────────
+//
+// LVGL (and any other catcall_ui_t backend) is not safe to call from two
+// tasks at once. The UI backend's own task holds this for each render/
+// message-pump call; purr_win.h's dispatch macros hold it around every call
+// into the backend, so an app's background task (e.g. a periodic status
+// updater) can't race the render loop. Created lazily on first use — the
+// first call always happens single-threaded during a module's synchronous
+// init() on the boot task, before any UI task is spun up, so there's no
+// init race in practice.
+//
+// Recursive because a widget event callback (e.g. a button handler) runs
+// synchronously from inside the backend's own pump call, on the same task
+// that's already holding the lock — if that callback calls back into
+// purr_win_* (settings.c's on_theme_wce does exactly this via
+// purr_win_label_set()), a non-recursive mutex would deadlock against itself.
+static SemaphoreHandle_t s_ui_mutex = NULL;
+
+void purr_kernel_ui_lock(void) {
+    if (!s_ui_mutex) s_ui_mutex = xSemaphoreCreateRecursiveMutex();
+    if (s_ui_mutex) xSemaphoreTakeRecursive(s_ui_mutex, portMAX_DELAY);
+}
+
+void purr_kernel_ui_unlock(void) {
+    if (s_ui_mutex) xSemaphoreGiveRecursive(s_ui_mutex);
+}
+
 // ── Module registry ───────────────────────────────────────────────────────────
 
 #define MAX_MODULES 32
@@ -95,6 +123,19 @@ static int version_cmp(const char *a, const char *b) {
     if (mi != mib) return mi < mib ? -1 : 1;
     if (pa != pb) return pa < pb ? -1 : 1;
     return 0;
+}
+
+// Returns the s_modules[] index already holding this name, or -1. Used to
+// detect the same module present in both /flash and /sdcard (or an SD-card
+// update of a module already loaded from flash) before appending a second
+// copy — see purr_kernel_load_module().
+static int find_module_slot_by_name(const char *name) {
+    for (int i = 0; i < s_module_count; i++) {
+        if (strncmp(s_modules[i].header.name, name, sizeof(s_modules[i].header.name)) == 0) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 // ── Panic ─────────────────────────────────────────────────────────────────────
@@ -244,11 +285,6 @@ int purr_kernel_load_static_modules(void)
 
 int purr_kernel_load_module(const char *path)
 {
-    if (s_module_count >= MAX_MODULES) {
-        ESP_LOGE(TAG, "module table full, cannot load %s", path);
-        return -1;
-    }
-
     purr_module_header_t hdr;
     if (!peek_module_header(path, &hdr)) {
         ESP_LOGE(TAG, "cannot read/validate header: %s", path);
@@ -274,6 +310,30 @@ int purr_kernel_load_module(const char *path)
         compat_mode = true;
     }
 
+    // Same name may already be loaded — e.g. present in both /flash and
+    // /sdcard, or an SD-card update of a module loaded earlier from flash.
+    // Highest version wins; loading the same module twice would double-
+    // register its catcall and run init() twice.
+    module_slot_t *slot;
+    int existing = find_module_slot_by_name(hdr.name);
+    if (existing >= 0) {
+        if (version_cmp(hdr.version, s_modules[existing].header.version) <= 0) {
+            ESP_LOGI(TAG, "module '%s' v%s already loaded (have v%s) — skipping %s",
+                     hdr.name, hdr.version, s_modules[existing].header.version, path);
+            return 0;
+        }
+        ESP_LOGI(TAG, "module '%s': v%s supersedes loaded v%s — reloading from %s",
+                 hdr.name, hdr.version, s_modules[existing].header.version, path);
+        if (s_modules[existing].header.deinit) s_modules[existing].header.deinit();
+        slot = &s_modules[existing];
+    } else {
+        if (s_module_count >= MAX_MODULES) {
+            ESP_LOGE(TAG, "module table full, cannot load %s", path);
+            return -1;
+        }
+        slot = &s_modules[s_module_count++];
+    }
+
     if (hdr.init) {
         int rc = hdr.init();
         if (rc != 0) {
@@ -282,7 +342,6 @@ int purr_kernel_load_module(const char *path)
         }
     }
 
-    module_slot_t *slot = &s_modules[s_module_count++];
     memcpy(&slot->header, &hdr, sizeof(hdr));
     slot->loaded = true;
 
@@ -476,17 +535,70 @@ uint64_t purr_kernel_uptime_ms(void) {
     return (uint64_t)(esp_timer_get_time() / 1000LL);
 }
 
-static bool s_sd_available   = false;
-static bool s_wifi_connected = false;
+static bool s_sd_available    = false;
+static bool s_wifi_connected  = false;
+static int  s_battery_percent = -1;   // -1 = unknown (no PMIC/fuel gauge found)
+static bool s_lora_available  = false;
 
-void purr_kernel_set_sd_available(bool v)   { s_sd_available   = v; }
-void purr_kernel_set_wifi_connected(bool v) { s_wifi_connected = v; }
+void purr_kernel_set_sd_available(bool v)    { s_sd_available    = v; }
+void purr_kernel_set_wifi_connected(bool v)  { s_wifi_connected  = v; }
+void purr_kernel_set_battery_percent(int v)  { s_battery_percent = v; }
+void purr_kernel_set_lora_available(bool v)  { s_lora_available  = v; }
 
-bool purr_kernel_sd_available(void)   { return s_sd_available; }
-bool purr_kernel_wifi_connected(void) { return s_wifi_connected; }
+bool purr_kernel_sd_available(void)    { return s_sd_available; }
+bool purr_kernel_wifi_connected(void)  { return s_wifi_connected; }
+int  purr_kernel_battery_percent(void) { return s_battery_percent; }
+bool purr_kernel_lora_available(void)  { return s_lora_available; }
 
 void purr_kernel_reboot(void) {
     ESP_LOGW(TAG, "kernel reboot requested");
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_restart();
 }
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+// Ring buffer indexed by insertion order; s_notify_head points at the slot
+// the *next* notification will be written to, so the most recent entry is
+// always at (s_notify_head - 1).
+
+static purr_notification_t s_notify_buf[PURR_NOTIFY_MAX];
+static int                  s_notify_head  = 0;
+static int                  s_notify_count = 0;
+
+void purr_kernel_notify(const char *title, const char *body, const char *source)
+{
+    purr_notification_t *n = &s_notify_buf[s_notify_head];
+    memset(n, 0, sizeof(*n));
+    if (title)  strncpy(n->title,  title,  sizeof(n->title)  - 1);
+    if (body)   strncpy(n->body,   body,   sizeof(n->body)   - 1);
+    if (source) strncpy(n->source, source, sizeof(n->source) - 1);
+    n->timestamp_ms = purr_kernel_uptime_ms();
+
+    s_notify_head = (s_notify_head + 1) % PURR_NOTIFY_MAX;
+    if (s_notify_count < PURR_NOTIFY_MAX) s_notify_count++;
+
+    ESP_LOGI(TAG, "notify [%s] %s: %s", source ? source : "?", title ? title : "", body ? body : "");
+}
+
+int purr_kernel_notify_count(void) { return s_notify_count; }
+
+bool purr_kernel_notify_at(int idx, purr_notification_t *out)
+{
+    if (idx < 0 || idx >= s_notify_count || !out) return false;
+    int slot = (s_notify_head - 1 - idx + PURR_NOTIFY_MAX) % PURR_NOTIFY_MAX;
+    *out = s_notify_buf[slot];
+    return true;
+}
+
+void purr_kernel_notify_clear(void)
+{
+    s_notify_head  = 0;
+    s_notify_count = 0;
+}
+
+// ── Boot readiness ───────────────────────────────────────────────────────────
+
+static volatile bool s_boot_ready = false;
+
+bool purr_kernel_boot_ready(void)        { return s_boot_ready; }
+void purr_kernel_set_boot_ready(bool v)  { s_boot_ready = v; }

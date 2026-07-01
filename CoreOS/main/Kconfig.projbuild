@@ -33,23 +33,16 @@ menu "PURR OS"
                 hybrid touch/trackball input, software cursor overlay for
                 legacy apps. Requires LVGL 8. Best on T-Deck Plus.
 
-        config PURR_UI_BACKEND_W10M
-            bool "W10M (LVGL 8, Windows 10 Mobile-style)"
+        config PURR_UI_BACKEND_CARDSTACK
+            bool "Cardstack (LVGL 8, Rabbit R1-style card stack)"
             help
-                Lock screen with a photo background and an accent-colored
-                Live Tile start screen, in the style of Windows 10 Mobile
-                (Lumia). Re-laid-out for landscape rather than the source
-                inspiration's native portrait canvas. Requires LVGL 8.
-                On the backburner — touch calibration and LV_COLOR_16_SWAP
-                were not wired up for the arduino kernel when this was last
-                tested; see Meow420 for the fixed-up version of both.
-
-        config PURR_UI_BACKEND_MEOW420
-            bool "Meow420 (LVGL 8, Android 1.5-style)"
-            help
-                Wallpaper home screen with a few shortcuts and a bottom dock
-                with a pull-tab that opens a full app drawer, modeled on the
-                Android 1.5 (Cupcake) launcher. Requires LVGL 8.
+                Vertical snap-scrolling card stack — one full-screen card per
+                app, home card (clock/wallpaper/notifications) first, an
+                end-of-stack Task Manager card last. Two-stage drag-down
+                status bar (peek, then full notification center) and a
+                left-edge swipe back to Home from inside any app. Requires
+                LVGL 8 and the kernel notification API (PURR_KERNEL_VERSION
+                >= 1.0.0).
 
         config PURR_UI_BACKEND_LVGLDEBUG
             bool "LVGL Debug (touch/HAL diagnostics)"

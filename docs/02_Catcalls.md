@@ -104,11 +104,11 @@ bits 4-0:   blue (5 bits)
 
 ```c
 typedef struct {
-    int      i2c_port;
-    int      pin_sda;
-    int      pin_scl;
-    int      pin_int;    // -1 if unused
-    int      pin_rst;    // -1 if not wired
+    uint8_t  i2c_port;
+    uint8_t  sda_pin;
+    uint8_t  scl_pin;
+    uint8_t  int_pin;    // 0xFF = no interrupt pin
+    uint8_t  rst_pin;    // 0xFF = no reset pin
 } touch_config_t;
 
 typedef struct {
@@ -116,7 +116,7 @@ typedef struct {
     uint8_t     catcall_version;
 
     esp_err_t (*init)(const touch_config_t *cfg);
-    bool      (*read_point)(int16_t *x, int16_t *y);
+    bool      (*read_point)(uint16_t *x, uint16_t *y);
     bool      (*is_pressed)(void);
     esp_err_t (*deinit)(void);
 } catcall_touch_t;

@@ -35,6 +35,8 @@ SOFTWARE.
 #include "hal/hal_lcd.h"
 #include "hal/hal_touch.h"
 #include "hal/hal_delay.h"
+#include "esp_log.h"
+static const char *TAG_CAL = "mw_touch_cal";
 
 /****************
 *** CONSTANTS ***
@@ -145,6 +147,8 @@ mw_hal_touch_state_t mw_touch_get_display_touch(int16_t* x, int16_t* y)
 	*x = (int16_t)display_point.x;
 	*y = (int16_t)display_point.y;
 
+	ESP_LOGI(TAG_CAL, "DBG touch raw=(%u,%u) -> display=(%d,%d)", raw_x, raw_y, *x, *y);
+
 	return (MW_HAL_TOUCH_STATE_DOWN);
 }
 
@@ -209,4 +213,15 @@ void mw_touch_calibrate(MATRIX_CAL *matrix)
 	}
 
 	(void)setCalibrationMatrix(display_points, raw_points, matrix);
+
+	ESP_LOGI(TAG_CAL, "DBG display=(%ld,%ld)(%ld,%ld)(%ld,%ld) raw=(%ld,%ld)(%ld,%ld)(%ld,%ld)",
+		(long)display_points[0].x, (long)display_points[0].y,
+		(long)display_points[1].x, (long)display_points[1].y,
+		(long)display_points[2].x, (long)display_points[2].y,
+		(long)raw_points[0].x, (long)raw_points[0].y,
+		(long)raw_points[1].x, (long)raw_points[1].y,
+		(long)raw_points[2].x, (long)raw_points[2].y);
+	ESP_LOGI(TAG_CAL, "DBG matrix An=%ld Bn=%ld Cn=%ld Dn=%ld En=%ld Fn=%ld Div=%ld",
+		(long)matrix->An, (long)matrix->Bn, (long)matrix->Cn,
+		(long)matrix->Dn, (long)matrix->En, (long)matrix->Fn, (long)matrix->Divider);
 }

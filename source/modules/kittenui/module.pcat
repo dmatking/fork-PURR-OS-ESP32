@@ -10,5 +10,5 @@ catcalls    = "display"
 kernel_min  = "0.9.0"
 
 [build]
-sources     = "kittenui_module.c kittenui_hal.c themes/theme_wce.c themes/theme_luna.c themes/theme_dark.c"
+sources     = "kittenui_module.c kittenui_hal.c themes/theme_wce.c themes/theme_dark.c"
 requires    = "lvgl"

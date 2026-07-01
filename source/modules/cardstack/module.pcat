@@ -1,0 +1,21 @@
+[module]
+name        = "cardstack"
+version     = "0.1.0"
+type        = "ui"
+description = "Cardstack — Rabbit R1-inspired vertical snap-scroll card UI"
+author      = "PURR OS"
+
+[requires]
+catcalls    = "display"
+kernel_min  = "1.0.0"
+
+# PURR package dependencies (resolved by `purrstrap pkg add`), distinct from
+# [build].requires below which lists IDF/C component names for the compiler —
+# this section only names other PURR packages by their device.pcat/source
+# directory slug, with a semver constraint.
+[depends]
+app_manager = ">=0.1.0"
+
+[build]
+sources     = "cardstack_module.c cardstack_hal.c cardstack_ui.c cardstack_win.c"
+requires    = "lvgl app_manager"

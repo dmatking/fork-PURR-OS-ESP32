@@ -46,7 +46,6 @@ KittenUI never touches hardware directly. All display and touch goes through cat
 | ID | Name | Style |
 |---|---|---|
 | `wce` | WCE Classic | Silver/navy, raised 3D buttons, square corners |
-| `luna` | Luna | Parchment/XP blue, flat buttons, rounded corners, shadows |
 | `dark` | Dark | Near-black surfaces, muted text, blue accent |
 
 ### Switching Themes
@@ -54,7 +53,7 @@ KittenUI never touches hardware directly. All display and touch goes through cat
 **At build time** — set in `device.pcat`:
 ```toml
 [ui]
-theme = luna
+theme = dark
 ```
 
 **At runtime** — via NVS (persisted across reboots):
@@ -62,7 +61,7 @@ theme = luna
 // From any app or module:
 nvs_handle_t h;
 nvs_open("kittenui", NVS_READWRITE, &h);
-nvs_set_str(h, "theme", "luna");
+nvs_set_str(h, "theme", "dark");
 nvs_commit(h);
 nvs_close(h);
 // Then call:
@@ -162,6 +161,5 @@ Devices with PSRAM (tdeck_plus, jc3248w535) can use a full framebuffer if needed
 | `kittenui_module.c` | Module init, theme registry, LVGL task |
 | `kittenui_hal.c` | LVGL ↔ catcall_display/touch bridge |
 | `themes/theme_wce.c` | WCE Classic built-in |
-| `themes/theme_luna.c` | Luna XP blue built-in |
 | `themes/theme_dark.c` | Dark built-in |
 | `module.pcat` | Module metadata + build manifest |

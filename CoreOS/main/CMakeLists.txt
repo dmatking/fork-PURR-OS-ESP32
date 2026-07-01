@@ -12,6 +12,15 @@ if(NOT PURR_DEVICE)
 endif()
 set(GLUE_DIR ${CMAKE_SOURCE_DIR}/../cattobaked/${PURR_DEVICE}/glue)
 
+# Guard: the WinCE shell is baked directly into a kernel's boot.c/.cpp (no
+# catcall_ui_t wrapper) and only steps aside correctly when MiniWin is the
+# selected UI backend (see miniwin_module.c's own CONFIG_PURR_UI_WINCE_SHELL
+# check). Enabling WinCE without MiniWin would produce a kernel where no UI
+# system ever starts — fail the build instead of shipping a blank screen.
+if(CONFIG_PURR_UI_WINCE_SHELL AND NOT CONFIG_PURR_UI_BACKEND_MINIWIN)
+    message(FATAL_ERROR "CONFIG_PURR_UI_WINCE_SHELL requires CONFIG_PURR_UI_BACKEND_MINIWIN — check sdkconfig_${PURR_DEVICE}")
+endif()
+
 # Check for a specialized kernel folder — kernel_<device>/
 set(SPEC_KERNEL_DIR ${CMAKE_SOURCE_DIR}/../source/kernel/kernel_${PURR_DEVICE})
 if(EXISTS ${SPEC_KERNEL_DIR})
@@ -27,9 +36,11 @@ else()
     message(STATUS "PURR: using generic kernel for ${PURR_DEVICE}")
 endif()
 
-# Arduino kernels need the arduino component; standard kernels need gt911/bbq20
-string(FIND "${PURR_DEVICE}" "arduino" _IS_ARDUINO_KERNEL)
-if(_IS_ARDUINO_KERNEL GREATER -1)
+# Arduino kernels (name contains "arduino" or "bb" or "test") use Wire; others use IDF drivers
+string(FIND "${PURR_DEVICE}" "arduino"    _IS_ARDUINO_KERNEL)
+string(FIND "${PURR_DEVICE}" "_mobile_ui" _IS_MUI_KERNEL)
+string(FIND "${PURR_DEVICE}" "_test"      _IS_TEST_KERNEL)
+if(_IS_ARDUINO_KERNEL GREATER -1 OR _IS_MUI_KERNEL GREATER -1 OR _IS_TEST_KERNEL GREATER -1)
     set(EXTRA_REQUIRES espressif__arduino-esp32)
     set(DRIVER_REQUIRES st7789 trackball)
     message(STATUS "PURR: Arduino kernel — using Wire for I2C peripherals")
@@ -59,4 +70,5 @@ idf_component_register(
         sdmmc
         ${DRIVER_REQUIRES}
         ${EXTRA_REQUIRES}
+        miniwin
 )

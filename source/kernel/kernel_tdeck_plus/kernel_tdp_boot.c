@@ -282,6 +282,14 @@ void app_main(void)
     purr_register_static_modules();
     purr_kernel_load_static_modules();
 
+    // app_manager's own init() scans for apps before the P3 system apps
+    // (settings/about/terminal/fileman/calculator) have registered, so its
+    // first scan always finds 0. Re-scan now that every priority tier above
+    // has loaded — by here the registry is complete.
+    extern int app_manager_scan(void);
+    app_manager_scan();
+    purr_kernel_set_boot_ready(true);
+
     // ── Phase 2: SD extras ───────────────────────────────────────────────────
 
     if (purr_kernel_sd_available()) {

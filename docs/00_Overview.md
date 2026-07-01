@@ -40,7 +40,7 @@ Everything else is a module.
 
 | Component | Version |
 |-----------|---------|
-| PURR OS | v0.13.0 |
+| PURR OS | v0.13.1 |
 | KITT | v0.9.2 |
 | `.purr` ABI | 1 |
 | Catcall API | 1 |

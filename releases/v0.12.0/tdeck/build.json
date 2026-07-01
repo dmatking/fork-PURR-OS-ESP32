@@ -3,7 +3,7 @@
   "chip": "esp32s3",
   "purros_version": "0.12.0",
   "kitt_version": "0.9.0",
-  "last_build": "2026-06-13T08:40:48.388486",
+  "last_build": "2026-06-13T10:13:12.034071",
   "pcat": "/home/Catto/Documents/Projects/PURR-OS-ESP32/source/devices/tdeck/device.pcat",
   "flash_bin": "/home/Catto/Documents/Projects/PURR-OS-ESP32/cattobaked/tdeck/flash.bin",
   "firmware_bin": "not built",

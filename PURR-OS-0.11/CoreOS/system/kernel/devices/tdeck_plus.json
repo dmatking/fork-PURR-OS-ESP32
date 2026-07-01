@@ -1,0 +1,14 @@
+{
+  "device": "tdeck_plus",
+  "display": "st7789",
+  "display_res": [320, 240],
+  "touch": "gt911",
+  "psram": true,
+  "flash": "16mb",
+  "pi_slot": false,
+  "sd": true,
+  "radios": ["wifi", "bt", "lora"],
+  "cpu_max_mhz": 240,
+  "boot_splash": "",
+  "verbose": false
+}

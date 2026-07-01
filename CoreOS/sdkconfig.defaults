@@ -25,7 +25,11 @@ CONFIG_FATFS_MAX_LFN=255
 CONFIG_NVS_ASSERT_ERROR_CHECK=n
 
 # FreeRTOS
-CONFIG_FREERTOS_HZ=100
+# 1000 Hz project-wide: espressif/arduino-esp32 is an unconditional
+# CoreOS/main dependency (source/kernel/kernel_arduino needs it) and its
+# CMakeLists.txt hard-fails configure below 1000 Hz, so every device build
+# needs this regardless of whether that device's kernel uses Arduino.
+CONFIG_FREERTOS_HZ=1000
 CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS=1
 
 # Logging — INFO level by default, modules can raise to DEBUG

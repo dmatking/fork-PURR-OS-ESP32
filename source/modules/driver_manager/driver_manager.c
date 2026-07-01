@@ -63,9 +63,20 @@ static int version_cmp(const char *a, const char *b) {
 
 // ── Load one driver .purr ─────────────────────────────────────────────────────
 
-static void load_driver(const char *path) {
-    if (s_driver_count >= MAX_DRIVERS) return;
+// Returns the s_drivers[] index already holding this name, or -1. Closes
+// the gap where the "First match per driver name wins" comment above used
+// to be aspirational only — every .purr found in both /flash/drivers and
+// /sdcard/drivers was previously loaded (and init()'d) unconditionally.
+static int find_driver_slot_by_name(const char *name) {
+    for (int i = 0; i < s_driver_count; i++) {
+        if (strncmp(s_drivers[i].name, name, sizeof(s_drivers[i].name)) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
 
+static void load_driver(const char *path) {
     purr_module_header_t hdr;
     FILE *f = fopen(path, "rb");
     if (!f) return;
@@ -73,7 +84,27 @@ static void load_driver(const char *path) {
     fclose(f);
     if (n < sizeof(hdr) || hdr.magic != PURR_MODULE_MAGIC) return;
 
-    drv_entry_t *ent = &s_drivers[s_driver_count];
+    int existing = find_driver_slot_by_name(hdr.name);
+    if (existing >= 0 && version_cmp(hdr.version, s_drivers[existing].version) <= 0) {
+        ESP_LOGI(TAG, "driver '%s' v%s already loaded (have v%s) — skipping %s",
+                 hdr.name, hdr.version, s_drivers[existing].version, path);
+        return;
+    }
+
+    drv_entry_t *ent;
+    if (existing >= 0) {
+        // Catcall registration is last-registered-wins at the kernel level
+        // (see purr_kernel.c), so calling this driver's init() below will
+        // correctly take over the catcall slot. Its drv_entry_t status
+        // entry is reused in place rather than appended as a duplicate.
+        ESP_LOGI(TAG, "driver '%s': v%s supersedes loaded v%s from %s",
+                 hdr.name, hdr.version, s_drivers[existing].version, path);
+        ent = &s_drivers[existing];
+    } else {
+        if (s_driver_count >= MAX_DRIVERS) return;
+        ent = &s_drivers[s_driver_count++];
+    }
+
     strncpy(ent->name, hdr.name, sizeof(ent->name) - 1);
     strncpy(ent->version, hdr.version, sizeof(ent->version) - 1);
     ent->status = DRV_STATUS_OK;
@@ -84,7 +115,6 @@ static void load_driver(const char *path) {
         ent->status = DRV_STATUS_SKIP;
         snprintf(ent->fail_reason, sizeof(ent->fail_reason),
                  "needs kernel >= %s", hdr.kernel_min);
-        s_driver_count++;
         ESP_LOGW(TAG, "skip %s: %s", hdr.name, ent->fail_reason);
         return;
     }
@@ -95,7 +125,6 @@ static void load_driver(const char *path) {
         // Compat check — all required catcalls must be present
         if (!compat_check(hdr.required_catcalls, ent->fail_reason, sizeof(ent->fail_reason))) {
             ent->status = DRV_STATUS_FAIL;
-            s_driver_count++;
             ESP_LOGE(TAG, "FAIL %s: %s", hdr.name, ent->fail_reason);
             return;
         }
@@ -106,12 +135,10 @@ static void load_driver(const char *path) {
     if (hdr.init && hdr.init() != 0) {
         ent->status = DRV_STATUS_FAIL;
         snprintf(ent->fail_reason, sizeof(ent->fail_reason), "init() failed");
-        s_driver_count++;
         ESP_LOGE(TAG, "FAIL %s: init returned error", hdr.name);
         return;
     }
 
-    s_driver_count++;
     ESP_LOGI(TAG, "%s %s v%s",
              drv_status_badge(ent->status), hdr.name, hdr.version);
 }

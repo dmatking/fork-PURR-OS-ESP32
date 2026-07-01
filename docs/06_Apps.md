@@ -282,7 +282,7 @@ These are baked into the SPIFFS flash image for medium/large-screen devices:
 
 | App | Tier | Description |
 |-----|------|-------------|
-| `settings` | `.claw` | Theme (WCE/Luna/Dark via NVS), brightness, SD status, reboot |
+| `settings` | `.claw` | Theme (WCE/Dark via NVS), brightness, SD status, reboot |
 | `about` | `.claw` | OS + KITT version, chip, free RAM, uptime (live), active drivers |
 | `terminal` | `.claw` | Shell: `ls`, `cat`, `echo`, `modules`, `mem`, `uptime`, `reboot` |
 | `fileman` | `.claw` | Browse SPIFFS + SD; Prev/Next/Open navigation; text file preview |

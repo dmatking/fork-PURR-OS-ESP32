@@ -6,6 +6,33 @@
 
 ---
 
+## v0.13.1 — 2026-06-15
+
+### Summary
+Replaces MiniWin as the T-Deck Plus UI with **BlackPURR** — a zero-LVGL text-mode shell built on direct `fill_rect`/`push_pixels` catcall primitives and a 6×8 bitmap font. Eliminates the MiniWin touch calibration dependency entirely: GT911 outputs screen-native coordinates (0–319, 0–239) which are used directly for hit-testing. Fixes a critical Wire I2C race condition between the BBQ20 poll task and GT911 reads. Foundation for the planned LVGL-on-demand app layer.
+
+### Added
+- **BlackPURR text-mode shell** (`source/modules/blackpurr/`) — rewritten from scratch, no LVGL dependency
+  - 4×3 app grid drawn with bitmap font and `fill_rect`; selection highlight in orange
+  - Status bar: brand, uptime clock, page indicator
+  - Bottom hint bar: selected app name + key hint
+  - BBQ20 keyboard: Enter to launch, letter keys to type-jump to app by first character
+  - Trackball: delta accumulation with threshold → grid navigation
+  - Touch: direct GT911 screen-native coordinate hit-test, no calibration required
+  - Task loop at ~60 Hz; 1 s status tick; 8 KB stack (vs 32 KB for LVGL path)
+- **Wire mutex** in `kernel_tdeck_plus_arduino` — `s_wire_mutex` (FreeRTOS `SemaphoreHandle_t`) guards all Wire transactions; eliminates race between `bbq20_poll_task` and GT911 reads that caused touch to fail after first read
+
+### Changed
+- `tdeck_plus_arduino` device: `ui = "blackpurr"` (was `miniwin`), flash priority updated
+- `sdkconfig_tdeck_plus_arduino`: removed `CONFIG_PURR_UI_BACKEND_MINIWIN`, `CONFIG_LV_COLOR_16_SWAP`, `CONFIG_PURR_TOUCH_FLIP_X`; added `CONFIG_PURR_UI_BACKEND_BLACKPURR`
+- `blackpurr/CMakeLists.txt`: removed LVGL and icon asset dependencies; requires only `esp_common driver freertos nvs_flash esp_timer`
+
+### Removed
+- `blackpurr_hal.c` — LVGL display/touch bridge (no longer needed)
+- `blackpurr_win.c` — LVGL catcall_ui registration (no longer needed)
+
+---
+
 ## v0.13.0 — 2026-06-15
 
 ### Summary

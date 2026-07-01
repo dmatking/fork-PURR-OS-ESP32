@@ -60,29 +60,61 @@ static void make_display_name(const char *filename, char *out, size_t out_sz)
 
 // ── Scan ──────────────────────────────────────────────────────────────────────
 
+// Returns the s_apps[] index already holding this display name, or -1.
+static int find_app_slot_by_name(const char *name) {
+    for (int i = 0; i < s_app_count; i++) {
+        if (strncmp(s_apps[i].name, name, sizeof(s_apps[i].name)) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static void scan_dir(const char *dir)
 {
     DIR *d = opendir(dir);
     if (!d) return;
 
     struct dirent *ent;
-    while ((ent = readdir(d)) != NULL && s_app_count < MAX_APPS) {
+    while ((ent = readdir(d)) != NULL) {
         const char *ext = strrchr(ent->d_name, '.');
         if (!ext) continue;
         if (strcmp(ext, ".meow") != 0 &&
             strcmp(ext, ".paws") != 0 &&
             strcmp(ext, ".claw") != 0) continue;
 
-        app_entry_t *app = &s_apps[s_app_count];
+        char name[sizeof(((app_entry_t *)0)->name)];
+        make_display_name(ent->d_name, name, sizeof(name));
+
+        // Later scan paths shadow earlier ones — including a pre-linked app
+        // of the same name — per docs/06_Apps.md ("SD apps with the same
+        // name as a flash app shadow the flash version"). Previously every
+        // path was appended unconditionally, so a same-named app on both
+        // /flash/apps and /sdcard/apps produced two confusing entries in the
+        // launcher instead of the SD copy taking over.
+        int existing = find_app_slot_by_name(name);
+        app_entry_t *app;
+        if (existing >= 0) {
+            app = &s_apps[existing];
+        } else {
+            if (s_app_count >= MAX_APPS) {
+                ESP_LOGW(TAG, "app table full — skipping %s/%s", dir, ent->d_name);
+                continue;
+            }
+            app = &s_apps[s_app_count++];
+        }
         memset(app, 0, sizeof(*app));
 
         snprintf(app->path, sizeof(app->path), "%s/%.200s", dir, ent->d_name);
-        make_display_name(ent->d_name, app->name, sizeof(app->name));
+        strncpy(app->name, name, sizeof(app->name) - 1);
         app->tier  = tier_from_ext(ent->d_name);
         app->state = APP_STATE_IDLE;
 
-        ESP_LOGI(TAG, "found [%s] %s", tier_name(app->tier), app->name);
-        s_app_count++;
+        if (existing >= 0) {
+            ESP_LOGI(TAG, "found [%s] %s (shadows earlier entry)", tier_name(app->tier), app->name);
+        } else {
+            ESP_LOGI(TAG, "found [%s] %s", tier_name(app->tier), app->name);
+        }
     }
     closedir(d);
 }

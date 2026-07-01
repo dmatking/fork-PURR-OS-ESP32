@@ -1,0 +1,24 @@
+{
+  "device": "cyd_s028r",
+  "ui_kernel": "miniwin",
+  "ui_theme": "wce",
+  "lora_kernel": "sx1262",
+  "flash_port": "/dev/ttyUSB0",
+  "flash_baud": 460800,
+  "monitor_port": "/dev/ttyUSB0",
+  "modules": {
+    "wifi": true,
+    "bt": true,
+    "shell": true,
+    "lua": true,
+    "micropython": true,
+    "lora": false,
+    "mesh": false,
+    "gps": true,
+    "magidos": true,
+    "magicmac": true,
+    "mtp": false,
+    "flasher": false,
+    "lte": false
+  }
+}

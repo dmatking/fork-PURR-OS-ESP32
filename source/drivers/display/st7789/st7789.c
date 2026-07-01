@@ -102,6 +102,7 @@ typedef struct {
     int cs_pin;
     int dc_pin;
     int mosi_pin;
+    int miso_pin;
     int sclk_pin;
     int rst_pin;
     int bl_pin;
@@ -111,6 +112,7 @@ static st7789_pins_t s_pins = {
     .cs_pin   = CONFIG_DRV_DISPLAY_CS_PIN,
     .dc_pin   = CONFIG_DRV_DISPLAY_DC_PIN,
     .mosi_pin = CONFIG_DRV_DISPLAY_MOSI_PIN,
+    .miso_pin = -1,
     .sclk_pin = CONFIG_DRV_DISPLAY_SCLK_PIN,
     .rst_pin  = CONFIG_DRV_DISPLAY_RST_PIN,
     .bl_pin   = CONFIG_DRV_DISPLAY_BL_PIN,
@@ -129,11 +131,12 @@ static uint16_t s_row_buf[ST7789_WIDTH];
 
 // ── Public configure API ──────────────────────────────────────────────────────
 
-void st7789_configure(int cs, int dc, int mosi, int sclk, int rst, int bl)
+void st7789_configure(int cs, int dc, int mosi, int miso, int sclk, int rst, int bl)
 {
     s_pins.cs_pin   = cs;
     s_pins.dc_pin   = dc;
     s_pins.mosi_pin = mosi;
+    s_pins.miso_pin = miso;
     s_pins.sclk_pin = sclk;
     s_pins.rst_pin  = rst;
     s_pins.bl_pin   = bl;
@@ -343,7 +346,7 @@ static esp_err_t st7789_init(const display_config_t *cfg)
     // SPI bus
     spi_bus_config_t bus_cfg = {
         .mosi_io_num     = s_pins.mosi_pin,
-        .miso_io_num     = -1,
+        .miso_io_num     = s_pins.miso_pin,
         .sclk_io_num     = s_pins.sclk_pin,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,

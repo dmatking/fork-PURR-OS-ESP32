@@ -1,7 +1,7 @@
 // kittenui_module.c — KittenUI kernel module entry
 //
 // Reads theme from NVS (key "kittenui.theme"), falls back to WCE Classic.
-// Supported theme IDs: "wce", "luna", "dark" (built-in); any registered via
+// Supported theme IDs: "wce", "dark" (built-in); any registered via
 // kittenui_register_theme() also works if the module is loaded first.
 
 #include "kittenui.h"
@@ -164,9 +164,15 @@ static void kittenui_task(void *arg)
     ESP_LOGI(TAG, "desktop init done");
     uint32_t tick = 0;
     while (1) {
+        // See purr_kernel_ui_lock()'s doc comment — this is what keeps an
+        // app's background-task UI update (e.g. about.c's 5s refresh) from
+        // racing this render loop. purr_win.h's dispatch macros take the
+        // same lock from whatever task calls them.
+        purr_kernel_ui_lock();
         lv_tick_inc(5);
         lv_timer_handler();
         if (++tick % 1000 == 0) kittenui_desktop_tick();
+        purr_kernel_ui_unlock();
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
@@ -187,7 +193,6 @@ int kittenui_init(void)
 
     // Register built-in themes
     kittenui_register_theme(kittenui_theme_wce());
-    kittenui_register_theme(kittenui_theme_luna());
     kittenui_register_theme(kittenui_theme_dark());
 
     // Determine active theme: NVS → fallback to WCE

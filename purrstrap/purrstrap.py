@@ -42,8 +42,8 @@ C_YLW  = "\033[93m"
 C_CYN  = "\033[96m"
 C_WHT  = "\033[97m"
 
-PURROS_VERSION = "0.13.0"
-KITT_VERSION   = "0.9.2"
+PURROS_VERSION = "1.0.0-dp"
+KITT_VERSION   = "0.10.0"
 
 def info(msg):        print(f"{C_GRN}[purrstrap]{C_RST} {msg}")
 def warn(msg):        print(f"{C_YLW}[warn]     {C_RST} {msg}")
@@ -188,6 +188,28 @@ def _idf_path():
             os.environ["IDF_PATH"] = c
             return c
     return ""
+
+def _idf_venv_python():
+    """Locate the ESP-IDF managed Python venv interpreter, cross-platform.
+
+    Prefers IDF_PYTHON_ENV_PATH (set by every export.ps1/export.sh/export.bat,
+    including the official Windows installer's C:\\Espressif layout) over
+    guessing a directory layout. Falls back to the ~/.espressif Unix installer
+    layout, then None if nothing is found.
+    """
+    import glob as _glob
+    env_path = os.environ.get("IDF_PYTHON_ENV_PATH", "")
+    if env_path:
+        for candidate in (os.path.join(env_path, "Scripts", "python.exe"),
+                          os.path.join(env_path, "bin", "python3")):
+            if os.path.isfile(candidate):
+                return candidate
+    for pattern in ("~/.espressif/python_env/idf*/bin/python3",
+                    "~/.espressif/python_env/idf*/Scripts/python.exe"):
+        matches = sorted(_glob.glob(os.path.expanduser(pattern)))
+        if matches:
+            return matches[-1]
+    return None
 
 def _spiffsgen(idf_path):
     candidate = os.path.join(idf_path, "components", "spiffs", "spiffsgen.py")
@@ -533,9 +555,7 @@ def _build_kernel_spine(device, cfg, out_dir):
         idf_py = "idf.py"
 
     # Find the IDF Python venv so idf.py's dependencies (click, etc.) are available.
-    import glob as _glob
-    _venv_bins = sorted(_glob.glob(os.path.expanduser("~/.espressif/python_env/idf*/bin/python3")))
-    _idf_python = _venv_bins[-1] if _venv_bins else sys.executable
+    _idf_python = _idf_venv_python() or sys.executable
 
     env = os.environ.copy()
     env["IDF_PATH"] = idf
@@ -635,9 +655,8 @@ def _merge_flash_image(device, cfg, out_dir, firmware_bin, flash_bin):
     parts += [spiffs_offset, flash_bin]
 
     # Find esptool: prefer IDF venv python -m esptool, fall back to esptool.py in PATH
-    import glob as _g
-    _venv_py = sorted(_g.glob(os.path.expanduser("~/.espressif/python_env/idf*/bin/python3")))
-    _esptool_runner = [_venv_py[-1], "-m", "esptool"] if _venv_py else ["esptool.py"]
+    _venv_py = _idf_venv_python()
+    _esptool_runner = [_venv_py, "-m", "esptool"] if _venv_py else ["esptool.py"]
 
     cmd = _esptool_runner + ["--chip", cfg.get("device.chip", "esp32"),
            "merge_bin", "-o", merged_out] + parts
@@ -747,9 +766,8 @@ def cmd_flash(args):
     esptool_port = port if port != "auto" else "/dev/ttyUSB0"
 
     # Find esptool: prefer IDF venv python -m esptool
-    import glob as _gl
-    _venv_py = sorted(_gl.glob(os.path.expanduser("~/.espressif/python_env/idf*/bin/python3")))
-    _esptool = [_venv_py[-1], "-m", "esptool"] if _venv_py else ["esptool.py"]
+    _venv_py = _idf_venv_python()
+    _esptool = [_venv_py, "-m", "esptool"] if _venv_py else ["esptool.py"]
 
     # Prefer the merged full-flash image (bootloader + partition table + firmware + SPIFFS)
     merged_bin = os.path.join(out_dir, f"PURR_OS_{args.device}.bin")
@@ -929,6 +947,498 @@ def cmd_bake(args):
     info(f"manifest: releases/v{PURROS_VERSION}/manifest.json")
     div()
 
+# ── Local package manager (v1, no network) ───────────────────────────────────
+#
+# Two genuinely different mechanisms exist in PURR OS today, and this CLI
+# keeps them as two separate command groups instead of papering over the
+# difference with one model:
+#
+#   "static" packages — drivers, system/UI modules, and apps selected via
+#   device.pcat's [drivers]/[modules]/[apps] sections — are compiled directly
+#   into the firmware binary via PURR_MODULE_REGISTER() (see _generate_glue
+#   above). There is no installable file for these: "installing" one means
+#   editing device.pcat and rebuilding. `purrstrap pkg <list|add|remove|
+#   upgrade|verify>` operates on this model.
+#
+#   "app" packages — only `.meow` Lua scripts today — are real files that
+#   app_manager's boot-time scan picks up from /flash/apps or /sdcard/apps
+#   without any firmware rebuild. `.claw`/`.paws` apps are NOT real files;
+#   like drivers/modules they are statically linked, so `purrstrap pkg app`
+#   refuses to "install" one and points at the static path instead.
+#   `purrstrap pkg app <list|install|remove|upgrade>` operates on this model.
+
+APPS_BASES = ("system", "exclusive", "user")
+
+def _depends_of(cfg):
+    """Extract a {package_name: constraint} dict from a parsed .pcat's
+    [depends] section, if present. Empty dict if the section is absent."""
+    return {k[len("depends."):]: v for k, v in cfg.items() if k.startswith("depends.")}
+
+def _find_package(name):
+    """
+    Locate a PURR package by name across modules/, drivers/*/, apps/*/.
+    Returns (kind, pcat_path, slug, cfg) or (None, None, None, None).
+    kind is one of "module", "driver", "app". slug is the device.pcat-style
+    identifier ("name" for modules/apps, "type/name" for drivers).
+    """
+    # Driver given as "type/name" explicitly
+    if "/" in name and not name.startswith("apps/"):
+        p = os.path.join(SOURCE_DIR, "drivers", name, "driver.pcat")
+        if os.path.isfile(p):
+            return "driver", p, name, parse_pcat(p)
+
+    # Module: source/modules/<name>/module.pcat
+    p = os.path.join(SOURCE_DIR, "modules", name, "module.pcat")
+    if os.path.isfile(p):
+        return "module", p, name, parse_pcat(p)
+
+    # Driver by bare name: search every type/ subdir
+    drivers_dir = os.path.join(SOURCE_DIR, "drivers")
+    if os.path.isdir(drivers_dir):
+        for dtype in sorted(os.listdir(drivers_dir)):
+            p = os.path.join(drivers_dir, dtype, name, "driver.pcat")
+            if os.path.isfile(p):
+                return "driver", p, f"{dtype}/{name}", parse_pcat(p)
+
+    # App: source/apps/{system,exclusive,user}/<name>/app.pcat
+    for base in APPS_BASES:
+        p = os.path.join(SOURCE_DIR, "apps", base, name, "app.pcat")
+        if os.path.isfile(p):
+            return "app", p, name, parse_pcat(p)
+
+    return None, None, None, None
+
+def _resolve_static_deps(name, seen=None):
+    """
+    Recursively walk [depends] for a static package. Returns a flat list of
+    (dep_name, constraint, found) tuples for every dependency in the closure
+    (excluding `name` itself). `found` is False if no package with that name
+    exists anywhere in source/ at all — `pkg add` refuses in that case.
+    Does NOT check version constraints against what's currently selected for
+    a device — that's a separate, cheaper check the caller does against the
+    device's own device.pcat + installed.json.
+    """
+    seen = seen if seen is not None else set()
+    out = []
+    if name in seen:
+        return out
+    seen.add(name)
+    kind, pcat, slug, cfg = _find_package(name)
+    if not cfg:
+        return out
+    for dep_name, constraint in _depends_of(cfg).items():
+        dk, dp, dslug, dcfg = _find_package(dep_name)
+        out.append((dep_name, constraint, dcfg is not None))
+        if dcfg is not None:
+            out.extend(_resolve_static_deps(dep_name, seen))
+    return out
+
+# ── device.pcat in-place editing (preserves comments/formatting elsewhere) ───
+
+def _pcat_lines_set(lines, section, key, value):
+    """Return a new line list with `key = "value"` set inside [section],
+    creating the section and/or key if either is missing."""
+    header = f"[{section}]"
+    out = []
+    i = 0
+    section_found = False
+    key_written = False
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() == header:
+            section_found = True
+            out.append(line)
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("["):
+                inner = lines[i]
+                stripped = inner.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    k = stripped.split("=", 1)[0].strip()
+                    if k == key:
+                        out.append(f'{key:<12} = "{value}"\n')
+                        key_written = True
+                        i += 1
+                        continue
+                out.append(inner)
+                i += 1
+            if not key_written:
+                out.append(f'{key:<12} = "{value}"\n')
+                key_written = True
+            continue
+        out.append(line)
+        i += 1
+    if not section_found:
+        if out and out[-1].strip() != "":
+            out.append("\n")
+        out.append(f"{header}\n")
+        out.append(f'{key:<12} = "{value}"\n')
+    return out
+
+def _pcat_lines_remove(lines, section, key):
+    """Return a new line list with `key`'s line removed from [section], if
+    present. No-op if the section or key doesn't exist."""
+    header = f"[{section}]"
+    out = []
+    i = 0
+    in_section = False
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if stripped == header:
+            in_section = True
+            out.append(line)
+            i += 1
+            continue
+        if in_section and stripped.startswith("["):
+            in_section = False
+        if in_section and stripped and not stripped.startswith("#") and "=" in stripped:
+            k = stripped.split("=", 1)[0].strip()
+            if k == key:
+                i += 1
+                continue
+        out.append(line)
+        i += 1
+    return out
+
+def _pcat_set(pcat_path, section, key, value):
+    with open(pcat_path) as f:
+        lines = f.readlines()
+    lines = _pcat_lines_set(lines, section, key, value)
+    with open(pcat_path, "w") as f:
+        f.writelines(lines)
+
+def _pcat_remove(pcat_path, section, key):
+    with open(pcat_path) as f:
+        lines = f.readlines()
+    lines = _pcat_lines_remove(lines, section, key)
+    with open(pcat_path, "w") as f:
+        f.writelines(lines)
+
+# ── installed.json — per-device record of static selections + app files ─────
+
+INSTALLED_SCHEMA = 1
+
+def _pkg_version(cfg):
+    """module.pcat/driver.pcat/app.pcat are inconsistent about using a
+    [section] header — driver_manager/app_manager/hwtest are flat ("version"
+    at top level) while blackpurr/cardstack use [module] ("module.version").
+    Check both rather than assuming one convention."""
+    return cfg.get("version") or cfg.get("module.version") or "0.0.0"
+
+def _installed_path(device):
+    return os.path.join(OUTPUT_DIR, device, "installed.json")
+
+def _load_installed(device):
+    path = _installed_path(device)
+    if os.path.isfile(path):
+        with open(path) as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                warn(f"{path} is corrupt — starting a fresh record")
+    return {"schema": INSTALLED_SCHEMA, "device": device, "static": [], "apps": []}
+
+def _save_installed(device, data):
+    path = _installed_path(device)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+# ── pkg: static package selection (drivers / modules / apps-as-static) ──────
+
+# Maps a static package's kind+type to the device.pcat [section] + key it's
+# selected under. Drivers are single-slot per category under [drivers];
+# everything under [modules] is a free-form key (purrstrap's glue generator
+# includes any modules.* value regardless of key name — see _generate_glue).
+def _static_pcat_target(kind, cfg, name):
+    if kind == "driver":
+        dtype = cfg.get("type", "")
+        if not dtype:
+            return None
+        return ("drivers", dtype)
+    if kind == "module":
+        mtype = cfg.get("module.type") or cfg.get("type") or cfg.get("module_type", "")
+        mtype = mtype.replace("PURR_MOD_", "").lower()
+        if mtype == "ui":
+            return ("modules", "ui")
+        if name == "app_manager":
+            return ("modules", "app_manager")
+        # Generic system module with no named device.pcat slot — purrstrap's
+        # glue generator only picks up [modules].* keys, so give it one
+        # named after the module itself rather than refusing outright.
+        return ("modules", name)
+    if kind == "app":
+        return ("apps", name)
+    return None
+
+def cmd_pkg_list(args):
+    device = args.device
+    cfg, pcat_path = resolve_device(device)
+    installed = _load_installed(device)
+    div(f"pkg list — {device}")
+    print(f"{C_BOLD}{'slot':<22}{'package':<20}{'source':<10}{C_RST}")
+    for key in ("display", "touch", "input", "radio", "gps"):
+        val = cfg.get(f"drivers.{key}", "")
+        if val:
+            print(f"  {'drivers.' + key:<22}{val:<20}{'device.pcat'}")
+    for raw_key, raw_val in sorted(cfg.items()):
+        if raw_key.startswith("modules.") and raw_val:
+            print(f"  {raw_key:<22}{raw_val:<20}{'device.pcat'}")
+    for raw_key, raw_val in sorted(cfg.items()):
+        if raw_key.startswith("apps.") and raw_val.lower() in ("true", "1", "yes"):
+            name = raw_key.split(".", 1)[1]
+            print(f"  {raw_key:<22}{name:<20}{'device.pcat'}")
+    div()
+    if installed.get("static"):
+        print(f"{C_GRY}installed.json record (version pins):{C_RST}")
+        for entry in installed["static"]:
+            print(f"  {entry['name']:<20} v{entry.get('version', '?')}")
+        div()
+
+def cmd_pkg_add(args):
+    device, name = args.device, args.name
+    cfg, pcat_path = resolve_device(device)
+    kind, src_pcat, slug, pkg_cfg = _find_package(name)
+    if kind is None:
+        die(f"no package named '{name}' found under source/modules, source/drivers, or source/apps")
+
+    target = _static_pcat_target(kind, pkg_cfg, name)
+    if target is None:
+        die(f"'{name}' ({kind}) has no [type]/[module_type] set — can't determine its device.pcat slot")
+    section, key = target
+
+    # Dependency resolution — recursively, against what actually exists as a
+    # buildable package. Does not silently overwrite an occupied driver slot;
+    # for module deps with a free-form slot, adds them too.
+    deps = _resolve_static_deps(name)
+    hard_missing = [d for d, c, found in deps if not found]
+    if hard_missing:
+        die(f"'{name}' depends on package(s) not found anywhere: {', '.join(sorted(set(hard_missing)))}")
+
+    for dep_name, constraint, found in deps:
+        dk, dp, dslug, dcfg = _find_package(dep_name)
+        dtarget = _static_pcat_target(dk, dcfg, dep_name)
+        if dtarget is None:
+            continue
+        dsection, dkey = dtarget
+        current = cfg.get(f"{dsection}.{dkey}", "")
+        if current == dep_name:
+            continue
+        if current and dsection == "drivers":
+            warn(f"  dependency '{dep_name}' ({constraint}) not auto-applied — "
+                 f"[{dsection}] {dkey} is already '{current}'; resolve manually if needed")
+            continue
+        info(f"  resolving dependency: {dep_name} ({constraint}) → [{dsection}] {dkey}")
+        _pcat_set(pcat_path, dsection, dkey, dep_name)
+        cfg[f"{dsection}.{dkey}"] = dep_name
+
+    current = cfg.get(f"{section}.{key}", "")
+    if current == name:
+        info(f"'{name}' is already selected for {device} ([{section}] {key} = \"{name}\")")
+    else:
+        if current and section == "drivers":
+            info(f"replacing [{section}] {key} = \"{current}\" with \"{name}\"")
+        _pcat_set(pcat_path, section, key, name)
+        info(f"[{section}] {key} = \"{name}\" written to {os.path.relpath(pcat_path, REPO_DIR)}")
+
+    if section == "apps":
+        _pcat_set(pcat_path, "apps", name, "true")
+
+    installed = _load_installed(device)
+    installed["static"] = [e for e in installed["static"] if e["name"] != name]
+    installed["static"].append({
+        "name": name, "kind": kind, "version": _pkg_version(pkg_cfg),
+        "slot": f"{section}.{key}",
+        "depends": _depends_of(pkg_cfg),
+    })
+    _save_installed(device, installed)
+
+    info(f"done — run 'purrstrap build {device}' to apply.")
+
+def cmd_pkg_remove(args):
+    device, name = args.device, args.name
+    cfg, pcat_path = resolve_device(device)
+    kind, src_pcat, slug, pkg_cfg = _find_package(name)
+    if kind is None:
+        die(f"no package named '{name}' found — nothing to remove from source")
+
+    # Refuse if something else currently selected for this device depends on it
+    if not args.force:
+        installed = _load_installed(device)
+        dependents = [e["name"] for e in installed.get("static", [])
+                      if name in e.get("depends", {}) and e["name"] != name]
+        if dependents:
+            die(f"'{name}' is depended on by: {', '.join(dependents)} — use --force to remove anyway")
+
+    target = _static_pcat_target(kind, pkg_cfg, name)
+    if target is None:
+        die(f"'{name}' ({kind}) has no known device.pcat slot")
+    section, key = target
+    current = cfg.get(f"{section}.{key}", "")
+    if current != name:
+        warn(f"'{name}' is not currently selected for {device} ([{section}] {key} = \"{current or '(unset)'}\")")
+    else:
+        _pcat_remove(pcat_path, section, key)
+        info(f"removed [{section}] {key} from {os.path.relpath(pcat_path, REPO_DIR)}")
+    if section == "apps":
+        _pcat_remove(pcat_path, "apps", name)
+
+    installed = _load_installed(device)
+    installed["static"] = [e for e in installed["static"] if e["name"] != name]
+    _save_installed(device, installed)
+    info(f"done — run 'purrstrap build {device}' to apply.")
+
+def cmd_pkg_upgrade(args):
+    device = args.device
+    names = [args.name] if args.name else [e["name"] for e in _load_installed(device).get("static", [])]
+    if not names:
+        info(f"nothing installed to upgrade for {device}")
+        return
+    for name in names:
+        kind, pcat, slug, pkg_cfg = _find_package(name)
+        if kind is None:
+            warn(f"  {name}: no longer found in source — skipping (use 'pkg remove' to drop its record)")
+            continue
+        installed = _load_installed(device)
+        entry = next((e for e in installed["static"] if e["name"] == name), None)
+        new_version = _pkg_version(pkg_cfg)
+        old_version = entry.get("version", "0.0.0") if entry else None
+        if entry is None:
+            info(f"  {name}: not tracked yet — run 'pkg add {device} {name}' first")
+            continue
+        if new_version == old_version:
+            info(f"  {name}: already at v{new_version}")
+            continue
+        entry["version"] = new_version
+        entry["depends"] = _depends_of(pkg_cfg)
+        _save_installed(device, installed)
+        info(f"  {name}: v{old_version} → v{new_version} (record updated — rebuild to apply)")
+
+def cmd_pkg_verify(args):
+    device = args.device
+    cfg, pcat_path = resolve_device(device)
+    installed = _load_installed(device)
+    problems = 0
+    for entry in installed.get("static", []):
+        section, key = entry["slot"].split(".", 1)
+        current = cfg.get(f"{section}.{key}", "")
+        if current != entry["name"]:
+            warn(f"  drift: installed.json says [{section}] {key} = \"{entry['name']}\", "
+                 f"device.pcat actually has \"{current or '(unset)'}\"")
+            problems += 1
+        kind, pcat, slug, pkg_cfg = _find_package(entry["name"])
+        if kind is None:
+            warn(f"  drift: '{entry['name']}' is tracked as installed but no longer exists in source/")
+            problems += 1
+    if problems == 0:
+        info(f"{device}: installed.json matches device.pcat and source/ — no drift")
+    else:
+        warn(f"{device}: {problems} issue(s) found")
+
+# ── pkg app: runtime file hot-load (.meow only — see module docstring) ──────
+
+def _find_meow(device, name):
+    """Look for a .meow script the user already has staged for this device's
+    SPIFFS image, or under any apps/ source dir, by bare name."""
+    candidates = [
+        os.path.join(OUTPUT_DIR, device, "spiffs_staging", "apps", f"{name}.meow"),
+    ]
+    for base in APPS_BASES:
+        candidates.append(os.path.join(SOURCE_DIR, "apps", base, name, f"{name}.meow"))
+        candidates.append(os.path.join(SOURCE_DIR, "apps", base, f"{name}.meow"))
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return None
+
+def _app_target_dir(device, to):
+    if to == "sd":
+        die("--to sd requires a mounted SD card path — pass --sd-path /path/to/sdcard/apps")
+    return os.path.join(OUTPUT_DIR, device, "spiffs_staging", "apps")
+
+def cmd_pkg_app_list(args):
+    device = args.device
+    installed = _load_installed(device)
+    div(f"pkg app list — {device}")
+    if not installed.get("apps"):
+        print(f"  {C_GRY}(none installed via pkg app){C_RST}")
+    for entry in installed.get("apps", []):
+        print(f"  {entry['name']:<20} v{entry.get('version','?')}  [{entry.get('tier','meow')}]  {entry.get('location','flash')}")
+    div()
+
+def cmd_pkg_app_install(args):
+    device, name = args.device, args.name
+    kind, pcat, slug, pkg_cfg = _find_package(name)
+    if kind == "app" and pkg_cfg.get("tier") in ("claw", "paws"):
+        die(f"'{name}' is a .{pkg_cfg.get('tier')} app — those are statically compiled into "
+            f"firmware, not installable as a file. Use 'purrstrap pkg add {device} {name}' instead.")
+
+    src = _find_meow(device, name)
+    if not src:
+        die(f"no .meow script found for '{name}' — only .meow (Lua) apps are real, "
+            f"installable files today; place one at source/apps/user/{name}/{name}.meow "
+            f"or build it onto {device}'s staging area first")
+
+    dst_dir = _app_target_dir(device, args.to)
+    os.makedirs(dst_dir, exist_ok=True)
+    dst = os.path.join(dst_dir, f"{name}.meow")
+    if os.path.exists(dst) and os.path.samefile(src, dst):
+        info(f"{name}.meow is already at {os.path.relpath(dst, REPO_DIR)} — registering as-is")
+    else:
+        shutil.copy2(src, dst)
+        info(f"installed {name}.meow → {os.path.relpath(dst, REPO_DIR)}")
+
+    installed = _load_installed(device)
+    installed["apps"] = [e for e in installed.get("apps", []) if e["name"] != name]
+    installed["apps"].append({
+        "name": name, "tier": "meow", "version": _pkg_version(pkg_cfg) if pkg_cfg else "0.0.0",
+        "location": args.to, "path": os.path.relpath(dst, OUTPUT_DIR),
+    })
+    _save_installed(device, installed)
+    info("Lua VM app launching is not wired up yet (see docs/03_Modules.md) — "
+         "the file is staged and will be discovered by app_manager's scan, "
+         "but won't run until the engine module lands.")
+
+def cmd_pkg_app_remove(args):
+    device, name = args.device, args.name
+    installed = _load_installed(device)
+    entry = next((e for e in installed.get("apps", []) if e["name"] == name), None)
+    if not entry:
+        die(f"'{name}' is not tracked as an installed app for {device}")
+    full_path = os.path.join(OUTPUT_DIR, entry["path"])
+    if os.path.isfile(full_path):
+        os.remove(full_path)
+        info(f"removed {entry['path']}")
+    installed["apps"] = [e for e in installed["apps"] if e["name"] != name]
+    _save_installed(device, installed)
+
+def cmd_pkg_app_upgrade(args):
+    device = args.device
+    names = [args.name] if args.name else [e["name"] for e in _load_installed(device).get("apps", [])]
+    for name in names:
+        src = _find_meow(device, name)
+        if not src:
+            warn(f"  {name}: no source .meow found — skipping")
+            continue
+        cmd_pkg_app_install(argparse.Namespace(device=device, name=name, to="flash"))
+
+def cmd_pkg(args):
+    dispatch = {
+        "list": cmd_pkg_list, "add": cmd_pkg_add, "remove": cmd_pkg_remove,
+        "upgrade": cmd_pkg_upgrade, "verify": cmd_pkg_verify,
+    }
+    if args.pkg_cmd == "app":
+        app_dispatch = {
+            "list": cmd_pkg_app_list, "install": cmd_pkg_app_install,
+            "remove": cmd_pkg_app_remove, "upgrade": cmd_pkg_app_upgrade,
+        }
+        if args.app_cmd not in app_dispatch:
+            die("usage: purrstrap pkg app <list|install|remove|upgrade> <device> [name]")
+        return app_dispatch[args.app_cmd](args)
+    if args.pkg_cmd not in dispatch:
+        die("usage: purrstrap pkg <list|add|remove|upgrade|verify> <device> [name]")
+    return dispatch[args.pkg_cmd](args)
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -956,6 +1466,48 @@ def main():
     sub.add_parser("status", help="Show workspace config")
     sub.add_parser("doctor", help="Check environment health")
 
+    # ── pkg — local package manager (v1, no network) ─────────────────────────
+    p_pkg = sub.add_parser("pkg", help="Local package manager (static selection + .meow hot-load)")
+    pkg_sub = p_pkg.add_subparsers(dest="pkg_cmd")
+
+    p_pkg_list = pkg_sub.add_parser("list", help="Show what's selected for a device")
+    p_pkg_list.add_argument("device")
+
+    p_pkg_add = pkg_sub.add_parser("add", help="Select a driver/module/app for a device (static — edits device.pcat)")
+    p_pkg_add.add_argument("device")
+    p_pkg_add.add_argument("name")
+
+    p_pkg_remove = pkg_sub.add_parser("remove", help="Unselect a static package")
+    p_pkg_remove.add_argument("device")
+    p_pkg_remove.add_argument("name")
+    p_pkg_remove.add_argument("--force", action="store_true", help="Remove even if something depends on it")
+
+    p_pkg_upgrade = pkg_sub.add_parser("upgrade", help="Re-check version of one (or all) selected static packages")
+    p_pkg_upgrade.add_argument("device")
+    p_pkg_upgrade.add_argument("name", nargs="?", default=None)
+
+    p_pkg_verify = pkg_sub.add_parser("verify", help="Check installed.json against device.pcat + source/ for drift")
+    p_pkg_verify.add_argument("device")
+
+    p_pkg_app = pkg_sub.add_parser("app", help="Runtime .meow hot-load (the one real file-drop path)")
+    app_sub = p_pkg_app.add_subparsers(dest="app_cmd")
+
+    p_app_list = app_sub.add_parser("list", help="List apps installed via pkg app")
+    p_app_list.add_argument("device")
+
+    p_app_install = app_sub.add_parser("install", help="Stage a .meow script onto a device's flash image")
+    p_app_install.add_argument("device")
+    p_app_install.add_argument("name")
+    p_app_install.add_argument("--to", choices=["flash", "sd"], default="flash")
+
+    p_app_remove = app_sub.add_parser("remove", help="Remove a staged .meow script")
+    p_app_remove.add_argument("device")
+    p_app_remove.add_argument("name")
+
+    p_app_upgrade = app_sub.add_parser("upgrade", help="Re-stage one (or all) installed .meow scripts")
+    p_app_upgrade.add_argument("device")
+    p_app_upgrade.add_argument("name", nargs="?", default=None)
+
     args = parser.parse_args()
     dispatch = {
         "build":   cmd_build,
@@ -966,6 +1518,7 @@ def main():
         "list":    cmd_list,
         "status":  cmd_status,
         "doctor":  cmd_doctor,
+        "pkg":     cmd_pkg,
     }
     if args.cmd not in dispatch:
         parser.print_help()

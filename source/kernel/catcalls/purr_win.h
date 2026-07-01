@@ -17,24 +17,37 @@
 
 // ── Internal dispatch macro ────────────────────────────────────────────────────
 // Returns a default value if no UI is registered (graceful no-op).
+//
+// Both macros hold purr_kernel_ui_lock() for the duration of the call into
+// the backend. This is what makes it safe for an app to update its UI from
+// a background task (a periodic status refresh, a radio-rx callback, etc.)
+// — without it, that task's call could run concurrently with the UI
+// backend's own render task mid-frame and corrupt LVGL's internal state.
+// _UI_CALL is a GNU statement-expression (supported by the GCC-based ESP-IDF
+// toolchain) so the lock can wrap a value-producing call without forcing
+// every call site to restructure around an early `return`.
 
-#define _UI_CALL(ret, fn, ...) \
-    do { \
+#define _UI_CALL(type, ret, fn, ...) \
+    ({ \
+        purr_kernel_ui_lock(); \
         const catcall_ui_t *_ui = purr_kernel_ui(); \
-        if (_ui && _ui->fn) return _ui->fn(__VA_ARGS__); \
-        return ret; \
-    } while(0)
+        type _r = (_ui && _ui->fn) ? _ui->fn(__VA_ARGS__) : (ret); \
+        purr_kernel_ui_unlock(); \
+        _r; \
+    })
 
 #define _UI_VOID(fn, ...) \
     do { \
+        purr_kernel_ui_lock(); \
         const catcall_ui_t *_ui = purr_kernel_ui(); \
         if (_ui && _ui->fn) _ui->fn(__VA_ARGS__); \
+        purr_kernel_ui_unlock(); \
     } while(0)
 
 // ── Window lifecycle ──────────────────────────────────────────────────────────
 
 static inline purr_win_t purr_win_create(const char *title) {
-    _UI_CALL(0, win_create, title);
+    return _UI_CALL(purr_win_t, 0, win_create, title);
 }
 static inline void purr_win_destroy(purr_win_t win) {
     _UI_VOID(win_destroy, win);
@@ -52,7 +65,7 @@ static inline void purr_win_clear(purr_win_t win) {
 // ── Labels ────────────────────────────────────────────────────────────────────
 
 static inline purr_wid_t purr_win_label(purr_win_t win, const char *text) {
-    _UI_CALL(0, label_create, win, text);
+    return _UI_CALL(purr_wid_t, 0, label_create, win, text);
 }
 static inline void purr_win_label_set(purr_wid_t wid, const char *text) {
     _UI_VOID(label_set, wid, text);
@@ -65,7 +78,7 @@ static inline void purr_win_label_align(purr_wid_t wid, purr_align_t align) {
 
 static inline purr_wid_t purr_win_button(purr_win_t win, const char *label,
                                           purr_win_cb_t cb, void *user) {
-    _UI_CALL(0, btn_create, win, label, cb, user);
+    return _UI_CALL(purr_wid_t, 0, btn_create, win, label, cb, user);
 }
 static inline void purr_win_button_enable(purr_wid_t wid, bool enabled) {
     _UI_VOID(btn_enable, wid, enabled);
@@ -75,7 +88,7 @@ static inline void purr_win_button_enable(purr_wid_t wid, bool enabled) {
 
 static inline purr_wid_t purr_win_textarea(purr_win_t win,
                                             uint16_t w_pct, uint16_t h_pct) {
-    _UI_CALL(0, textarea_create, win, w_pct, h_pct);
+    return _UI_CALL(purr_wid_t, 0, textarea_create, win, w_pct, h_pct);
 }
 static inline void purr_win_textarea_append(purr_wid_t wid, const char *text) {
     _UI_VOID(textarea_append, wid, text);
@@ -87,7 +100,7 @@ static inline void purr_win_textarea_clear(purr_wid_t wid) {
     _UI_VOID(textarea_clear, wid);
 }
 static inline const char *purr_win_textarea_get(purr_wid_t wid) {
-    _UI_CALL(NULL, textarea_get, wid);
+    return _UI_CALL(const char *, NULL, textarea_get, wid);
 }
 static inline void purr_win_textarea_focus(purr_wid_t wid) {
     _UI_VOID(textarea_focus, wid);
@@ -100,10 +113,10 @@ static inline void purr_win_textarea_on_change(purr_wid_t wid,
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 static inline purr_wid_t purr_win_row(purr_win_t win, uint8_t pad) {
-    _UI_CALL(0, layout_begin, win, PURR_LAYOUT_ROW, pad);
+    return _UI_CALL(purr_wid_t, 0, layout_begin, win, PURR_LAYOUT_ROW, pad);
 }
 static inline purr_wid_t purr_win_col(purr_win_t win, uint8_t pad) {
-    _UI_CALL(0, layout_begin, win, PURR_LAYOUT_COL, pad);
+    return _UI_CALL(purr_wid_t, 0, layout_begin, win, PURR_LAYOUT_COL, pad);
 }
 static inline void purr_win_layout_end(purr_wid_t container) {
     _UI_VOID(layout_end, container);

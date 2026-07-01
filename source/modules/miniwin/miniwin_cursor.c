@@ -19,6 +19,14 @@
 
 static const char *TAG = "cursor";
 
+// TEMP: trackball cursor disabled while debugging touch calibration. The
+// cursor's synthetic-touch fallback (trackball click -> "touch" at cursor
+// position, consumed by hal_touch.c) means trackball click noise/bounce
+// can register as a phantom tap wherever the cursor happens to be, which
+// was confusing touch calibration ("mouse doing its own thing"). Flip back
+// to 1 once touch calibration is solid.
+#define CURSOR_ENABLED 0
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 static int     s_w = 320, s_h = 240;
@@ -56,6 +64,14 @@ static void draw_cursor(int x, int y, uint16_t color)
 
 bool miniwin_cursor_handle_event(const input_event_t *ev)
 {
+#if !CURSOR_ENABLED
+    // Still "consume" pointer/click events so they don't fall through to
+    // keyboard routing as garbage key codes — just don't act on them.
+    if (ev->type == INPUT_EVENT_POINTER) return true;
+    if (ev->type == INPUT_EVENT_KEY_DOWN && ev->keycode == 0x0028) return true;
+    if (ev->type == INPUT_EVENT_KEY_UP && ev->keycode == 0x0028) return true;
+    return false;
+#endif
     const catcall_touch_t *touch = purr_kernel_touch();
     bool real_touch = touch && touch->is_pressed();
 
@@ -96,6 +112,9 @@ void miniwin_cursor_init(int display_w, int display_h)
 
 void miniwin_cursor_poll(void)
 {
+#if !CURSOR_ENABLED
+    return; // disabled — see CURSOR_ENABLED comment above
+#endif
     // Check real touch — if active, hide cursor
     const catcall_touch_t *touch = purr_kernel_touch();
     bool real_touch = touch && touch->is_pressed();
@@ -111,6 +130,14 @@ void miniwin_cursor_poll(void)
     // miniwin_cursor_handle_event() for each event before routing to keyboard.
     // Nothing to drain here — poll() just redraws if dirty.
 
+    // Redraw every tick while visible, not just after a position change —
+    // MiniWin's own periodic repaints draw straight over the cursor sprite
+    // (it isn't a tracked window), so without this it visually vanishes
+    // every time the background gets redrawn until the cursor moves again.
+    if (s_visible && !real_touch) {
+        s_dirty = true;
+    }
+
     // Draw cursor on top of MiniWin frame if dirty and visible
     if (s_dirty && s_visible && !real_touch) {
         // Black outline (draw 1px larger in black)
@@ -123,5 +150,11 @@ void miniwin_cursor_poll(void)
 
 uint16_t miniwin_cursor_x(void)       { return (uint16_t)s_x; }
 uint16_t miniwin_cursor_y(void)       { return (uint16_t)s_y; }
-bool     miniwin_cursor_pressed(void) { return s_pressed; }
+bool     miniwin_cursor_pressed(void) {
+#if !CURSOR_ENABLED
+    return false; // disabled — see CURSOR_ENABLED comment above
+#else
+    return s_pressed;
+#endif
+}
 bool     miniwin_cursor_visible(void) { return s_visible; }

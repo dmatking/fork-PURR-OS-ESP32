@@ -65,6 +65,19 @@ static purr_win_t kw_win_create(const char *title) {
     lv_win_add_title(win, title);
     lv_obj_set_size(win, LV_PCT(100), LV_PCT(100));
     lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
+
+    // lv_win's content area has no layout of its own by default — only the
+    // outer win object stacks header+content (see lv_win.c's constructor).
+    // Without this, every widget an app adds directly to the window (not
+    // wrapped in purr_win_row()/purr_win_col()) lands at the same default
+    // position and overlaps. Same fix as cardstack_win.c's cw_win_create —
+    // this is a property of the shared lv_win widget, not backend-specific.
+    lv_obj_t *content = lv_win_get_content(win);
+    lv_obj_set_style_pad_all(content, 6, 0);
+    lv_obj_set_style_pad_row(content, 6, 0);
+    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
     return alloc_win(win);
 }
 

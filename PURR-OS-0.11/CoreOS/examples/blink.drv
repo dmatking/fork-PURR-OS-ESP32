@@ -1,0 +1,39 @@
+// blink.drv — example PDL driver: blink GPIO 2 at 1Hz
+// Copy to /sdcard/drvdebug/blink.drv, then: drvmgr load blink
+
+driver "blink";
+
+int led_pin = 2;
+int state = 0;
+
+void init() {
+    gpio_mode(led_pin, OUTPUT);
+    log("blink: init");
+}
+
+void tick() {
+    static int ms_last = 0;
+    int now = millis();
+    if (now - ms_last >= 500) {
+        ms_last = now;
+        state = !state;
+        gpio_write(led_pin, state);
+    }
+}
+
+void cmd() {
+    if (streq(arg(), "on")) {
+        gpio_write(led_pin, 1);
+        state = 1;
+    }
+    if (streq(arg(), "off")) {
+        gpio_write(led_pin, 0);
+        state = 0;
+    }
+    log_int(state);
+}
+
+void deinit() {
+    gpio_write(led_pin, 0);
+    log("blink: deinit");
+}

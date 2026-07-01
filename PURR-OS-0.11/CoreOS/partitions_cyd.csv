@@ -1,0 +1,9 @@
+# PURR OS CYD (ESP32-2432S024C / S028R) — 4MB flash, no OTA
+# nvs      20 KB   @ 0x9000
+# factory   3 MB   @ 0x10000  (binary ~1.1MB, headroom for growth)
+# spiffs    1 MB   @ 0x300000
+#
+# Name,    Type, SubType,  Offset,   Size
+nvs,       data, nvs,      0x9000,   0x5000
+factory,   app,  factory,  0x10000,  0x2F0000
+spiffs,    data, spiffs,   0x300000, 0x100000

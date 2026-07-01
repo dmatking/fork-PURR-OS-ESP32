@@ -273,3 +273,27 @@ display = "my_display"
 ```
 
 purrstrap picks it up automatically on the next build.
+
+### Baked-in consumption (specialized kernels)
+
+A specialized kernel (`source/kernel/kernel_<device>/`) consumes the exact same
+driver source file — it just calls it directly instead of going through the
+`.purr` module loader:
+
+```c
+// .purr module path (driver_manager, generic devices):
+purr_kernel_load_module("/flash/drivers/touch/gt911.purr");
+// → runs gt911.c's own driver_init(), which calls gt911_drv_init()
+//   and purr_kernel_register_touch(&s_catcall) internally
+
+// Specialized kernel path (kernel_tdeck_plus/kernel_tdp_boot.c):
+#include "../../drivers/touch/gt911/gt911.h"
+gt911_configure(sda, scl, int_pin, rst_pin, rotation);
+gt911_drv_init();   // same function, same register logic, called directly
+```
+
+Both paths end up calling the same `<name>_drv_init()` and registering the same
+catcall struct. Never write a second, from-scratch implementation of a driver's
+register logic inside a specialized kernel — see
+[01_Architecture.md](01_Architecture.md#rule-specialized-kernels-consume-drivers-they-dont-reimplement-them)
+for the rule and why it exists.

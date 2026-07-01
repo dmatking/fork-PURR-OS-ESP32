@@ -1,0 +1,81 @@
+-- LoRa Client for PURR OS
+-- Meshtastic-like interface with full radio control
+-- Run: lora.send("message") to transmit
+-- Watch output for received packets
+
+local MAX_RX_LINES = 100
+local rx_log = {}
+local tx_count = 0
+local rx_count = 0
+
+function log_rx(text)
+    table.insert(rx_log, text)
+    if #rx_log > MAX_RX_LINES then
+        table.remove(rx_log, 1)
+    end
+end
+
+function draw_ui()
+    win.clear()
+
+    -- Header
+    win.label("LoRa Radio Client", 10, 5, 0x00FF00)
+
+    if not lora.enabled() then
+        win.label("LoRa not enabled!", 10, 30, 0xFF0000)
+        return
+    end
+
+    -- Status bar
+    local freq = lora.get_frequency() / 1000000
+    local power = lora.get_power()
+    local rssi = lora.rssi()
+    local snr = lora.snr()
+
+    win.label(string.format("Freq: %.1f MHz | Pwr: %ddBm", freq, power), 10, 25, 0x00FFFF)
+    win.label(string.format("RSSI: %d | SNR: %.1f | RX: %d TX: %d", rssi, snr, rx_count, tx_count), 10, 40, 0x00FFFF)
+
+    -- RX Log display
+    win.label("RX Log:", 10, 55, 0xFFFF00)
+    local y = 70
+    for i = math.max(1, #rx_log - 8), #rx_log do
+        local line = rx_log[i]
+        if y < 155 then
+            win.label(line, 10, y, 0xFFFFFF)
+            y = y + 12
+        end
+    end
+
+    -- Instructions
+    win.label("Commands:", 10, 165, 0xFFFF00)
+    win.label("lora.send('text') | lora.set_frequency(freq_hz)", 10, 178, 0x888888)
+end
+
+function main()
+    -- Enable background mode
+    kitt.set_background(true)
+
+    log_rx("LoRa client started")
+    log_rx("Frequency: " .. lora.get_frequency() .. " Hz")
+    log_rx("Power: " .. lora.get_power() .. " dBm")
+    log_rx("")
+    log_rx("Use: lora.send('text') to transmit")
+    log_rx("Listening for packets...")
+
+    while true do
+        -- Check for received packets
+        if lora.data_available() then
+            local data = lora.receive()
+            if data then
+                rx_count = rx_count + 1
+                log_rx(string.format("[RX #%d] %s (RSSI: %d, SNR: %.1f)",
+                    rx_count, data, lora.rssi(), lora.snr()))
+            end
+        end
+
+        draw_ui()
+        win.sleep(100)
+    end
+end
+
+main()

@@ -31,7 +31,7 @@ ui          = "kittenui" | "miniwin" | "oled_ui"
 app_manager = "app_manager"
 
 [ui]
-theme = "wce" | "luna" | "dark"    # KittenUI/MiniWin only
+theme = "wce" | "dark"             # KittenUI/MiniWin only
 style = "full" | "compact"         # oled_ui only
 
 [apps]

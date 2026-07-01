@@ -152,7 +152,7 @@ void app_main(void)
     ESP_LOGI(TAG, "=== phase 0: baked-in drivers ===");
 
     st7789_configure(TD_DISPLAY_CS, TD_DISPLAY_DC, TD_DISPLAY_MOSI,
-                     TD_DISPLAY_SCLK, TD_DISPLAY_RST, TD_DISPLAY_BL);
+                     -1, TD_DISPLAY_SCLK, TD_DISPLAY_RST, TD_DISPLAY_BL);
     if (st7789_drv_init() != 0) {
         purr_kernel_panic("ST7789 display init failed");
     }

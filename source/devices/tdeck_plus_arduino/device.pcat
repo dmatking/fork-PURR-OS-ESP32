@@ -1,7 +1,9 @@
 # devices/tdeck_plus_arduino/device.pcat
 # T-Deck Plus — Arduino kernel variant
 # Uses Arduino Wire for I2C (GT911 touch + BBQ20 keyboard) instead of IDF i2c_master.
-# kernel_arduino_tdeck_plus/ is the boot entry point.
+# kernel_tdeck_plus_arduino/kernel_atdp_boot.cpp is the boot entry point.
+# Hardware-only kernel (display/touch/keyboard/trackball/SD/LoRa/PMIC/GPS/BT/WiFi
+# all baked in at boot) — no hardcoded UI. MiniWin loads as a module on top.
 
 [device]
 name        = "tdeck_plus_arduino"
@@ -73,17 +75,18 @@ trackball_left = 1
 trackball_right= 2
 trackball_click= 0
 
-lora_mosi     = 6
-lora_miso     = 5
-lora_sclk     = 7
+lora_mosi     = 41
+lora_miso     = 38
+lora_sclk     = 40
 lora_cs       = 9
 lora_rst      = 17
 lora_irq      = 45
+lora_busy     = 46
 
 gps_tx        = 43
 gps_rx        = 44
 
-sd_cs         = 13
+sd_cs         = 39
 sd_mosi       = 41
 sd_miso       = 38
 sd_sclk       = 40

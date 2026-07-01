@@ -130,14 +130,14 @@ Minimal specialization. T-Deck has no touch and uses a trackball for navigation.
 
 ---
 
-### `kernel_tdeck_plus` — T-Deck Plus (IDF path)
+### `kernel_tdeck_plus` — T-Deck Plus (IDF path, canonical)
 
 **Source:** `source/kernel/kernel_tdeck_plus/kernel_tdp_boot.c`
 **Device:** `tdeck_plus`
 
-IDF i2c_master path for T-Deck Plus. Handles BOARD_POWERON, ST7789 display, and attempts GT911 touch init via `gt911_configure()`.
+IDF i2c_master path for T-Deck Plus. Handles BOARD_POWERON, ST7789 display, and GT911 touch init via `gt911_configure()`.
 
-**⚠️ Known broken:** GT911 init fails on IDF 5.3 due to `ESP_ERR_INVALID_STATE` returned instead of NACK from `i2c_master_probe`. Display and trackball work; touch does not. Use `kernel_tdeck_plus_arduino` for production.
+**✅ Fixed in `322159c6`:** the IDF 5.3 `i2c_master_probe()`/`i2c_master_transmit()` regression that previously broke GT911 discovery is worked around at the driver level — see `source/drivers/touch/gt911/gt911.c`. The earlier byte-offset bug in point parsing, the missing hardware RST pulse (now wired to GPIO17), and unsigned-vs-signed coordinate interpretation have all been corrected and confirmed against hardware. Display, touch, and trackball all work. This is now the canonical T-Deck Plus kernel — `kernel_tdeck_plus_arduino` is staged for deprecation (see its section below).
 
 **Boot sequence:**
 ```c
@@ -158,9 +158,9 @@ vTaskDelay(pdMS_TO_TICKS(50));
 st7789_configure(CS=12, DC=11, MOSI=41, SCLK=40, RST=-1, BL=42);
 st7789_drv_init();
 
-// 5. GT911 touch init (fails on IDF 5.3)
-gt911_configure(SDA=18, SCL=8, RST=-1, INT=-1, poll_mode=0);
-gt911_drv_init();  // returns error — touch disabled
+// 5. GT911 touch init (RST=GPIO17, fixed in 322159c6)
+gt911_configure(SDA=18, SCL=8, RST=17, INT=-1, poll_mode=0);
+gt911_drv_init();
 
 // 6. Trackball GPIO ISR
 trackball_drv_init();
@@ -171,13 +171,15 @@ purr_kernel_scan_modules("/flash/modules");
 
 ---
 
-### `kernel_tdeck_plus_arduino` — T-Deck Plus (Arduino kernel, production)
+### `kernel_tdeck_plus_arduino` — T-Deck Plus (Arduino kernel, **DEPRECATED**)
 
 **Source:** `source/kernel/kernel_tdeck_plus_arduino/kernel_atdp_boot.cpp`
 **Device:** `tdeck_plus_arduino`
 **Language:** C++ (Arduino framework)
 
-The production kernel for T-Deck Plus. Uses Arduino Wire for all I2C, completely bypassing the IDF 5.3 i2c_master regression. All hardware confirmed working: display, touch, trackball, keyboard, SD.
+**⚠️ DEPRECATED — scheduled for removal.** This kernel existed solely to work around the IDF 5.3 `i2c_master` regression that broke GT911 touch on `kernel_tdeck_plus`. That regression is now fixed at the driver level (see `kernel_tdeck_plus` above, commit `322159c6`), so this kernel is no longer needed and has *not* received the same GT911 fixes (it still has the old byte-offset/unsigned-coordinate behavior). It remains buildable as a rollback target only until the on-hardware validation checklist in `PURR_OS_1.0_CHECKLIST.md` passes, after which it will be archived to `archive/`. Do not build new functionality on top of this kernel — target `kernel_tdeck_plus` instead.
+
+Uses Arduino Wire for all I2C, bypassing the IDF 5.3 i2c_master regression. All hardware confirmed working: display, touch, trackball, keyboard, SD.
 
 **What it initializes:**
 

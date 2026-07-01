@@ -1,0 +1,10 @@
+{
+  "name": "PURR UI",
+  "version": "1.0.0",
+  "description": "Tile grid launcher shell — drag-to-rearrange, LVGL-based",
+  "is_lightweight": false,
+  "needs_wifi": false,
+  "needs_bt": false,
+  "needs_lora": false,
+  "min_ram_kb": 256
+}
