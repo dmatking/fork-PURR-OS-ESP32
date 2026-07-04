@@ -1,6 +1,6 @@
 // kittenui_module.c — KittenUI kernel module entry
 //
-// Reads theme from NVS (key "kittenui.theme"), falls back to WCE Classic.
+// Reads theme from NVS (namespace "purr_settings", key "theme"), falls back to WCE Classic.
 // Supported theme IDs: "wce", "dark" (built-in); any registered via
 // kittenui_register_theme() also works if the module is loaded first.
 
@@ -133,7 +133,7 @@ static const kittenui_theme_t *load_theme_from_nvs(void)
 {
     nvs_handle_t nvs;
     char id[32] = {0};
-    if (nvs_open("kittenui", NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_open("purr_settings", NVS_READONLY, &nvs) == ESP_OK) {
         size_t len = sizeof(id);
         nvs_get_str(nvs, "theme", id, &len);
         nvs_close(nvs);

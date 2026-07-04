@@ -89,18 +89,28 @@ static void cmd_echo(const char *text) {
     term_println(text ? text : "");
 }
 
+static const char *module_type_name(uint8_t type) {
+    switch (type) {
+        case PURR_MOD_DRIVER: return "driver";
+        case PURR_MOD_SYSTEM: return "system";
+        case PURR_MOD_UI:     return "ui";
+        case PURR_MOD_APP:    return "app";
+        default:              return "unknown";
+    }
+}
+
 static void cmd_modules(void) {
     term_println("Loaded modules:");
-    for (int i = 0; i < 32; i++) {
-        const purr_module_header_t *m = NULL;
-        // Walk the registry — we try names via get_module but we don't have
-        // an iteration API, so we use the known-loaded list approach:
-        // (In a future kernel revision, purr_kernel_module_iter() would be ideal.)
-        (void)m;
-    }
-    // For now, report the UI that's active as a proxy
-    const catcall_ui_t *ui = purr_kernel_ui();
+    int n = purr_kernel_module_count();
     char line[64];
+    for (int i = 0; i < n; i++) {
+        const purr_module_header_t *hdr = purr_kernel_module_at(i);
+        if (!hdr) continue;
+        snprintf(line, sizeof(line), "  %-16s %-8s v%s\n",
+                 hdr->name, module_type_name(hdr->module_type), hdr->version);
+        term_print(line);
+    }
+    const catcall_ui_t *ui = purr_kernel_ui();
     snprintf(line, sizeof(line), "  ui: %s\n", ui ? ui->name : "(none)");
     term_print(line);
     const catcall_display_t *disp = purr_kernel_display();

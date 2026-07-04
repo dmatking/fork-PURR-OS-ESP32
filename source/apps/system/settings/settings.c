@@ -59,14 +59,6 @@ static void set_status(const char *msg) {
 // ── Theme buttons ─────────────────────────────────────────────────────────────
 
 static void apply_theme_nvs(const char *id) {
-    // Persist to both kittenui namespace (picked up by kittenui_module.c)
-    // and purr_settings namespace (for our own display).
-    nvs_handle_t h;
-    if (nvs_open("kittenui", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_str(h, "theme", id);
-        nvs_commit(h);
-        nvs_close(h);
-    }
     nvs_save_str("theme", id);
     strncpy(s_theme, id, sizeof(s_theme) - 1);
 

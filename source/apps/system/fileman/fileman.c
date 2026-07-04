@@ -23,7 +23,7 @@
 
 static purr_win_t s_win        = 0;
 static purr_wid_t s_path_lbl   = 0;   // current path header
-static purr_wid_t s_list_area  = 0;   // left: scrollable entry list (textarea)
+static purr_wid_t s_file_list  = 0;   // left: selectable entry list
 static purr_wid_t s_prev_area  = 0;   // right: file preview (textarea)
 static purr_wid_t s_status_lbl = 0;
 
@@ -32,6 +32,11 @@ static char s_entries[MAX_ENTRIES][64];
 static int  s_entry_types[MAX_ENTRIES]; // 0=file, 1=dir
 static int  s_entry_count = 0;
 static int  s_selected    = -1;
+
+// Formatted list labels ("[dir]" / " file") — kept off the stack since
+// refresh_list() can be called from a task with a modest stack budget.
+static char        s_label_bufs[MAX_ENTRIES][68];
+static const char *s_label_ptrs[MAX_ENTRIES];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -46,19 +51,16 @@ static void refresh_list(void) {
     DIR *d = opendir(s_cwd);
     if (!d) {
         set_status("Cannot open directory.");
-        purr_win_textarea_set(s_list_area, "(empty)");
+        purr_win_list_clear(s_file_list);
         return;
     }
 
     struct dirent *ent;
-    char buf[PREVIEW_MAX];
-    size_t pos = 0;
 
     // Parent entry if not at a root
     bool at_root = (strcmp(s_cwd, "/spiffs") == 0 ||
                     strcmp(s_cwd, "/sd")     == 0);
-    if (!at_root && pos < PREVIEW_MAX - 4) {
-        pos += snprintf(buf + pos, PREVIEW_MAX - pos, "[..]\n");
+    if (!at_root) {
         strncpy(s_entries[s_entry_count], "..", sizeof(s_entries[0]) - 1);
         s_entry_types[s_entry_count] = 1;
         s_entry_count++;
@@ -76,19 +78,19 @@ static void refresh_list(void) {
             if (stat(full, &st) == 0) is_dir = S_ISDIR(st.st_mode);
         }
 
-        if (pos < PREVIEW_MAX - 80) {
-            pos += snprintf(buf + pos, PREVIEW_MAX - pos,
-                            is_dir ? "[%s]\n" : " %s\n", ent->d_name);
-        }
-
         strncpy(s_entries[s_entry_count], ent->d_name, sizeof(s_entries[0]) - 1);
         s_entry_types[s_entry_count] = is_dir ? 1 : 0;
         s_entry_count++;
     }
     closedir(d);
 
-    buf[pos] = '\0';
-    purr_win_textarea_set(s_list_area, buf);
+    for (int i = 0; i < s_entry_count; i++) {
+        snprintf(s_label_bufs[i], sizeof(s_label_bufs[i]),
+                 s_entry_types[i] ? "[%s]" : " %s", s_entries[i]);
+        s_label_ptrs[i] = s_label_bufs[i];
+    }
+    purr_win_list_set_items(s_file_list, s_label_ptrs, s_entry_count);
+
     purr_win_label_set(s_path_lbl, s_cwd);
     purr_win_textarea_set(s_prev_area, "");
     set_status("Select a file to preview.");
@@ -162,9 +164,9 @@ static void on_goto_sd(purr_wid_t w, purr_event_t e, void *u) {
     navigate_to("/sd");
 }
 
-// "Open" — open selected entry (enter dir or preview file)
-// Because we can't bind per-entry buttons without a list widget, we expose
-// Prev/Next buttons to select entries and Open to act on them.
+// List entries are selected and opened in one tap/click — MiniWin and
+// KittenUI both fire PURR_EVENT_SELECTED immediately followed by
+// PURR_EVENT_ACTIVATED for a list, so this only needs to act on ACTIVATED.
 
 static void update_selection_label(void) {
     if (s_selected < 0 || s_selected >= s_entry_count) {
@@ -179,26 +181,17 @@ static void update_selection_label(void) {
     set_status(msg);
 }
 
-static void on_prev(purr_wid_t w, purr_event_t e, void *u) {
-    (void)w;(void)e;(void)u;
-    if (s_entry_count == 0) return;
-    s_selected = (s_selected <= 0) ? s_entry_count - 1 : s_selected - 1;
-    update_selection_label();
-}
+static void on_list_event(purr_wid_t w, purr_event_t e, void *u) {
+    (void)u;
+    int idx = purr_win_list_get_selected(s_file_list);
+    if (idx < 0 || idx >= s_entry_count) return;
+    s_selected = idx;
 
-static void on_next(purr_wid_t w, purr_event_t e, void *u) {
-    (void)w;(void)e;(void)u;
-    if (s_entry_count == 0) return;
-    s_selected = (s_selected + 1) % s_entry_count;
-    update_selection_label();
-}
-
-static void on_open(purr_wid_t w, purr_event_t e, void *u) {
-    (void)w;(void)e;(void)u;
-    if (s_selected < 0 || s_selected >= s_entry_count) {
-        set_status("Nothing selected.");
+    if (e == PURR_EVENT_SELECTED) {
+        update_selection_label();
         return;
     }
+    if (e != PURR_EVENT_ACTIVATED) return;
 
     const char *name = s_entries[s_selected];
 
@@ -223,7 +216,7 @@ static void on_open(purr_wid_t w, purr_event_t e, void *u) {
 static int fileman_init(void) {
     s_win = purr_win_create("File Manager");
 
-    // Toolbar row: SPIFFS | SD | Up | [prev] [next] [open]
+    // Toolbar row: SPIFFS | SD | Up
     purr_wid_t toolbar = purr_win_row(s_win, 4);
     purr_win_button(s_win, "SPIFFS", on_goto_spiffs, NULL);
     purr_win_button(s_win, "SD",     on_goto_sd,     NULL);
@@ -235,16 +228,10 @@ static int fileman_init(void) {
 
     // Content row: file list (60%) | preview (40%)
     purr_wid_t content = purr_win_row(s_win, 0);
-    s_list_area = purr_win_textarea(s_win, 55, 70);
+    s_file_list = purr_win_list(s_win, 55, 70);
+    purr_win_list_on_select(s_file_list, on_list_event, NULL);
     s_prev_area = purr_win_textarea(s_win, 40, 70);
     purr_win_layout_end(content);
-
-    // Selection row
-    purr_wid_t sel_row = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "< Prev", on_prev, NULL);
-    purr_win_button(s_win, "Open",   on_open, NULL);
-    purr_win_button(s_win, "Next >", on_next, NULL);
-    purr_win_layout_end(sel_row);
 
     // Status bar
     s_status_lbl = purr_win_label(s_win, "Ready.");

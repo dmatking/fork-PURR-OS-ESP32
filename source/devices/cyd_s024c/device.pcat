@@ -5,6 +5,7 @@
 [device]
 name        = "cyd_s024c"
 chip        = "esp32"
+kernel_type = "native"
 flash_mb    = 4
 psram       = false
 spiffs_kb   = 512

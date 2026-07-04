@@ -18,7 +18,7 @@ set(GLUE_DIR ${CMAKE_SOURCE_DIR}/../cattobaked/${PURR_DEVICE}/glue)
 # check). Enabling WinCE without MiniWin would produce a kernel where no UI
 # system ever starts — fail the build instead of shipping a blank screen.
 if(CONFIG_PURR_UI_WINCE_SHELL AND NOT CONFIG_PURR_UI_BACKEND_MINIWIN)
-    message(FATAL_ERROR "CONFIG_PURR_UI_WINCE_SHELL requires CONFIG_PURR_UI_BACKEND_MINIWIN — check sdkconfig_${PURR_DEVICE}")
+    message(FATAL_ERROR "CONFIG_PURR_UI_WINCE_SHELL requires CONFIG_PURR_UI_BACKEND_MINIWIN — check sdkconfig_${PURR_DEVICE} (generated) and sdkconfig_${PURR_DEVICE}.overrides")
 endif()
 
 # Check for a specialized kernel folder — kernel_<device>/
@@ -36,11 +36,15 @@ else()
     message(STATUS "PURR: using generic kernel for ${PURR_DEVICE}")
 endif()
 
-# Arduino kernels (name contains "arduino" or "bb" or "test") use Wire; others use IDF drivers
-string(FIND "${PURR_DEVICE}" "arduino"    _IS_ARDUINO_KERNEL)
-string(FIND "${PURR_DEVICE}" "_mobile_ui" _IS_MUI_KERNEL)
-string(FIND "${PURR_DEVICE}" "_test"      _IS_TEST_KERNEL)
-if(_IS_ARDUINO_KERNEL GREATER -1 OR _IS_MUI_KERNEL GREATER -1 OR _IS_TEST_KERNEL GREATER -1)
+# Arduino kernels use Wire for I2C; native kernels use IDF drivers. Which one
+# a device is comes from device.pcat's [device] kernel_type field, resolved
+# by purrstrap into PURR_KERNEL_TYPE — not guessed from the device name.
+set(PURR_KERNEL_TYPE $ENV{PURR_KERNEL_TYPE})
+if(NOT PURR_KERNEL_TYPE)
+    message(FATAL_ERROR "PURR_KERNEL_TYPE env var not set — run via purrstrap, not idf.py directly")
+endif()
+
+if(PURR_KERNEL_TYPE STREQUAL "arduino")
     set(EXTRA_REQUIRES espressif__arduino-esp32)
     set(DRIVER_REQUIRES st7789 trackball)
     message(STATUS "PURR: Arduino kernel — using Wire for I2C peripherals")

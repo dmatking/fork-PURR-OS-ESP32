@@ -6,6 +6,38 @@
 
 ---
 
+## v1.0.0-dp — 2026-07-03
+
+### Summary
+Pre-1.0 UI contract and build-system pass. Adds a flat selectable-list widget to `catcall_ui_t` (bumping the contract to version 2) and implements it on both KittenUI and MiniWin. Fixes MiniWin's row/col layout, which previously stacked labels and buttons on top of each other via two independent dead cursors, plus hardcoded 320×240 window/textarea sizing that broke on non-standard panels like jc3248w535's 480×320. Replaces fileman's Prev/Next/Open button workaround with a real list. Unifies per-device `sdkconfig_<device>` generation: these 10 files were hand-maintained duplicates of values already declared in `device.pcat` (flash size, PSRAM, UI backend) — `purrstrap generate` now derives them automatically, with a small hand-maintained `.overrides` file per device for the handful of quirks (panel mirroring, WinCE shell flag) that have no pcat equivalent.
+
+### Added
+- **List widget in the UI contract** (`catcall_ui.h`/`purr_win.h`) — `list_create/set_items/clear/get_selected/set_selected/cb`, plus `PURR_EVENT_SELECTED`/`PURR_EVENT_ACTIVATED` events. `CATCALL_UI_VERSION` 1→2.
+- **MiniWin list widget** (`miniwin_win.c`) — wraps the existing `ui_list_box` primitive; trackball selection reuses the existing `miniwin_cursor.c` synthetic-touch path.
+- **KittenUI list widget** (`kittenui_win.c`) — wraps LVGL's native `lv_list`.
+- **`purrstrap generate [<device>] [--check]`** — regenerates `CoreOS/sdkconfig_<device>` from `device.pcat`; `--check` diffs without writing and exits nonzero on drift (CI-friendly).
+- **`device.pcat` `[device] kernel_type = "native" | "arduino"`** — replaces `CoreOS/main/CMakeLists.txt`'s device-name substring matching for Arduino-vs-IDF driver `REQUIRES`.
+- **`CoreOS/sdkconfig_<device>.overrides`** (optional, hand-maintained) for `tdeck`, `tdeck_plus_arduino`, `tdeck_plus_test` — carries the handful of hardware quirks (LVGL color-swap, touch-flip, WinCE shell flag, non-derivable UI backend) not representable in `device.pcat`.
+
+### Changed
+- **MiniWin backend rewrite** (`miniwin_win.c`): unified row/col layout cursor (was two independent per-widget-type cursors that caused overlapping labels/buttons on every app using `purr_win_row()`); window and textarea size now read the real display resolution instead of hardcoded 320×240/320×200; `label_align` now actually aligns (space-padding, since the underlying control has no reposition/justify API); `textarea_focus` now draws a visible focus border; textarea storage is per-widget heap-allocated instead of a flat static 128×512 array.
+- **`fileman.c`** — real `purr_win_list()` replaces the Prev/Next/Open button workaround for browsing SPIFFS/SD.
+- **`terminal.c`** — `modules` command now lists real loaded modules via `purr_kernel_module_count()`/`purr_kernel_module_at()` instead of a dead stub.
+- **`settings.c` / `kittenui_module.c`** — theme is now written/read only via the `"purr_settings"` NVS namespace; removed a hardcoded dual-write to a `"kittenui"` namespace that was wrong on any non-KittenUI device.
+- **`tdeck_plus`** — UI backend switched from `blackpurr` (shell tier) to `miniwin` (windowed tier), so system apps render on this device; a deliberate divergence from the shell-tier default documented in `docs/01_Architecture.md`, not a bug fix.
+- **`CoreOS/sdkconfig_<device>`** (all 10) — now auto-generated from `device.pcat`; header marks them `DO NOT EDIT BY HAND`.
+- **`CoreOS/main/CMakeLists.txt`** — Arduino-vs-native `REQUIRES` now branches on `PURR_KERNEL_TYPE` (set by purrstrap from `device.pcat`) instead of guessing from the device name string.
+
+### Fixed
+- Four `app.pcat` files (`calculator`, `settings`, `about`, `terminal`) had an unterminated `idf_requires` string.
+
+### Verified this session
+- `purrstrap generate --check` — zero drift across all 10 devices after migration.
+- Full `idf.py build` + merge succeeded for `cyd` (KittenUI, native) and `tdeck_plus` (MiniWin, native, touch+trackball+keyboard) via a locally-installed ESP-IDF v5.3.5.
+- Not build-tested this session: `cyd_s024c`, `cyd_s028r`, `heltec`, `jc3248w535`, `tdeck`, `tdeck_plus_arduino`, `tdeck_plus_test`, `waveshare169` — no hardware-in-the-loop pass either; visual/interaction correctness (list widget usability, MiniWin layout on real panels) still needs a device in hand.
+
+---
+
 ## v0.13.1 — 2026-06-15
 
 ### Summary

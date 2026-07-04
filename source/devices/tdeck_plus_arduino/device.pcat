@@ -8,6 +8,7 @@
 [device]
 name        = "tdeck_plus_arduino"
 chip        = "esp32s3"
+kernel_type = "arduino"
 flash_mb    = 16
 port        = "/dev/ttyACM0"
 psram       = true

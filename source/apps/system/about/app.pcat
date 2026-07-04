@@ -6,4 +6,4 @@ tier        = "claw"
 author      = "PURR OS"
 description = "About PURR OS: version, device info, free RAM, uptime, loaded modules."
 
-idf_requires = "esp_common driver freertos esp_hw_support
+idf_requires = "esp_common driver freertos esp_hw_support"

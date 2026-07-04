@@ -64,9 +64,10 @@ purrstrap is the top-level image builder. It:
 2. Calls modulestrap to build all `.purr` module + driver blobs
 3. Calls catstrap to register all app blobs
 4. Generates `purr_device_glue.c` with pin `#defines` and radio capability flags
-5. Stages blobs into a SPIFFS image (`flash.bin`)
-6. Invokes IDF to compile the kernel spine
-7. Merges everything into `PURR_OS_<device>.bin`
+5. Generates/refreshes `CoreOS/sdkconfig_<device>` from `device.pcat` (chained with an optional hand-maintained `sdkconfig_<device>.overrides`)
+6. Stages blobs into a SPIFFS image (`flash.bin`)
+7. Invokes IDF to compile the kernel spine
+8. Merges everything into `PURR_OS_<device>.bin`
 
 ### Commands
 
@@ -76,10 +77,23 @@ purrstrap flash <device> [-p PORT]     build + flash to connected device
 purrstrap flash <device> --erase       erase entire chip before flashing (recommended)
 purrstrap clean <device>               remove build artifacts for device
 purrstrap monitor <device> [-p PORT]   open serial monitor after flash
+purrstrap generate [device] [--check]  regenerate sdkconfig_<device> from device.pcat (omit device = all)
 purrstrap list                         list all supported devices + radio capabilities
 purrstrap status                       show .purrstrap workspace config
 purrstrap doctor                       check IDF + environment health
 ```
+
+### `purrstrap generate`
+
+`CoreOS/sdkconfig_<device>` is generated from `device.pcat` (flash size, PSRAM, UI backend, Arduino kernel config) — it's regenerated automatically on every `purrstrap build`, but `generate` lets you refresh it (or check it) without a full build:
+
+```bash
+python3 purrstrap/purrstrap.py generate tdeck_plus     # regenerate one device
+python3 purrstrap/purrstrap.py generate                # regenerate all devices
+python3 purrstrap/purrstrap.py generate --check         # CI-style drift check, exits nonzero, writes nothing
+```
+
+Hardware quirks with no equivalent `device.pcat` field (panel color-swap, touch-flip, the WinCE shell flag, ...) live in a hand-maintained `CoreOS/sdkconfig_<device>.overrides`, chained in after the generated file. Most devices don't need one.
 
 ### `--erase` flag
 
@@ -115,13 +129,14 @@ Checks: `idf.py` on PATH, `python3`, `git`, `IDF_PATH` set and valid, `source/ke
 3. Calls `modulestrap build all` → produces `.purr` blobs
 4. Calls `catstrap build all` → registers app blobs
 5. Generates `cattobaked/<device>/glue/purr_device_glue.c`
-6. Stages into `cattobaked/<device>/spiffs_staging/`:
+6. Generates `CoreOS/sdkconfig_<device>` from `device.pcat` (chained with an optional `sdkconfig_<device>.overrides` at build time)
+7. Stages into `cattobaked/<device>/spiffs_staging/`:
    - `modules/` — system modules (`.purr`)
    - `drivers/<type>/` — driver blobs (`.purr`)
    - `apps/` — app blobs (`.claw`/`.paws`/`.meow`) + `.meta.json`
-7. Runs `spiffsgen.py` → `cattobaked/<device>/flash.bin`
-8. Runs `idf.py set-target` + `idf.py build` on `CoreOS/` → `firmware.bin`
-9. Runs `esptool.py merge_bin` → `PURR_OS_<device>.bin`
+8. Runs `spiffsgen.py` → `cattobaked/<device>/flash.bin`
+9. Runs `idf.py set-target` + `idf.py build` on `CoreOS/` → `firmware.bin`
+10. Runs `esptool.py merge_bin` → `PURR_OS_<device>.bin`
 
 ### Output: `cattobaked/<device>/`
 
@@ -135,6 +150,8 @@ glue/purr_device_glue.c     generated pin + radio #defines
 spiffs_staging/             staged files before spiffsgen runs
 build.json                  build metadata (device, versions, timestamps)
 ```
+
+(`CoreOS/sdkconfig_<device>` is also regenerated on every build, but it's a repo-root artifact under `CoreOS/`, not `cattobaked/<device>/`.)
 
 ### Building without IDF
 

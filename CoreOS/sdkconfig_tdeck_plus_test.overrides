@@ -1,0 +1,17 @@
+# PURR OS — tdeck_plus_test manual overrides (hand-maintained; chained after
+# the AUTO-GENERATED CoreOS/sdkconfig_tdeck_plus_test in SDKCONFIG_DEFAULTS)
+
+# LVGL: swap color bytes so LVGL outputs big-endian RGB565 for SPI display
+CONFIG_LV_COLOR_16_SWAP=y
+
+# Touch: GT911 X axis is mirrored relative to display (mirror_x=true on panel)
+CONFIG_PURR_TOUCH_FLIP_X=y
+
+# This device's pcat has no [modules] section (it boots straight into an
+# input visualizer, no modules/apps loaded), so there's no modules.ui value
+# to derive a UI backend line from — and there shouldn't be one, since adding
+# a fake modules.ui would make purrstrap's glue generator link the miniwin
+# module into a device deliberately built without it. MiniWin's Kconfig
+# backend symbol is still needed here purely to satisfy the WINCE/MINIWIN
+# CMake consistency guard and shared display init path, so it's set by hand.
+CONFIG_PURR_UI_BACKEND_MINIWIN=y

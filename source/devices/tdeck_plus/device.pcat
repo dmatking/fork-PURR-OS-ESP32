@@ -5,6 +5,7 @@
 [device]
 name        = "tdeck_plus"
 chip        = "esp32s3"
+kernel_type = "native"
 flash_mb    = 16
 port        = "/dev/ttyACM0"
 psram       = true
@@ -25,9 +26,15 @@ wifi        = true
 bt          = true
 lora        = "sx1276"
 
+# NOTE: deliberately windowed-tier (miniwin) rather than blackpurr's shell
+# tier — a product decision to run windowed system apps on this device,
+# not a bug fix. See docs/01_Architecture.md's two-tier UI model.
 [modules]
-ui          = "blackpurr"
+ui          = "miniwin"
 app_manager = "app_manager"
+
+[ui]
+theme       = "wce"
 
 [apps]
 settings    = true
@@ -41,7 +48,7 @@ hwtest      = true
 display/st7789    = 1
 touch/gt911       = 1
 input/trackball   = 1
-blackpurr         = 2
+miniwin           = 2
 app_manager       = 2
 radio/sx1276      = 2
 gps/generic_nmea  = 3

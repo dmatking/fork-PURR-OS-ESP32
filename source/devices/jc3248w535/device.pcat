@@ -5,6 +5,7 @@
 [device]
 name        = "jc3248w535"
 chip        = "esp32s3"
+kernel_type = "native"
 flash_mb    = 16
 psram       = true
 psram_mb    = 8

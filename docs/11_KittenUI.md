@@ -60,7 +60,7 @@ theme = dark
 ```c
 // From any app or module:
 nvs_handle_t h;
-nvs_open("kittenui", NVS_READWRITE, &h);
+nvs_open("purr_settings", NVS_READWRITE, &h);
 nvs_set_str(h, "theme", "dark");
 nvs_commit(h);
 nvs_close(h);

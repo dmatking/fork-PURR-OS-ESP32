@@ -7,4 +7,4 @@ tier        = "claw"
 author      = "PURR OS"
 description = "Built-in terminal. Commands: help, ls, cat, echo, modules, reboot, clear."
 
-idf_requires = "esp_common driver freertos nvs_flash vfs fatfs spiffs
+idf_requires = "esp_common driver freertos nvs_flash vfs fatfs spiffs"

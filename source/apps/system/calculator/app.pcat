@@ -7,4 +7,4 @@ tier        = "paws"
 author      = "PURR OS"
 description = "Basic calculator. Operations: + - * / with decimal support."
 
-idf_requires = "esp_common freertos
+idf_requires = "esp_common freertos"

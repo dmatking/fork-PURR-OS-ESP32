@@ -1,0 +1,8 @@
+# PURR OS — tdeck manual overrides (hand-maintained; chained after the
+# AUTO-GENERATED CoreOS/sdkconfig_tdeck in SDKCONFIG_DEFAULTS)
+
+# LVGL: swap color bytes for SPI display
+CONFIG_LV_COLOR_16_SWAP=y
+
+# Touch: X axis mirrored due to mirror_x on ST7789 panel
+CONFIG_PURR_TOUCH_FLIP_X=y

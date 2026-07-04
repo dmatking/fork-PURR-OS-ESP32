@@ -5,6 +5,7 @@
 [device]
 name        = "tdeck"
 chip        = "esp32s3"
+kernel_type = "native"
 flash_mb    = 16
 psram       = false
 spiffs_kb      = 512

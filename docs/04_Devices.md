@@ -8,6 +8,7 @@ Each supported device has a `device.pcat` at `source/devices/<slug>/device.pcat`
 [device]
 name        = "human readable name"
 chip        = "esp32" | "esp32s3"
+kernel_type = "native" | "arduino"    # drives CMake's Wire-vs-IDF-driver REQUIRES
 flash_mb    = 4 | 8 | 16
 psram       = true | false
 psram_mb    = 8
@@ -59,7 +60,7 @@ display_dc    = 11
 purrstrap reads this file to:
 1. Determine which driver blobs to include in the SPIFFS image
 2. Generate `purr_device_glue.c` with pin `#defines` and radio capability flags
-3. Select sdkconfig (chip, flash size, PSRAM settings)
+3. Generate `CoreOS/sdkconfig_<slug>` (chip, flash size, PSRAM, UI backend, Arduino kernel config) via `purrstrap generate` — see [07_Build_Tools.md](07_Build_Tools.md)
 4. Decide which system apps to bake in
 
 ---
@@ -297,11 +298,11 @@ Override with explicit `apps.* = true | false` in device.pcat.
 
 ## Adding a New Device
 
-1. Create `source/devices/<slug>/device.pcat` — fill in all sections
+1. Create `source/devices/<slug>/device.pcat` — fill in all sections, including `kernel_type`
 2. If the device needs specialized hardware init, create `source/kernel/kernel_<slug>/` with a `boot.c` or `boot.cpp`
-3. Add an sdkconfig override at `CoreOS/sdkconfig_<slug>` if chip/PSRAM/flash differs from defaults
+3. `purrstrap build <slug>` (or `purrstrap generate <slug>`) generates `CoreOS/sdkconfig_<slug>` automatically from device.pcat — only add a hand-maintained `CoreOS/sdkconfig_<slug>.overrides` if the device needs a hardware-specific quirk with no equivalent pcat field (panel mirroring, WinCE shell, etc. — see the existing `.overrides` files for examples)
 4. Run `purrstrap list` — your device should appear
-5. Run `purrstrap build <slug>` — purrstrap generates glue and assembles the image
+5. Run `purrstrap build <slug>` — purrstrap generates glue + sdkconfig and assembles the image
 
 If the display or touch driver does not exist yet, see [05_Drivers.md](05_Drivers.md).
 

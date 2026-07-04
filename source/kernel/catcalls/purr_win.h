@@ -110,6 +110,30 @@ static inline void purr_win_textarea_on_change(purr_wid_t wid,
     _UI_VOID(textarea_cb, wid, cb, user);
 }
 
+// ── List ──────────────────────────────────────────────────────────────────────
+
+static inline purr_wid_t purr_win_list(purr_win_t win,
+                                        uint16_t w_pct, uint16_t h_pct) {
+    return _UI_CALL(purr_wid_t, 0, list_create, win, w_pct, h_pct);
+}
+static inline void purr_win_list_set_items(purr_wid_t wid,
+                                            const char **items, int count) {
+    _UI_VOID(list_set_items, wid, items, count);
+}
+static inline void purr_win_list_clear(purr_wid_t wid) {
+    _UI_VOID(list_clear, wid);
+}
+static inline int purr_win_list_get_selected(purr_wid_t wid) {
+    return _UI_CALL(int, -1, list_get_selected, wid);
+}
+static inline void purr_win_list_set_selected(purr_wid_t wid, int index) {
+    _UI_VOID(list_set_selected, wid, index);
+}
+static inline void purr_win_list_on_select(purr_wid_t wid,
+                                           purr_win_cb_t cb, void *user) {
+    _UI_VOID(list_cb, wid, cb, user);
+}
+
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 static inline purr_wid_t purr_win_row(purr_win_t win, uint8_t pad) {

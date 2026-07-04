@@ -12,17 +12,19 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-#define CATCALL_UI_VERSION 1
+#define CATCALL_UI_VERSION 2
 
 typedef uint32_t purr_win_t;   // window handle
 typedef uint32_t purr_wid_t;   // widget handle (label, button, textarea, etc.)
 
 // Widget event types passed to callbacks
 typedef enum {
-    PURR_EVENT_CLICKED  = 0,
-    PURR_EVENT_CHANGED  = 1,   // textarea text changed
-    PURR_EVENT_FOCUSED  = 2,
-    PURR_EVENT_DEFOCUS  = 3,
+    PURR_EVENT_CLICKED   = 0,
+    PURR_EVENT_CHANGED   = 1,   // textarea text changed
+    PURR_EVENT_FOCUSED   = 2,
+    PURR_EVENT_DEFOCUS   = 3,
+    PURR_EVENT_SELECTED  = 4,   // list: highlight moved (no confirm)
+    PURR_EVENT_ACTIVATED = 5,   // list: entry confirmed/entered
 } purr_event_t;
 
 typedef void (*purr_win_cb_t)(purr_wid_t wid, purr_event_t event, void *user);
@@ -69,6 +71,14 @@ typedef struct {
     const char *(*textarea_get)    (purr_wid_t wid);    // current text (backend-owned)
     void       (*textarea_focus)   (purr_wid_t wid);    // show keyboard / cursor
     void       (*textarea_cb)      (purr_wid_t wid, purr_win_cb_t cb, void *user);
+
+    // ── List (flat, non-nested selectable list) ─────────────────────────────
+    purr_wid_t (*list_create)       (purr_win_t win, uint16_t w_pct, uint16_t h_pct);
+    void       (*list_set_items)    (purr_wid_t wid, const char **items, int count);
+    void       (*list_clear)        (purr_wid_t wid);
+    int        (*list_get_selected) (purr_wid_t wid);   // -1 if none
+    void       (*list_set_selected) (purr_wid_t wid, int index);
+    void       (*list_cb)           (purr_wid_t wid, purr_win_cb_t cb, void *user);
 
     // ── Layout helpers ─────────────────────────────────────────────────────
     // Begin a row or column container inside win. Returns container widget.

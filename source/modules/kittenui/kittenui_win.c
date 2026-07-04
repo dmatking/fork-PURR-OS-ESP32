@@ -201,6 +201,102 @@ static void kw_ta_cb(purr_wid_t wid, purr_win_cb_t cb, void *user) {
     lv_obj_add_event_cb(o, ta_event_cb, LV_EVENT_VALUE_CHANGED, ctx);
 }
 
+// ── List (flat, non-nested selectable list) ──────────────────────────────────
+// KittenUI has no lv_group/encoder-navigation infrastructure today, so — like
+// MiniWin — there's no real "highlight without confirm" input path yet; a tap
+// fires SELECTED immediately followed by ACTIVATED. The per-button ctx only
+// carries the owning list's wid — cb/user are looked up from s_list_meta at
+// click time so calling list_cb() after list_set_items() still works.
+
+typedef struct { purr_win_cb_t cb; void *user; int selected_idx; } list_meta_t;
+static list_meta_t s_list_meta[MAX_WIDS];
+
+static void list_btn_event_cb(lv_event_t *e) {
+    cb_ctx_t *ctx = (cb_ctx_t *)lv_event_get_user_data(e);
+    if (!ctx) return;
+    purr_wid_t list_wid = ctx->wid;
+    lv_obj_t *list = get_wid(list_wid);
+    lv_obj_t *btn = lv_event_get_target(e);
+    if (!list || !btn || list_wid < 1 || list_wid > MAX_WIDS) return;
+
+    list_meta_t *meta = &s_list_meta[list_wid - 1];
+    if (meta->selected_idx >= 0) {
+        lv_obj_t *prev_btn = lv_obj_get_child(list, meta->selected_idx);
+        if (prev_btn) lv_obj_clear_state(prev_btn, LV_STATE_CHECKED);
+    }
+    lv_obj_add_state(btn, LV_STATE_CHECKED);
+    meta->selected_idx = (int)lv_obj_get_index(btn);
+
+    if (meta->cb) {
+        meta->cb(list_wid, PURR_EVENT_SELECTED, meta->user);
+        meta->cb(list_wid, PURR_EVENT_ACTIVATED, meta->user);
+    }
+}
+
+static purr_wid_t kw_list_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
+    lv_obj_t *w = get_win(h);
+    if (!w) return 0;
+    lv_obj_t *list = lv_list_create(lv_win_get_content(w));
+    lv_obj_set_size(list, LV_PCT(w_pct), LV_PCT(h_pct));
+    purr_wid_t wid = alloc_wid(list);
+    if (wid >= 1 && wid <= MAX_WIDS) {
+        s_list_meta[wid - 1].cb = NULL;
+        s_list_meta[wid - 1].user = NULL;
+        s_list_meta[wid - 1].selected_idx = -1;
+    }
+    return wid;
+}
+
+static void kw_list_set_items(purr_wid_t wid, const char **items, int count) {
+    lv_obj_t *list = get_wid(wid);
+    if (!list || wid < 1 || wid > MAX_WIDS) return;
+    lv_obj_clean(list);
+    s_list_meta[wid - 1].selected_idx = -1;
+    for (int i = 0; i < count; i++) {
+        lv_obj_t *btn = lv_list_add_btn(list, NULL, (items && items[i]) ? items[i] : "");
+        cb_ctx_t *ctx = heap_caps_malloc(sizeof(cb_ctx_t), MALLOC_CAP_DEFAULT);
+        if (ctx) {
+            ctx->cb = NULL;
+            ctx->user = NULL;
+            ctx->wid = wid;
+            lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_CLICKED, ctx);
+        }
+    }
+}
+
+static void kw_list_clear(purr_wid_t wid) {
+    kw_list_set_items(wid, NULL, 0);
+}
+
+static int kw_list_get_selected(purr_wid_t wid) {
+    if (wid < 1 || wid > MAX_WIDS) return -1;
+    return s_list_meta[wid - 1].selected_idx;
+}
+
+static void kw_list_set_selected(purr_wid_t wid, int index) {
+    lv_obj_t *list = get_wid(wid);
+    if (!list || wid < 1 || wid > MAX_WIDS) return;
+    list_meta_t *meta = &s_list_meta[wid - 1];
+    if (meta->selected_idx >= 0) {
+        lv_obj_t *prev_btn = lv_obj_get_child(list, meta->selected_idx);
+        if (prev_btn) lv_obj_clear_state(prev_btn, LV_STATE_CHECKED);
+    }
+    meta->selected_idx = index;
+    if (index >= 0) {
+        lv_obj_t *btn = lv_obj_get_child(list, index);
+        if (btn) {
+            lv_obj_add_state(btn, LV_STATE_CHECKED);
+            lv_obj_scroll_to_view(btn, LV_ANIM_OFF);
+        }
+    }
+}
+
+static void kw_list_cb(purr_wid_t wid, purr_win_cb_t cb, void *user) {
+    if (wid < 1 || wid > MAX_WIDS) return;
+    s_list_meta[wid - 1].cb = cb;
+    s_list_meta[wid - 1].user = user;
+}
+
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 static purr_wid_t kw_layout_begin(purr_win_t h, purr_layout_t dir, uint8_t pad) {
@@ -263,6 +359,12 @@ static const catcall_ui_t s_kittenui_win = {
     .textarea_get    = kw_ta_get,
     .textarea_focus  = kw_ta_focus,
     .textarea_cb     = kw_ta_cb,
+    .list_create     = kw_list_create,
+    .list_set_items  = kw_list_set_items,
+    .list_clear      = kw_list_clear,
+    .list_get_selected = kw_list_get_selected,
+    .list_set_selected = kw_list_set_selected,
+    .list_cb         = kw_list_cb,
     .layout_begin    = kw_layout_begin,
     .layout_end      = kw_layout_end,
     .kb_show         = kw_kb_show,
