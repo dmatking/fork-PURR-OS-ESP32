@@ -41,6 +41,13 @@ static int s_layout_owner_win[MAX_WIDS];
 typedef struct { purr_win_cb_t cb; void *user; } close_hook_t;
 static close_hook_t s_close_hooks[MAX_WINS];
 
+// Single on-screen keyboard shared by every window (see ck_kb_show()/
+// ck_kb_hide() below) — s_keyboard_owner_win tracks which window's textarea
+// it's currently bound to, so ck_win_destroy() can unbind before that
+// window's textarea is freed out from under it (see its comment).
+static lv_obj_t *s_keyboard = NULL;
+static purr_win_t s_keyboard_owner_win = 0;
+
 static purr_win_t alloc_win(lv_obj_t *obj) {
     for (int i = 0; i < MAX_WINS; i++) {
         if (!s_wins[i]) { s_wins[i] = obj; return (purr_win_t)(i + 1); }
@@ -182,6 +189,19 @@ static purr_win_t ck_win_create(const char *title) {
 
 static void ck_win_destroy(purr_win_t h) {
     lv_obj_t *w = get_win(h);
+    if (s_keyboard && s_keyboard_owner_win == h) {
+        // This window owns the textarea the on-screen keyboard is currently
+        // bound to — unbind before lv_obj_del() frees it below, otherwise
+        // the keyboard keeps a dangling lv_obj_t* and the next keypress
+        // anywhere crashes (LoadProhibited inside lv_obj_get_parent(),
+        // reached via lv_keyboard_def_event_cb -> lv_textarea_add_text on
+        // the freed textarea) — confirmed live via a real crash after
+        // closing a dialog (e.g. fileman's "New Folder" prompt) while its
+        // textarea was still the keyboard's target.
+        lv_keyboard_set_textarea(s_keyboard, NULL);
+        lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
+        s_keyboard_owner_win = 0;
+    }
     if (w) lv_obj_del(w);
     if (h >= 1 && h <= MAX_WINS) {
         s_active_layout[h - 1] = NULL;
@@ -467,8 +487,8 @@ static void ck_layout_end(purr_wid_t wid) {
 }
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
-
-static lv_obj_t *s_keyboard = NULL;
+// s_keyboard/s_keyboard_owner_win are declared near the top of this file
+// (alongside s_close_hooks) since ck_win_destroy() needs them too.
 
 static void ck_kb_show(purr_win_t h, purr_wid_t target) {
     lv_obj_t *w = get_win(h);
@@ -478,6 +498,7 @@ static void ck_kb_show(purr_win_t h, purr_wid_t target) {
         s_keyboard = lv_keyboard_create(lv_scr_act());
     }
     lv_keyboard_set_textarea(s_keyboard, ta);
+    s_keyboard_owner_win = h;
     lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_keyboard);
 }

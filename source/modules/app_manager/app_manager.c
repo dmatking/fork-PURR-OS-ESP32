@@ -9,8 +9,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -149,9 +151,27 @@ typedef struct {
     const purr_module_header_t *mod;      // non-null for pre-linked native apps
     TaskHandle_t            task;
     SemaphoreHandle_t       done;
+    // Which deletion function this task's own self-delete (and
+    // app_manager_stop()'s force-delete path) must use — see the static
+    // stack pool comment below for why this can't be a single constant.
+    bool                     static_stack;
 } app_task_ctx_t;
 
 static app_task_ctx_t s_ctxs[MAX_APPS];
+
+// ── Static stack pool for apps that touch NVS/flash directly ────────────────
+// See launch_native()'s comment for the full story: settings/fileman must run
+// with an internal-RAM stack (PSRAM stacks crash when their task disables
+// cache for a flash/NVS op), but a *dynamic* internal allocation competes with
+// whatever else has fragmented internal DRAM by the time the user taps the
+// icon — confirmed live to fail within a session even at just 8KB. A
+// dedicated static buffer per app sidesteps runtime fragmentation entirely:
+// its address and size are fixed at link time, not requested from the heap.
+#define STATIC_STACK_SIZE 8192
+static StackType_t  s_static_stack_settings[STATIC_STACK_SIZE];
+static StaticTask_t s_static_tcb_settings;
+static StackType_t  s_static_stack_fileman[STATIC_STACK_SIZE];
+static StaticTask_t s_static_tcb_fileman;
 
 // ── Lua VM dispatch ───────────────────────────────────────────────────────────
 //
@@ -171,7 +191,7 @@ static void meow_task(void *arg) {
         ctx->app->state = APP_STATE_ERROR;
         snprintf(ctx->app->error, sizeof(ctx->app->error), "lua_runtime not loaded");
         xSemaphoreGive(ctx->done);
-        vTaskDelete(NULL);
+        vTaskDeleteWithCaps(NULL);
         return;
     }
     // lua_runtime.init() picks up the pending path via s_meow_pending_path
@@ -187,7 +207,7 @@ static void meow_task(void *arg) {
         snprintf(ctx->app->error, sizeof(ctx->app->error), "lua_runtime init failed (%d)", rc);
     }
     xSemaphoreGive(ctx->done);
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 static int launch_meow(app_entry_t *app, int idx)
@@ -206,12 +226,23 @@ static int launch_meow(app_entry_t *app, int idx)
     ctx->app  = app;
     ctx->mod  = lua_rt;
     ctx->done = xSemaphoreCreateBinary();
+    if (!ctx->done) {
+        // See launch_native()'s matching check for why this is necessary.
+        ESP_LOGE(TAG, "xSemaphoreCreateBinary failed for '%s' — out of memory", app->name);
+        app->state = APP_STATE_ERROR;
+        snprintf(app->error, sizeof(app->error), "out of memory");
+        return -1;
+    }
 
     ESP_LOGI(TAG, "launch .meow: %s", app->path);
 
-    BaseType_t ok = xTaskCreate(meow_task, app->name, 8192, ctx, 5, &ctx->task);
+    // Stack lives in PSRAM (MALLOC_CAP_SPIRAM) — see launch_native()'s
+    // comment for why: internal DRAM alone is too fragmented/small to
+    // reliably fit an 8-16KB task stack once WiFi/BT/LoRa/LVGL buffers are
+    // all resident, and this board has 8MB of otherwise-idle PSRAM.
+    BaseType_t ok = xTaskCreateWithCaps(meow_task, app->name, 8192, ctx, 5, &ctx->task, MALLOC_CAP_SPIRAM);
     if (ok != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate failed for '%s' — likely out of internal heap", app->name);
+        ESP_LOGE(TAG, "xTaskCreateWithCaps failed for '%s' — out of PSRAM too?", app->name);
         app->state = APP_STATE_ERROR;
         snprintf(app->error, sizeof(app->error), "xTaskCreate failed (out of memory?)");
         vSemaphoreDelete(ctx->done);
@@ -249,7 +280,13 @@ static void native_task(void *arg) {
         snprintf(ctx->app->error, sizeof(ctx->app->error), "init() returned %d", rc);
     }
     xSemaphoreGive(ctx->done);
-    vTaskDelete(NULL);
+    // Must match how this task's stack was allocated — a statically-created
+    // task's stack isn't heap memory at all, so vTaskDeleteWithCaps() (which
+    // assumes a WithCaps-created task) would be operating on the wrong
+    // assumption; plain vTaskDelete() is correct for both a normal dynamic
+    // task and one created with xTaskCreateStatic().
+    if (ctx->static_stack) vTaskDelete(NULL);
+    else                   vTaskDeleteWithCaps(NULL);
 }
 
 static int launch_native(app_entry_t *app, int idx)
@@ -272,29 +309,88 @@ static int launch_native(app_entry_t *app, int idx)
     ctx->app  = app;
     ctx->mod  = mod;
     ctx->done = xSemaphoreCreateBinary();
+    if (!ctx->done) {
+        // Under extreme internal-DRAM exhaustion this can fail too — without
+        // this check, native_task()'s xSemaphoreGive(ctx->done) and this
+        // function's own vSemaphoreDelete(ctx->done) further down both hit
+        // FreeRTOS's own configASSERT(pxQueue) on a NULL handle and abort.
+        // Confirmed live at internal=23 largest_internal_block=0.
+        ESP_LOGE(TAG, "xSemaphoreCreateBinary failed for '%s' — out of memory", app->name);
+        app->state = APP_STATE_ERROR;
+        snprintf(app->error, sizeof(app->error), "out of memory");
+        return -1;
+    }
 
     ESP_LOGI(TAG, "launch .%s: %s (pre-linked module) — free heap: internal=%u largest_internal_block=%u",
              tier_name(app->tier), app->name,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
-    // Stack size: .claw apps get more stack (kernel access)
-    uint32_t stack = (app->tier == APP_TIER_CLAW) ? 16384 : 8192;
-    BaseType_t ok = xTaskCreate(native_task, app->name, stack, ctx, 5, &ctx->task);
-    if (ok != pdPASS) {
-        // xTaskCreate's return value was never checked before — a silent
-        // failure here (task stacks come out of internal DRAM regardless of
-        // PSRAM being present, and that pool is small and shared with
-        // WiFi/BT/LoRa/LVGL buffers) left `state` stuck at RUNNING forever
-        // with no task ever created, so every later tap on ANY app silently
-        // no-op'd via the `state == APP_STATE_RUNNING` guard below — exactly
-        // matching "apps just don't open" with zero error or crash.
-        ESP_LOGE(TAG, "xTaskCreate failed for '%s' (stack=%u) — likely out of internal heap", app->name, (unsigned)stack);
-        app->state = APP_STATE_ERROR;
-        snprintf(app->error, sizeof(app->error), "xTaskCreate failed (out of memory?)");
-        vSemaphoreDelete(ctx->done);
-        ctx->done = NULL;
-        return -1;
+    // Stack size: .claw apps get more stack (kernel access). Root-caused live:
+    // internal DRAM is fragmented enough by boot (WiFi/BT/LoRa/LVGL buffers
+    // all resident) that its largest free block was ~9KB — smaller than even
+    // the 8KB .paws stack, so a plain xTaskCreate() (internal-DRAM-only)
+    // failed on every single launch, every app, unconditionally. This board
+    // has 8MB of otherwise-idle PSRAM, so the stack is allocated there
+    // instead via xTaskCreateWithCaps(..., MALLOC_CAP_SPIRAM) for most apps —
+    // must be paired with vTaskDeleteWithCaps() (used above and in
+    // app_manager_stop()) rather than plain vTaskDelete().
+    //
+    // EXCEPTION: apps that directly touch NVS/flash (settings' nvs_load(),
+    // fileman's /flash browsing) must NOT run on a PSRAM-backed stack —
+    // confirmed live via a hard crash: "assert failed:
+    // spi_flash_disable_interrupts_caches_and_other_cpu ...
+    // (esp_task_stack_is_sane_cache_disabled())". Any flash/NVS op briefly
+    // disables the cache (which is what makes PSRAM reachable at all), and
+    // that assert exists specifically to catch a task whose OWN stack lives
+    // in the now-unreachable PSRAM continuing to execute through it.
+    //
+    // A *dynamic* internal-RAM allocation for these two isn't good enough
+    // either — confirmed live it can fail within the same session once
+    // internal DRAM fragments below ~8KB (from other apps' LVGL widgets
+    // accumulating), correctly reporting APP_STATE_ERROR instead of
+    // crashing, but still failing to launch. Each gets its own dedicated
+    // static stack buffer instead (declared above) — fixed at link time, so
+    // it can never be starved out by runtime fragmentation.
+    ctx->static_stack = (strcmp(app->name, "settings") == 0) ||
+                        (strcmp(app->name, "fileman")  == 0);
+    if (ctx->static_stack) {
+        StackType_t  *stack_buf;
+        StaticTask_t *tcb_buf;
+        if (strcmp(app->name, "settings") == 0) {
+            stack_buf = s_static_stack_settings;
+            tcb_buf   = &s_static_tcb_settings;
+        } else {
+            stack_buf = s_static_stack_fileman;
+            tcb_buf   = &s_static_tcb_fileman;
+        }
+        ctx->task = xTaskCreateStatic(native_task, app->name, STATIC_STACK_SIZE, ctx, 5, stack_buf, tcb_buf);
+        if (!ctx->task) {
+            // Can't happen in practice (a static buffer never "runs out"),
+            // but xTaskCreateStatic() can still return NULL on bad params.
+            ESP_LOGE(TAG, "xTaskCreateStatic failed for '%s'", app->name);
+            app->state = APP_STATE_ERROR;
+            snprintf(app->error, sizeof(app->error), "xTaskCreateStatic failed");
+            vSemaphoreDelete(ctx->done);
+            ctx->done = NULL;
+            return -1;
+        }
+    } else {
+        uint32_t stack = (app->tier == APP_TIER_CLAW) ? 16384 : 8192;
+        BaseType_t ok = xTaskCreateWithCaps(native_task, app->name, stack, ctx, 5, &ctx->task, MALLOC_CAP_SPIRAM);
+        if (ok != pdPASS) {
+            // xTaskCreate's return value was never checked before — a silent
+            // failure here left `state` stuck at RUNNING forever with no task
+            // ever created, so every later tap on ANY app silently no-op'd via
+            // the `state == APP_STATE_RUNNING` guard below — exactly matching
+            // "apps just don't open" with zero error or crash.
+            ESP_LOGE(TAG, "xTaskCreateWithCaps failed for '%s' (stack=%u)", app->name, (unsigned)stack);
+            app->state = APP_STATE_ERROR;
+            snprintf(app->error, sizeof(app->error), "xTaskCreate failed (out of memory?)");
+            vSemaphoreDelete(ctx->done);
+            ctx->done = NULL;
+            return -1;
+        }
     }
     app->state = APP_STATE_RUNNING;
     return 0;
@@ -374,7 +470,13 @@ void app_manager_stop(int idx)
             ctx->task = NULL;
         } else if (ctx->task) {
             ESP_LOGW(TAG, "force-deleting task for '%s'", app->name);
-            vTaskDelete(ctx->task);
+            // Must match how this task's stack was created (see
+            // native_task()'s matching comment) — static-stack apps
+            // (settings/fileman) use plain vTaskDelete(); everything else
+            // was created via xTaskCreateWithCaps() (PSRAM-backed stack)
+            // and needs vTaskDeleteWithCaps().
+            if (ctx->static_stack) vTaskDelete(ctx->task);
+            else                   vTaskDeleteWithCaps(ctx->task);
             ctx->task = NULL;
         }
         vSemaphoreDelete(ctx->done);

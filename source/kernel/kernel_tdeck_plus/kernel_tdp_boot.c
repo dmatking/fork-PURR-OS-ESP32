@@ -46,6 +46,9 @@
 #include "esp_event.h"
 #include "esp_wifi.h"
 
+// AES hardware-lock prewarm (see app_main()'s call site comment)
+#include "aes/esp_aes.h"
+
 static const char *TAG = "tdp_boot";
 
 // ── T-Deck Plus pin assignments ───────────────────────────────────────────────
@@ -329,6 +332,22 @@ void app_main(void)
         nvs_flash_erase();
         nvs_flash_init();
     }
+
+    // Prewarm the hardware AES lock while internal DRAM is still abundant.
+    // esp_aes_acquire_hardware() lazily creates its underlying mutex (via
+    // newlib's lock_init_generic() -> xQueueCreateMutex()) the FIRST time
+    // anything calls it — if that first call happens much later (e.g.
+    // meshtastic's periodic self-NodeInfo broadcast, after WiFi/BT/LoRa/app
+    // windows have already eaten most of internal DRAM), the allocation can
+    // fail and lock_init_generic() hard-aborts the whole device. Confirmed
+    // live via a real boot-time crash ("abort() was called ... /* No more
+    // semaphores available or OOM */" inside lock_init_generic, reached via
+    // esp_aes_acquire_hardware <- mesh_radio_aes_ctr). One throwaway
+    // acquire/release here — before anything else has a chance to touch
+    // internal DRAM — makes that lock permanently initialized so it can
+    // never fail this way again for the rest of the session.
+    esp_aes_acquire_hardware();
+    esp_aes_release_hardware();
 
     mount_flash_vfs();
 

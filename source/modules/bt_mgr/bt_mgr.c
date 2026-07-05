@@ -122,6 +122,16 @@ int bt_mgr_scan(uint32_t duration_sec) {
     esp_ble_gap_set_scan_params(&scan_params);
 
     if (!s_scan_done_sem) s_scan_done_sem = xSemaphoreCreateBinary();
+    if (!s_scan_done_sem) {
+        // xSemaphoreCreateBinary() was never checked before — under real
+        // memory pressure it can return NULL, and xSemaphoreTake() on a
+        // NULL handle hits FreeRTOS's own configASSERT(pxQueue) and aborts
+        // the whole device. Confirmed live via a real crash (assert failed:
+        // xQueueSemaphoreTake ... ( pxQueue )) triggered from Settings'
+        // Bluetooth "Scan" button.
+        ESP_LOGE(TAG, "xSemaphoreCreateBinary failed — out of memory?");
+        return -1;
+    }
     esp_ble_gap_start_scanning(duration_sec);
 
     xSemaphoreTake(s_scan_done_sem, pdMS_TO_TICKS((duration_sec + 2) * 1000));
