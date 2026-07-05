@@ -13,12 +13,9 @@
 
 #include "lvgl.h"
 #include "esp_heap_caps.h"
-#include "esp_log.h"
 #include "../../kernel/catcalls/catcall_ui.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "cupcake.h"
-
-static const char *TAG = "cupcake_win";
 
 #define MAX_WINS  16
 #define MAX_WIDS  128
@@ -137,8 +134,6 @@ static void close_btn_event_cb(lv_event_t *e) {
 
 static purr_win_t ck_win_create(const char *title) {
     lv_obj_t *win = lv_win_create(lv_scr_act(), 32);
-    ESP_LOGI(TAG, "win_create '%s' -> lv_obj=%p (scr_act=%p, num_children_before=%d)",
-             title, (void *)win, (void *)lv_scr_act(), (int)lv_obj_get_child_cnt(lv_scr_act()));
     lv_win_add_title(win, title);
 
     // Allocated early so button callbacks get the purr_win_t handle (not the
@@ -196,17 +191,15 @@ static void ck_win_on_close(purr_win_t h, purr_win_cb_t cb, void *user) {
 
 static void ck_win_show(purr_win_t h) {
     lv_obj_t *w = get_win(h);
-    ESP_LOGI(TAG, "win_show handle=%u -> lv_obj=%p", (unsigned)h, (void *)w);
-    if (w) {
-        lv_obj_clear_flag(w, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(w);
-        ESP_LOGI(TAG, "win_show: hidden_flag_after=%d pos=(%d,%d) size=(%d,%d) parent=%p sibling_index=%d/%d",
-                 (int)lv_obj_has_flag(w, LV_OBJ_FLAG_HIDDEN),
-                 (int)lv_obj_get_x(w), (int)lv_obj_get_y(w),
-                 (int)lv_obj_get_width(w), (int)lv_obj_get_height(w),
-                 (void *)lv_obj_get_parent(w),
-                 (int)lv_obj_get_index(w), (int)lv_obj_get_child_cnt(lv_obj_get_parent(w)));
-    }
+    if (!w) return;
+    lv_obj_clear_flag(w, LV_OBJ_FLAG_HIDDEN);
+    // Every app window is a same-parent (lv_scr_act()) sibling of the home
+    // screen, the drawer, and every other app's window — move_foreground()
+    // makes this one the last child, i.e. painted last/on top of all of
+    // them. The status bar/panels live on lv_layer_top(), a separate LVGL
+    // layer always composited above lv_scr_act() regardless of sibling
+    // order, so it's structurally never covered by this.
+    lv_obj_move_foreground(w);
 }
 
 static void ck_win_hide(purr_win_t h) {

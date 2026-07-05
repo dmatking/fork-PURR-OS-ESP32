@@ -26,13 +26,8 @@ wifi        = true
 bt          = true
 lora        = "sx1262"
 
-# Cupcake is parked as a work-in-progress — an app-window-visibility bug
-# (windows never becoming visible/foregrounded after launch) is still
-# unresolved there. Back to MiniWin + the WinCE-style desktop
-# (PURR_MINIWIN_DESKTOP_WINCE, now the project-wide default in
-# Kconfig.projbuild) as the working default while that gets sorted out.
 [modules]
-ui          = "miniwin"
+ui          = "cupcake"
 app_manager = "app_manager"
 mesh        = "meshtastic"
 
