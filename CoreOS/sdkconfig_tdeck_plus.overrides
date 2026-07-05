@@ -35,6 +35,27 @@ CONFIG_PURR_MINIWIN_DESKTOP_WINCE=y
 # cupcake_ui.c, so PSRAM is already in use where it actually matters.
 CONFIG_LV_MEM_CUSTOM=y
 
+# Internal DRAM is drastically scarcer than expected in practice — confirmed
+# live via a periodic heap-watch log: free internal RAM drops to ~1-2KB
+# within ~14s of boot and *stays* there indefinitely (flat, not a leak —
+# watched for 80+ seconds at idle with nothing touched), while PSRAM sits
+# at a constant ~8.15MB free the whole time. User-reported symptom: "23
+# bytes free... high memory pressure out of the gate."
+#
+# ATTEMPTED FIX, REVERTED: lowering CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL to
+# 512 plus CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y made things categorically
+# worse, not better — cupcake_task and mesh_task (both plain xTaskCreate(),
+# internal-only stacks, unrelated to this session's PSRAM-stack work) then
+# failed to even start at boot ("failed to create cupcake task"/"failed to
+# create mesh task"), before either WiFi or BT had done any real work.
+# Something about how WIFI_LWIP's PSRAM preference interacts with this
+# board's early boot sequence increases internal pressure rather than
+# relieving it — not yet understood. Reverted both to defaults (16384,
+# unset) pending a narrower, incremental retest. Root cause of the tight
+# internal-RAM budget itself is still real and still open.
+# CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
+# CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
 # Bluetooth — Bluedroid host stack, BLE only. ESP32-S3 has NO classic
 # Bluetooth (BR/EDR) hardware at all — SOC_BT_CLASSIC_SUPPORTED isn't even
 # defined for this chip in ESP-IDF's soc_caps.h (only SOC_BLE_SUPPORTED is),

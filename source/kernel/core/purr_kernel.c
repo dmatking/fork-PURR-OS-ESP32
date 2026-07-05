@@ -639,6 +639,18 @@ static void health_watchdog_task(void *arg)
     (void)arg;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(HEALTH_WATCHDOG_POLL_MS));
+
+        // TEMPORARY diagnostic — tracking a reported fast internal-DRAM
+        // drain ("23 bytes free... high memory pressure out of the gate").
+        // Logs every 2s regardless of app activity so a continuous background
+        // leak (vs. a one-time boot-time consumption) shows up as a steady
+        // downward slope even with nothing else touched. Remove once found.
+        ESP_LOGW(TAG, "heapwatch: internal_free=%u largest_internal=%u psram_free=%u uptime_ms=%llu",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned long long)purr_kernel_uptime_ms());
+
         for (int i = 0; i < s_health_count; i++) {
             health_entry_t *h = &s_health[i];
             bool alive = h->is_alive();
