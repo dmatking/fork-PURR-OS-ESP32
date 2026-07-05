@@ -489,7 +489,14 @@ static void ck_build_panel(ck_panel_t *p, uint16_t w, const char *title, lv_obj_
     lv_obj_set_size(box, (lv_coord_t)(w - 8), 160);
     lv_obj_set_pos(box, 4, CUPCAKE_STATUS_PEEK_H + 18);
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
-    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    // Scrollable + vertical-only, same fix as the "All Apps" drawer grid
+    // (build_drawer()'s s_drawer_grid) — this box's row count tracks live
+    // data (notification count / running-app count) with no upper bound, and
+    // with scrolling cleared plus remove_style_all()'s default clipping gone,
+    // rows past the fixed 160px height used to bleed out unclipped into the
+    // status bar rendered underneath on lv_layer_top().
+    lv_obj_add_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(box, LV_DIR_VER);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_CLICKABLE);
 
     *out_box = box;

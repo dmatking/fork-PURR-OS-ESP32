@@ -137,9 +137,20 @@ local ta = win.textarea(win, 100, 60)   -- w_pct, h_pct
 win.textarea_set(ta, "some text")
 local text = win.textarea_get(ta)
 
+-- Layout containers — wrap a line of widgets so they sit side-by-side
+-- instead of each stacking in its own row (mirrors purr_win_row/col in C).
+local row = win.row(win, 4)             -- pad
+win.button(win, "1", function() end)
+win.button(win, "2", function() end)
+win.layout_end(row)
+
+win.label_align(lbl, 2)   -- 0=left, 1=center, 2=right
+
 win.show(win)
 win.destroy(win)
 ```
+
+`win.row`/`win.col` hug their own content; `win.row_grow`/`win.col_grow` expand to fill the remaining space in their parent — use the `_grow` variant when the container holds percentage-sized children (a list, a textarea), same rule as the C API's `_grow` variants.
 
 Button callbacks are plain Lua closures — the VM keeps a registry reference and trampolines back into Lua on click. **Threading note**: a script's main body runs synchronously inside its launch task, which exits right after the script returns (same as every native app's `init()`) — write UI-building scripts that build the window and return, then respond to taps via callbacks, rather than scripts that loop forever themselves.
 
@@ -277,10 +288,23 @@ These are baked into the SPIFFS flash image for medium/large-screen devices:
 | `settings` | `.claw` | Theme (WCE/Dark via NVS), brightness, keyboard backlight, WiFi (scan/connect), Bluetooth (BLE scan/pair), wallpaper, SD status, About (OS/KITT version, chip, RAM, uptime, drivers — folded in from the old standalone About app), reboot |
 | `terminal` | `.claw` | Shell: `ls`, `cat`, `echo`, `modules`, `mem`, `uptime`, `reboot` |
 | `fileman` | `.claw` | Browse SPIFFS + SD; New Folder/Rename/Delete; text file preview |
-| `calculator` | `.paws` | Basic arithmetic, decimal support, ERR:DIV0 guard |
 | `hwtest` | `.claw` | Hardware diagnostics |
 | `drivermgr` | `.claw` | Lists scanned drivers (`driver_manager` module) with OK/COMPAT/FAIL/SKIP status |
 | `meshchat` | `.claw` | MSN-style buddy list + private 1:1 chat over the mesh (see `docs/03_Modules.md`'s meshtastic section) — standalone, no phone required |
+
+Calculator is no longer a built-in — it's now `calculator.meow` (`sdcard_apps/calculator.meow` in this repo), an SD-loaded `.meow` script. See "Built-in vs. SD Demo Apps" below.
+
+## SD Demo Apps
+
+`sdcard_apps/` at the repo root holds the canonical source for `.meow` scripts meant to be copied onto a device's SD card at `/sdcard/apps/` — they are never baked into the flash image. Exception: `jc3248w535` has no SD card slot (`sd_enabled = false`), so a `.meow` file could never reach it — that device keeps `calculator` as its original native `.paws` app.
+
+| Script | Demonstrates |
+|--------|--------------|
+| `calculator.meow` | Full keypad UI via `win.row`/`win.button`/`win.layout_end` — replaces the old native `calculator.paws` |
+| `clock.meow` | A callback-free loop updating a label via `system.time_ms()`/`system.delay()` |
+| `notepad.meow` | `sd.read()`/`sd.write()` wired to Save/Load buttons over a textarea |
+
+Requires the `lua_runtime` module to be flashed on the target device (see its device.pcat's `[flash]` section) — without it, `.meow` files are discovered but fail to launch.
 
 `settings` is a staple system feature — always present on any medium/large screen device (it absorbed the old standalone `about` app). The rest follow the same `purr_win.h` API and can be excluded on flash-constrained builds. There is no standalone `about` app anymore.
 
@@ -329,7 +353,7 @@ source/apps/
     settings/         theme, brightness, keyboard backlight, WiFi, Bluetooth, wallpaper, About, SD, reboot
     terminal/         built-in shell
     fileman/          file manager
-    calculator/       calculator
+    calculator/       calculator (.paws) — only still referenced by jc3248w535, the one device with no SD card slot; every other device now uses sdcard_apps/calculator.meow instead
     hwtest/           hardware diagnostics
     drivermgr/        driver status list (UI over the driver_manager module)
     meshchat/         MSN-style buddy list + private chat over Meshtastic

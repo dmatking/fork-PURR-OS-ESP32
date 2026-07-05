@@ -37,7 +37,6 @@ about       = true
 # Core usable apps
 terminal    = true
 fileman     = true
-calculator  = true
 
 [flash]
 # Priority 1 — required, kernel panics without these
@@ -46,12 +45,12 @@ touch/xpt2046    = 1
 # Priority 2 — important UI + management layer
 kittenui         = 2
 app_manager      = 2
+lua_runtime      = 2
 # Priority 3 — base OS apps
 apps/settings    = 3
 apps/about       = 3
 apps/terminal    = 3
 apps/fileman     = 3
-apps/calculator  = 3
 
 [pins]
 display_cs    = 15

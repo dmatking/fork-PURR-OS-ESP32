@@ -1,0 +1,165 @@
+-- calculator.meow — PURR OS Calculator (.meow, replaces the old .paws app)
+-- Same 4-function + percent/backspace/clear/chained-op logic as the retired
+-- source/apps/system/calculator/calculator.c, rebuilt against the win.*
+-- Lua API. Named "calculator" (this file's basename) so app_manager's
+-- make_display_name() derives the app name "calculator" and the existing
+-- icon mapping in cupcake_ui.c (icon_for_app(), {"calculator", ...}) keeps
+-- resolving with no icon-code changes.
+--
+-- Deploy: copy this file to /sdcard/apps/calculator.meow on the device's SD
+-- card — .meow apps are never baked into the firmware image.
+
+local win_h = win.create("Calculator")
+local display = win.label(win_h, "0")
+win.label_align(display, 2)   -- 2 = right
+
+-- ── State ─────────────────────────────────────────────────────────────────
+
+local accum   = 0.0
+local operand = 0.0
+local op      = nil
+local fresh   = true
+local decimal = false
+local dec_pos = 1
+local entry   = "0"
+
+local function refresh()
+    win.label_set(display, entry)
+end
+
+local function entry_set(v)
+    if v == math.floor(v) and math.abs(v) < 1e12 then
+        entry = string.format("%.0f", v)
+    else
+        entry = string.format("%.6g", v)
+    end
+    refresh()
+end
+
+local function entry_reset()
+    operand = 0.0
+    decimal = false
+    dec_pos = 1
+    fresh   = true
+    entry   = "0"
+    refresh()
+end
+
+-- ── Button handlers ──────────────────────────────────────────────────────────
+
+local function on_digit(d)
+    if fresh then
+        operand = 0.0
+        decimal = false
+        dec_pos = 1
+        entry   = "0"
+        fresh   = false
+    end
+    if not decimal then
+        operand = operand * 10.0 + d
+    else
+        dec_pos = dec_pos * 10
+        operand = operand + d / dec_pos
+    end
+    entry_set(operand)
+end
+
+local function on_dot()
+    if fresh then operand = 0.0; fresh = false end
+    if not decimal then
+        decimal = true
+        dec_pos = 1
+        entry = entry .. "."
+        refresh()
+    end
+end
+
+local function apply_op()
+    if op == "+" then
+        accum = accum + operand
+    elseif op == "-" then
+        accum = accum - operand
+    elseif op == "*" then
+        accum = accum * operand
+    elseif op == "/" then
+        if operand ~= 0.0 then
+            accum = accum / operand
+        else
+            entry = "ERR:DIV0"
+            refresh()
+            return
+        end
+    else
+        accum = operand
+    end
+    entry_set(accum)
+end
+
+local function on_op(sym)
+    -- If no digit was entered since the last operator/equals, just swap the
+    -- pending operator instead of re-applying against the same operand —
+    -- same fix as calculator.c's on_op() (5,+,-,3,= must not double-count).
+    if not fresh then apply_op() end
+    op    = sym
+    fresh = true
+end
+
+local function on_equals()
+    apply_op()
+    op    = nil
+    fresh = true
+end
+
+local function on_clear()
+    accum = 0.0
+    op    = nil
+    entry_reset()
+end
+
+local function on_sign()
+    operand = -operand
+    entry_set(operand)
+end
+
+local function on_pct()
+    operand = operand / 100.0
+    entry_set(operand)
+end
+
+-- ── Keypad layout — same 5-row grid as calculator.c ──────────────────────────
+
+local r0 = win.row(win_h, 4)
+win.button(win_h, "C",   on_clear)
+win.button(win_h, "+/-", on_sign)
+win.button(win_h, "%",   on_pct)
+win.button(win_h, "/",   function() on_op("/") end)
+win.layout_end(r0)
+
+local r1 = win.row(win_h, 4)
+win.button(win_h, "7", function() on_digit(7) end)
+win.button(win_h, "8", function() on_digit(8) end)
+win.button(win_h, "9", function() on_digit(9) end)
+win.button(win_h, "*", function() on_op("*") end)
+win.layout_end(r1)
+
+local r2 = win.row(win_h, 4)
+win.button(win_h, "4", function() on_digit(4) end)
+win.button(win_h, "5", function() on_digit(5) end)
+win.button(win_h, "6", function() on_digit(6) end)
+win.button(win_h, "-", function() on_op("-") end)
+win.layout_end(r2)
+
+local r3 = win.row(win_h, 4)
+win.button(win_h, "1", function() on_digit(1) end)
+win.button(win_h, "2", function() on_digit(2) end)
+win.button(win_h, "3", function() on_digit(3) end)
+win.button(win_h, "+", function() on_op("+") end)
+win.layout_end(r3)
+
+local r4 = win.row(win_h, 4)
+win.button(win_h, "0", function() on_digit(0) end)
+win.button(win_h, ".", on_dot)
+win.button(win_h, "=", on_equals)
+win.layout_end(r4)
+
+win.show(win_h)

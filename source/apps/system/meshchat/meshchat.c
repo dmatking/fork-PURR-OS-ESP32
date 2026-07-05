@@ -38,8 +38,21 @@
 
 static purr_win_t  s_buddy_win   = 0;
 static purr_wid_t  s_buddy_list  = 0;
+static purr_wid_t  s_status_lbl  = 0;
 static TaskHandle_t s_refresh_task = NULL;
 static bool         s_running      = false;
+
+// ── Broadcast (shared-channel) window state ──────────────────────────────────
+
+static purr_win_t  s_broadcast_win = 0;
+static purr_wid_t  s_broadcast_out = 0;
+static purr_wid_t  s_broadcast_in  = 0;
+// Heap-allocated from PSRAM (not a static array) — internal DRAM on this
+// board is already razor-thin (see cupcake_module.c's static-stack-sizing
+// comment); a new compile-time CHAT_LOG_LEN=1024 static buffer here was
+// confirmed live to overflow dram0_0_seg by 184 bytes at link time.
+static char       *s_broadcast_log = NULL;
+static size_t      s_broadcast_loglen = 0;
 
 static uint32_t     s_buddy_ids[MAX_CHATS];
 static char         s_buddy_labels[MAX_CHATS][64];
@@ -80,6 +93,30 @@ static void refresh_buddy_list(void) {
     if (s_buddy_list) purr_win_list_set_items(s_buddy_list, s_buddy_label_ptrs, s_buddy_count);
 }
 
+// Always-present status line — this and the Refresh/Broadcast row below it
+// are the fix for the "blank window" bug: previously the buddy list was the
+// *only* widget in the window, so 0 discovered peers meant a fully empty
+// box with nothing to look at or tap.
+static void refresh_status_label(void) {
+    if (!s_status_lbl) return;
+    if (!mesh_manager_ready()) {
+        purr_win_label_set(s_status_lbl, "Mesh: starting...");
+    } else if (!mesh_manager_is_alive()) {
+        purr_win_label_set(s_status_lbl, "Mesh: not responding");
+    } else {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "Mesh: ready (%d node%s)",
+                 s_buddy_count, s_buddy_count == 1 ? "" : "s");
+        purr_win_label_set(s_status_lbl, buf);
+    }
+}
+
+static void on_refresh_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    refresh_buddy_list();
+    refresh_status_label();
+}
+
 // Finds idx for a node id already known to the buddy list, refreshing once
 // if not found (covers a brand-new node's first message arriving before our
 // next periodic refresh has picked it up).
@@ -94,6 +131,7 @@ static void buddy_refresh_task(void *arg) {
     (void)arg;
     while (s_running) {
         refresh_buddy_list();
+        refresh_status_label();
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
     // Must match the WithCaps variant used to create this task (see its
@@ -103,10 +141,8 @@ static void buddy_refresh_task(void *arg) {
 
 // ── Chat log helper (same scroll-drop-half pattern as terminal.c) ───────────
 
-static void chat_log_append(int idx, const char *text) {
+static void log_append(char *buf, size_t *len, const char *text) {
     size_t tlen = strlen(text);
-    size_t *len = &s_chat_loglen[idx];
-    char   *buf = s_chat_logs[idx];
     if (*len + tlen >= CHAT_LOG_LEN - 1) {
         size_t half = CHAT_LOG_LEN / 2;
         memmove(buf, buf + half, *len - half);
@@ -115,7 +151,17 @@ static void chat_log_append(int idx, const char *text) {
     }
     memcpy(buf + *len, text, tlen + 1);
     *len += tlen;
-    if (s_chat_win[idx] && s_chat_out[idx]) purr_win_textarea_set(s_chat_out[idx], buf);
+}
+
+static void chat_log_append(int idx, const char *text) {
+    log_append(s_chat_logs[idx], &s_chat_loglen[idx], text);
+    if (s_chat_win[idx] && s_chat_out[idx]) purr_win_textarea_set(s_chat_out[idx], s_chat_logs[idx]);
+}
+
+static void broadcast_log_append(const char *text) {
+    if (!s_broadcast_log) return;
+    log_append(s_broadcast_log, &s_broadcast_loglen, text);
+    if (s_broadcast_win && s_broadcast_out) purr_win_textarea_set(s_broadcast_out, s_broadcast_log);
 }
 
 // ── Chat window ───────────────────────────────────────────────────────────────
@@ -160,6 +206,43 @@ static void on_buddy_list_event(purr_wid_t w, purr_event_t e, void *user) {
     open_chat(idx);
 }
 
+// ── Broadcast window (shared channel, not scoped to one buddy) ──────────────
+
+static void on_broadcast_send(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    const char *text = purr_win_textarea_get(s_broadcast_in);
+    if (!text || !*text) return;
+
+    char line[160];
+    snprintf(line, sizeof(line), "> %s\n", text);
+    broadcast_log_append(line);
+
+    mesh_manager_send_text(MESH_BROADCAST, text);
+    purr_win_textarea_clear(s_broadcast_in);
+}
+
+static void open_broadcast(void) {
+    if (s_broadcast_win) {
+        purr_win_show(s_broadcast_win);
+        return;
+    }
+
+    s_broadcast_win = purr_win_create("Broadcast");
+    s_broadcast_out = purr_win_textarea(s_broadcast_win, 100, 75);
+    s_broadcast_in  = purr_win_textarea(s_broadcast_win, 80, 10);
+    purr_win_button(s_broadcast_win, "Send", on_broadcast_send, NULL);
+
+    purr_win_textarea_set(s_broadcast_out, s_broadcast_log ? s_broadcast_log : "");
+    purr_win_textarea_focus(s_broadcast_in);
+    purr_win_keyboard_show(s_broadcast_win, s_broadcast_in);
+    purr_win_show(s_broadcast_win);
+}
+
+static void on_broadcast_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    open_broadcast();
+}
+
 // ── Incoming messages ─────────────────────────────────────────────────────────
 // Registers the mesh module's single RX-callback slot — meshtastic_module.c
 // already fires purr_kernel_notify() for every TEXT_MESSAGE_APP regardless
@@ -184,11 +267,29 @@ static void on_mesh_rx(uint32_t from_node, int portnum, const uint8_t *payload, 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
 static int meshchat_init(void) {
+    // Allocated once, kept alive across relaunches (same persistence as
+    // s_chat_logs) — see its declaration for why this is heap/PSRAM instead
+    // of a static array.
+    if (!s_broadcast_log) {
+        s_broadcast_log = heap_caps_malloc(CHAT_LOG_LEN, MALLOC_CAP_SPIRAM);
+        if (s_broadcast_log) s_broadcast_log[0] = '\0';
+    }
+
     s_buddy_win  = purr_win_create("MeshChat");
+    s_status_lbl = purr_win_label(s_buddy_win, "Mesh: starting...");
+
+    // Static control row — always present regardless of how many peers
+    // (zero, at worst) have been discovered, unlike the list below it.
+    purr_wid_t row = purr_win_row(s_buddy_win, 4);
+    purr_win_button(s_buddy_win, "Refresh",   on_refresh_click,   NULL);
+    purr_win_button(s_buddy_win, "Broadcast", on_broadcast_click, NULL);
+    purr_win_layout_end(row);
+
     s_buddy_list = purr_win_list(s_buddy_win, 100, 90);
     purr_win_list_on_select(s_buddy_list, on_buddy_list_event, NULL);
 
     refresh_buddy_list();
+    refresh_status_label();
     purr_win_show(s_buddy_win);
 
     mesh_manager_add_rx_callback(on_mesh_rx);
@@ -211,10 +312,15 @@ static void meshchat_deinit(void) {
             s_chat_win[i] = 0; s_chat_out[i] = 0; s_chat_in[i] = 0;
         }
     }
+    if (s_broadcast_win) {
+        purr_win_destroy(s_broadcast_win);
+        s_broadcast_win = 0; s_broadcast_out = 0; s_broadcast_in = 0;
+    }
     purr_win_destroy(s_buddy_win);
-    s_buddy_win = 0; s_buddy_list = 0;
-    // s_chat_logs/s_chat_loglen deliberately NOT cleared — chat history
-    // persists across closing and relaunching the app.
+    s_buddy_win = 0; s_buddy_list = 0; s_status_lbl = 0;
+    // s_chat_logs/s_chat_loglen/s_broadcast_log/s_broadcast_loglen
+    // deliberately NOT cleared — chat history persists across closing and
+    // relaunching the app.
 }
 
 // ── Module header ─────────────────────────────────────────────────────────────

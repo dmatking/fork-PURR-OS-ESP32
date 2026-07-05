@@ -28,10 +28,15 @@ typedef void (*mesh_rx_cb_t)(uint32_t from_node, int portnum,
 int  mesh_manager_init(void);
 void mesh_manager_deinit(void);
 
+// Destination for mesh_manager_send_text() meaning "the shared channel
+// everyone hears" rather than a specific node — part of the public API
+// (unlike the rest of mesh_radio.h, which is internal to this module).
+#define MESH_BROADCAST 0xFFFFFFFFUL
+
 // Encrypts and sends a TEXT_MESSAGE_APP packet. `to` is a destination node
-// ID for a private direct message, or MESH_BROADCAST (mesh_radio.h) for the
-// shared channel everyone hears. Returns false if the radio isn't ready yet
-// or encoding/send failed.
+// ID for a private direct message, or MESH_BROADCAST for the shared channel
+// everyone hears. Returns false if the radio isn't ready yet or encoding/
+// send failed.
 bool mesh_manager_send_text(uint32_t to, const char *text);
 
 // Register/unregister a callback for every incoming decoded packet (any

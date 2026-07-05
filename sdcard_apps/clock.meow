@@ -1,0 +1,33 @@
+-- clock.meow — PURR OS demo app: a live device-uptime clock.
+--
+-- Deploy: copy this file to /sdcard/apps/clock.meow on the device's SD card.
+--
+-- Shows HH:MM:SS since boot (system.time_ms() wraps esp_timer_get_time(),
+-- which is monotonic time since power-on, not wall-clock — there's no RTC/
+-- NTP source wired up here, so this is deliberately labeled "uptime" rather
+-- than pretending to be a real clock).
+--
+-- This script loops forever instead of building the UI and returning — the
+-- supported pattern for that is registering no button callbacks (see
+-- lua_runtime.c's threading-model note: looping scripts and button
+-- callbacks don't mix safely in this VM, but a callback-free loop is fine).
+-- Closing the window force-stops this task via app_manager_stop()'s
+-- timeout-then-kill path, same as it would for any app that doesn't return.
+
+local win_h = win.create("Clock")
+local lbl = win.label(win_h, "00:00:00")
+win.label_align(lbl, 1)   -- 1 = center
+win.show(win_h)
+
+local function format_uptime(ms)
+    local total_s = math.floor(ms / 1000)
+    local h = math.floor(total_s / 3600)
+    local m = math.floor(total_s / 60) % 60
+    local s = total_s % 60
+    return string.format("%02d:%02d:%02d", h, m, s)
+end
+
+while true do
+    win.label_set(lbl, format_uptime(system.time_ms()))
+    system.delay(1000)
+end

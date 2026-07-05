@@ -185,6 +185,48 @@ static int lua_win_textarea_get(lua_State *L) {
     return 1;
 }
 
+static int lua_win_label_align(lua_State *L) {
+    purr_wid_t wid = (purr_wid_t)luaL_checkinteger(L, 1);
+    // 0=left, 1=center, 2=right — matches purr_align_t (catcall_ui.h).
+    purr_win_label_align(wid, (purr_align_t)luaL_checkinteger(L, 2));
+    return 0;
+}
+
+// ── Layout containers ─────────────────────────────────────────────────────────
+// Thin wrappers over purr_win_row/col/row_grow/col_grow/layout_end — needed
+// for any script that lays out more than one widget per line (e.g. a
+// button grid), since without a container every widget added to a window
+// stacks in one single column.
+
+static int lua_win_row(lua_State *L) {
+    purr_win_t win = (purr_win_t)luaL_checkinteger(L, 1);
+    lua_pushinteger(L, (lua_Integer)purr_win_row(win, (uint8_t)luaL_optinteger(L, 2, 4)));
+    return 1;
+}
+
+static int lua_win_col(lua_State *L) {
+    purr_win_t win = (purr_win_t)luaL_checkinteger(L, 1);
+    lua_pushinteger(L, (lua_Integer)purr_win_col(win, (uint8_t)luaL_optinteger(L, 2, 4)));
+    return 1;
+}
+
+static int lua_win_row_grow(lua_State *L) {
+    purr_win_t win = (purr_win_t)luaL_checkinteger(L, 1);
+    lua_pushinteger(L, (lua_Integer)purr_win_row_grow(win, (uint8_t)luaL_optinteger(L, 2, 4)));
+    return 1;
+}
+
+static int lua_win_col_grow(lua_State *L) {
+    purr_win_t win = (purr_win_t)luaL_checkinteger(L, 1);
+    lua_pushinteger(L, (lua_Integer)purr_win_col_grow(win, (uint8_t)luaL_optinteger(L, 2, 4)));
+    return 1;
+}
+
+static int lua_win_layout_end(lua_State *L) {
+    purr_win_layout_end((purr_wid_t)luaL_checkinteger(L, 1));
+    return 0;
+}
+
 static void register_win_module(lua_State *L) {
     lua_newtable(L);
     lua_pushcfunction(L, lua_win_create);        lua_setfield(L, -2, "create");
@@ -192,10 +234,16 @@ static void register_win_module(lua_State *L) {
     lua_pushcfunction(L, lua_win_show);          lua_setfield(L, -2, "show");
     lua_pushcfunction(L, lua_win_label);         lua_setfield(L, -2, "label");
     lua_pushcfunction(L, lua_win_label_set);     lua_setfield(L, -2, "label_set");
+    lua_pushcfunction(L, lua_win_label_align);   lua_setfield(L, -2, "label_align");
     lua_pushcfunction(L, lua_win_button);        lua_setfield(L, -2, "button");
     lua_pushcfunction(L, lua_win_textarea);      lua_setfield(L, -2, "textarea");
     lua_pushcfunction(L, lua_win_textarea_set);  lua_setfield(L, -2, "textarea_set");
     lua_pushcfunction(L, lua_win_textarea_get);  lua_setfield(L, -2, "textarea_get");
+    lua_pushcfunction(L, lua_win_row);           lua_setfield(L, -2, "row");
+    lua_pushcfunction(L, lua_win_col);           lua_setfield(L, -2, "col");
+    lua_pushcfunction(L, lua_win_row_grow);      lua_setfield(L, -2, "row_grow");
+    lua_pushcfunction(L, lua_win_col_grow);      lua_setfield(L, -2, "col_grow");
+    lua_pushcfunction(L, lua_win_layout_end);    lua_setfield(L, -2, "layout_end");
     lua_setglobal(L, "win");
 }
 

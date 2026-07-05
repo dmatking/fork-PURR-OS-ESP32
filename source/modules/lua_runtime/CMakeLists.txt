@@ -44,7 +44,7 @@ idf_component_register(
         ../../kernel/core
         ../../kernel/catcalls
         ../app_manager
-    REQUIRES esp_common driver freertos esp_timer spiffs fatfs miniwin app_manager
+    REQUIRES esp_common driver freertos esp_timer spiffs fatfs app_manager
 )
 
 # ESP32-S3 Xtensa toolchain doesn't expose long long the way Lua 5.4 expects

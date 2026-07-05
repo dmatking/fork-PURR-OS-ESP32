@@ -41,7 +41,6 @@ settings    = true
 about       = true
 terminal    = true
 fileman     = true
-calculator  = true
 
 [flash]
 display/st7789    = 1
@@ -50,12 +49,12 @@ input/trackball   = 1
 miniwin           = 2
 app_manager       = 2
 radio/sx1276      = 2
+lua_runtime       = 2
 gps/generic_nmea  = 3
 apps/settings     = 3
 apps/about        = 3
 apps/terminal     = 3
 apps/fileman      = 3
-apps/calculator   = 3
 
 [pins]
 display_cs    = 12

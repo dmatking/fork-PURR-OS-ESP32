@@ -1,0 +1,29 @@
+-- notepad.meow — PURR OS demo app: a textarea with Save/Load over sd.*.
+--
+-- Deploy: copy this file to /sdcard/apps/notepad.meow on the device's SD
+-- card. Builds its window and returns immediately (the supported .meow
+-- pattern) — all the work happens in the Save/Load button callbacks.
+
+local PATH = "/sdcard/notepad.txt"
+
+local win_h  = win.create("Notepad")
+local ta     = win.textarea(win_h, 100, 75)
+local status = win.label(win_h, "Ready")
+
+local row = win.row(win_h, 4)
+win.button(win_h, "Save", function()
+    local ok = sd.write(PATH, win.textarea_get(ta))
+    win.label_set(status, ok and "Saved" or "Save failed")
+end)
+win.button(win_h, "Load", function()
+    local text, err = sd.read(PATH)
+    if text then
+        win.textarea_set(ta, text)
+        win.label_set(status, "Loaded")
+    else
+        win.label_set(status, "Load failed: " .. (err or "unknown error"))
+    end
+end)
+win.layout_end(row)
+
+win.show(win_h)
