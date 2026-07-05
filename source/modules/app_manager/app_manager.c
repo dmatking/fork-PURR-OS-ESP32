@@ -173,6 +173,19 @@ static StaticTask_t s_static_tcb_settings;
 static StackType_t  s_static_stack_fileman[STATIC_STACK_SIZE];
 static StaticTask_t s_static_tcb_fileman;
 
+// Every out-of-memory launch failure below funnels through here so the user
+// actually finds out why nothing happened, instead of a silent no-op —
+// which is exactly what the original "apps never open" bug looked like
+// before any of tonight's fixes.
+static void report_launch_oom(app_entry_t *app)
+{
+    app->state = APP_STATE_ERROR;
+    snprintf(app->error, sizeof(app->error), "out of memory");
+    purr_kernel_notify("Low memory",
+                        "Too much open right now — close something and try again.",
+                        "app_mgr");
+}
+
 // ── Lua VM dispatch ───────────────────────────────────────────────────────────
 //
 // .meow apps run via the lua_runtime module. That module must be loaded first
@@ -229,8 +242,7 @@ static int launch_meow(app_entry_t *app, int idx)
     if (!ctx->done) {
         // See launch_native()'s matching check for why this is necessary.
         ESP_LOGE(TAG, "xSemaphoreCreateBinary failed for '%s' — out of memory", app->name);
-        app->state = APP_STATE_ERROR;
-        snprintf(app->error, sizeof(app->error), "out of memory");
+        report_launch_oom(app);
         return -1;
     }
 
@@ -243,8 +255,7 @@ static int launch_meow(app_entry_t *app, int idx)
     BaseType_t ok = xTaskCreateWithCaps(meow_task, app->name, 8192, ctx, 5, &ctx->task, MALLOC_CAP_SPIRAM);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreateWithCaps failed for '%s' — out of PSRAM too?", app->name);
-        app->state = APP_STATE_ERROR;
-        snprintf(app->error, sizeof(app->error), "xTaskCreate failed (out of memory?)");
+        report_launch_oom(app);
         vSemaphoreDelete(ctx->done);
         ctx->done = NULL;
         return -1;
@@ -316,8 +327,7 @@ static int launch_native(app_entry_t *app, int idx)
         // FreeRTOS's own configASSERT(pxQueue) on a NULL handle and abort.
         // Confirmed live at internal=23 largest_internal_block=0.
         ESP_LOGE(TAG, "xSemaphoreCreateBinary failed for '%s' — out of memory", app->name);
-        app->state = APP_STATE_ERROR;
-        snprintf(app->error, sizeof(app->error), "out of memory");
+        report_launch_oom(app);
         return -1;
     }
 
@@ -369,8 +379,7 @@ static int launch_native(app_entry_t *app, int idx)
             // Can't happen in practice (a static buffer never "runs out"),
             // but xTaskCreateStatic() can still return NULL on bad params.
             ESP_LOGE(TAG, "xTaskCreateStatic failed for '%s'", app->name);
-            app->state = APP_STATE_ERROR;
-            snprintf(app->error, sizeof(app->error), "xTaskCreateStatic failed");
+            report_launch_oom(app);
             vSemaphoreDelete(ctx->done);
             ctx->done = NULL;
             return -1;
@@ -385,8 +394,7 @@ static int launch_native(app_entry_t *app, int idx)
             // the `state == APP_STATE_RUNNING` guard below — exactly matching
             // "apps just don't open" with zero error or crash.
             ESP_LOGE(TAG, "xTaskCreateWithCaps failed for '%s' (stack=%u)", app->name, (unsigned)stack);
-            app->state = APP_STATE_ERROR;
-            snprintf(app->error, sizeof(app->error), "xTaskCreate failed (out of memory?)");
+            report_launch_oom(app);
             vSemaphoreDelete(ctx->done);
             ctx->done = NULL;
             return -1;

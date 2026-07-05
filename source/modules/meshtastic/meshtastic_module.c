@@ -33,6 +33,14 @@ static TaskHandle_t  s_task    = NULL;
 // plan doc; port from the real, working code, not the doc summary.
 #define MESH_ANNOUNCE_INTERVAL_MS (15UL * 60UL * 1000UL)
 
+// ── Liveness heartbeat ────────────────────────────────────────────────────────
+// mesh_task() stamps this every loop iteration; mesh_manager_is_alive()
+// (registered with purr_kernel_health_register() in mesh_manager_init())
+// reads it, so the kernel's shared health watchdog can detect a hung/
+// crashed mesh task and the Services app can show its live status.
+static volatile uint32_t s_last_heartbeat_ms = 0;
+#define MESH_WATCHDOG_STALE_MS   5000UL
+
 static void mesh_task(void *arg)
 {
     (void)arg;
@@ -119,6 +127,7 @@ static void mesh_task(void *arg)
 
         // ── Periodic NodeInfo announcement ─────────────────────────────────
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        s_last_heartbeat_ms = now_ms;
         if (now_ms - last_announce >= MESH_ANNOUNCE_INTERVAL_MS) {
             last_announce = now_ms;
             uint8_t wire[256];
@@ -134,6 +143,18 @@ static void mesh_task(void *arg)
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
+
+// Registered with purr_kernel_health_register() below — the kernel's own
+// shared watchdog polls this and pushes a purr_kernel_notify() the moment
+// it transitions alive<->stale, so a hung/crashed mesh task is surfaced
+// instead of silently going dark. Also what the Services app reads for
+// Meshtastic's row.
+bool mesh_manager_is_alive(void)
+{
+    if (!s_ready) return false;
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+    return (now_ms - s_last_heartbeat_ms) < MESH_WATCHDOG_STALE_MS;
+}
 
 bool mesh_manager_send_text(uint32_t to, const char *text)
 {
@@ -204,6 +225,8 @@ int mesh_manager_init(void)
     // Bluedroid by the time this module (priority 3) loads — safe to
     // register the GATTS companion service here.
     mesh_ble_init();
+
+    purr_kernel_health_register("meshtastic", mesh_manager_is_alive);
     return 0;
 }
 

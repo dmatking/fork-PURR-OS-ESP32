@@ -45,6 +45,12 @@ uint32_t mesh_manager_node_id(void);
 int      mesh_manager_node_count(void);
 bool     mesh_manager_ready(void);
 
+// True if the mesh task's own loop has stamped its heartbeat within the
+// last few seconds — registered with purr_kernel_health_register() so the
+// kernel's shared watchdog can catch a hung/crashed mesh task, and read
+// directly by the Services app to show Meshtastic's live status.
+bool     mesh_manager_is_alive(void);
+
 // A known mesh node's display name (once heard via NodeInfo) + signal info.
 typedef struct {
     uint32_t id;

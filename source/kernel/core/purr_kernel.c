@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
 #include <string.h>
 #include <stdlib.h>
 #include <dirent.h>
@@ -614,6 +615,76 @@ void purr_kernel_notify_clear(void)
 {
     s_notify_head  = 0;
     s_notify_count = 0;
+}
+
+// ── Service health registry ───────────────────────────────────────────────────
+// See purr_kernel_health_register()'s comment in purr_kernel.h — a single
+// shared watchdog task polls every registered check so individual modules
+// (meshtastic, wifi_mgr, bt_mgr, ...) don't each need their own.
+
+typedef struct {
+    const char           *name;
+    purr_health_check_fn  is_alive;
+    bool                  was_alive;
+} health_entry_t;
+
+static health_entry_t   s_health[PURR_HEALTH_MAX];
+static int               s_health_count = 0;
+static TaskHandle_t      s_health_watchdog_task = NULL;
+
+#define HEALTH_WATCHDOG_POLL_MS 2000UL
+
+static void health_watchdog_task(void *arg)
+{
+    (void)arg;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(HEALTH_WATCHDOG_POLL_MS));
+        for (int i = 0; i < s_health_count; i++) {
+            health_entry_t *h = &s_health[i];
+            bool alive = h->is_alive();
+            if (h->was_alive && !alive) {
+                char body[PURR_NOTIFY_BODY_LEN];
+                snprintf(body, sizeof(body), "%s appears unresponsive", h->name);
+                purr_kernel_notify("Service down", body, h->name);
+            } else if (!h->was_alive && alive) {
+                char body[PURR_NOTIFY_BODY_LEN];
+                snprintf(body, sizeof(body), "%s recovered", h->name);
+                purr_kernel_notify("Service recovered", body, h->name);
+            }
+            h->was_alive = alive;
+        }
+    }
+}
+
+void purr_kernel_health_register(const char *name, purr_health_check_fn is_alive)
+{
+    if (!name || !is_alive || s_health_count >= PURR_HEALTH_MAX) return;
+
+    health_entry_t *h = &s_health[s_health_count++];
+    h->name      = name;
+    h->is_alive  = is_alive;
+    h->was_alive = is_alive();
+
+    // Lazily started on first registration rather than unconditionally at
+    // kernel boot — most builds/tests never register anything, and this
+    // avoids spending a task+stack on devices/configs with nothing to watch.
+    // PSRAM-backed: this task only calls is_alive() callbacks + notify(),
+    // never touches NVS/flash, so it's exempt from the cache-disable-crash
+    // constraint documented at app_manager.c's static-stack exception.
+    if (!s_health_watchdog_task) {
+        xTaskCreateWithCaps(health_watchdog_task, "health_wd", 3072, NULL, 2,
+                             &s_health_watchdog_task, MALLOC_CAP_SPIRAM);
+    }
+}
+
+int purr_kernel_health_count(void) { return s_health_count; }
+
+bool purr_kernel_health_at(int idx, const char **name, bool *alive)
+{
+    if (idx < 0 || idx >= s_health_count) return false;
+    if (name)  *name  = s_health[idx].name;
+    if (alive) *alive = s_health[idx].is_alive();
+    return true;
 }
 
 // ── Boot readiness ───────────────────────────────────────────────────────────

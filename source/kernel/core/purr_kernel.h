@@ -18,7 +18,7 @@ extern "C" {
 // ── Version ───────────────────────────────────────────────────────────────────
 
 #define PURR_KERNEL_VERSION  "1.0.0-dp2"
-#define KITT_VERSION         "0.10.0"
+#define KITT_VERSION         "0.11.0"
 
 // ── Module loader ─────────────────────────────────────────────────────────────
 
@@ -135,6 +135,31 @@ int  purr_kernel_notify_count(void);
 bool purr_kernel_notify_at(int idx, purr_notification_t *out);
 
 void purr_kernel_notify_clear(void);
+
+// ── Service health registry ───────────────────────────────────────────────────
+// Lets any module register a cheap "am I alive" check (e.g. meshtastic's
+// heartbeat-staleness test) instead of each one spinning up its own watchdog
+// task. A single shared kernel watchdog polls every registered check and
+// calls purr_kernel_notify() itself the moment one transitions alive<->dead,
+// so a hung/crashed service is surfaced without anything else having to be
+// open or watching. The Services app enumerates this same registry to show
+// live per-service status.
+
+#define PURR_HEALTH_MAX  16
+
+typedef bool (*purr_health_check_fn)(void);
+
+// `name` is stored by pointer (not copied) and used verbatim as the
+// notification source and the Services app's row label — pass a string
+// literal or other static/permanent storage, not a stack buffer.
+void purr_kernel_health_register(const char *name, purr_health_check_fn is_alive);
+
+int  purr_kernel_health_count(void);
+
+// Fetch registered check idx's name + current live status (calls its
+// is_alive() right now — not a cached value). Returns false if idx is out
+// of range.
+bool purr_kernel_health_at(int idx, const char **name, bool *alive);
 
 // ── App window tracking ───────────────────────────────────────────────────────
 // Generic hook so purr_win.h can announce every window it creates without

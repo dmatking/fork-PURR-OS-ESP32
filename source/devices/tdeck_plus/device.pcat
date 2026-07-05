@@ -42,6 +42,7 @@ calculator  = true
 hwtest      = true
 drivermgr   = true
 meshchat    = true
+services    = true
 
 [flash]
 display/st7789    = 1
@@ -63,6 +64,7 @@ apps/calculator   = 3
 apps/hwtest       = 3
 apps/drivermgr    = 3
 apps/meshchat     = 3
+apps/services     = 3
 
 [pins]
 display_cs    = 12
