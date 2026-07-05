@@ -44,6 +44,8 @@ static uint8_t     s_kb_backlight = 0;
 static purr_wid_t  s_about_lbl = 0;
 
 #define MAX_WIFI_RESULTS 24
+static purr_win_t  s_wifi_win        = 0;   // separate "WiFi Settings" window, built on demand
+static purr_wid_t  s_wifi_status_lbl = 0;
 static purr_wid_t  s_wifi_list       = 0;
 static char        s_wifi_labels[MAX_WIFI_RESULTS][64];
 static const char *s_wifi_label_ptrs[MAX_WIFI_RESULTS];
@@ -56,6 +58,8 @@ static purr_wid_t  s_wifi_dlg_input = 0;
 static char        s_wifi_dlg_ssid[33] = "";
 
 #define MAX_BT_RESULTS 24
+static purr_win_t  s_bt_win        = 0;   // separate "Bluetooth Settings" window, built on demand
+static purr_wid_t  s_bt_status_lbl = 0;
 static purr_wid_t  s_bt_list       = 0;
 static char        s_bt_labels[MAX_BT_RESULTS][48];
 static const char *s_bt_label_ptrs[MAX_BT_RESULTS];
@@ -197,16 +201,24 @@ static void on_wallpaper_select(purr_wid_t w, purr_event_t e, void *u) {
 }
 
 // ── WiFi ──────────────────────────────────────────────────────────────────────
+// Lives in its own window (opened from the "WiFi Settings" button on the main
+// Settings screen) rather than as an inline section — keeps the main window's
+// widget count small (MiniWin's control/message-queue budget is finite) and
+// gives WiFi its own focused space to connect/disconnect.
+
+static void set_wifi_status(const char *msg) {
+    if (s_wifi_status_lbl) purr_win_label_set(s_wifi_status_lbl, msg);
+}
 
 static void refresh_wifi_status(void) {
     switch (wifi_mgr_status()) {
         case WIFI_MGR_CONNECTED:
             { char buf[48]; snprintf(buf, sizeof(buf), "WiFi: connected (%s)", wifi_mgr_ip_str());
-              set_status(buf); }
+              set_wifi_status(buf); }
             break;
-        case WIFI_MGR_CONNECTING: set_status("WiFi: connecting..."); break;
-        case WIFI_MGR_FAILED:     set_status("WiFi: connection failed."); break;
-        default:                  set_status("WiFi: idle."); break;
+        case WIFI_MGR_CONNECTING: set_wifi_status("WiFi: connecting..."); break;
+        case WIFI_MGR_FAILED:     set_wifi_status("WiFi: connection failed."); break;
+        default:                  set_wifi_status("WiFi: idle."); break;
     }
 }
 
@@ -283,24 +295,57 @@ static void on_wifi_disconnect(purr_wid_t w, purr_event_t e, void *u) {
     refresh_wifi_status();
 }
 
+static void on_wifi_win_close(purr_wid_t win, purr_event_t event, void *u) {
+    (void)win; (void)event; (void)u;
+    close_wifi_dialog();
+    s_wifi_win = 0;
+    s_wifi_status_lbl = 0;
+    s_wifi_list = 0;
+}
+
+static void on_wifi_settings_open(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_wifi_win) { purr_win_show(s_wifi_win); return; }
+
+    s_wifi_win = purr_win_create("WiFi Settings");
+    purr_win_on_close(s_wifi_win, on_wifi_win_close, NULL);
+
+    purr_win_label(s_wifi_win, "Networks");
+    s_wifi_list = purr_win_list(s_wifi_win, 90, 60);
+    purr_win_list_on_select(s_wifi_list, on_wifi_select, NULL);
+
+    purr_wid_t wr = purr_win_row(s_wifi_win, 4);
+    purr_win_button(s_wifi_win, "Scan",       on_wifi_scan,       NULL);
+    purr_win_button(s_wifi_win, "Disconnect", on_wifi_disconnect, NULL);
+    purr_win_layout_end(wr);
+
+    s_wifi_status_lbl = purr_win_label(s_wifi_win, "Ready.");
+    refresh_wifi_status();
+    purr_win_show(s_wifi_win);
+}
+
 // ── Bluetooth ─────────────────────────────────────────────────────────────────
 // BLE only — T-Deck Plus's ESP32-S3 has no classic Bluetooth hardware (see
-// bt_mgr.h's comment). Same shape as the WiFi section above.
+// bt_mgr.h's comment). Lives in its own window, same rationale as WiFi above.
+
+static void set_bt_status(const char *msg) {
+    if (s_bt_status_lbl) purr_win_label_set(s_bt_status_lbl, msg);
+}
 
 static void on_bt_toggle(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
     bool on = !bt_mgr_is_enabled();
     bt_mgr_set_enabled(on);
     mesh_ble_set_advertising(on);   // Meshtastic phone-app companion service follows the same toggle
-    set_status(on ? "Bluetooth enabled." : "Bluetooth disabled.");
+    set_bt_status(on ? "Bluetooth enabled." : "Bluetooth disabled.");
 }
 
 static void on_bt_scan(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
-    if (!bt_mgr_is_enabled()) { set_status("Enable Bluetooth first."); return; }
-    set_status("Scanning (BLE)...");
+    if (!bt_mgr_is_enabled()) { set_bt_status("Enable Bluetooth first."); return; }
+    set_bt_status("Scanning (BLE)...");
     int n = bt_mgr_scan(5);
-    if (n < 0) { set_status("Bluetooth scan failed."); return; }
+    if (n < 0) { set_bt_status("Bluetooth scan failed."); return; }
     if (n > MAX_BT_RESULTS) n = MAX_BT_RESULTS;
     s_bt_count = n;
 
@@ -312,7 +357,7 @@ static void on_bt_scan(purr_wid_t w, purr_event_t e, void *u) {
         s_bt_label_ptrs[i] = s_bt_labels[i];
     }
     purr_win_list_set_items(s_bt_list, s_bt_label_ptrs, s_bt_count);
-    set_status("Scan complete — tap a device to pair.");
+    set_bt_status("Scan complete — tap a device to pair.");
 }
 
 static void on_bt_select(purr_wid_t w, purr_event_t e, void *u) {
@@ -324,7 +369,34 @@ static void on_bt_select(purr_wid_t w, purr_event_t e, void *u) {
     esp_err_t ret = bt_mgr_pair(s_bt_addrs[idx]);
     char msg[64];
     snprintf(msg, sizeof(msg), "Pairing with %s...", s_bt_labels[idx]);
-    set_status(ret == ESP_OK ? msg : "Pair request failed.");
+    set_bt_status(ret == ESP_OK ? msg : "Pair request failed.");
+}
+
+static void on_bt_win_close(purr_wid_t win, purr_event_t event, void *u) {
+    (void)win; (void)event; (void)u;
+    s_bt_win = 0;
+    s_bt_status_lbl = 0;
+    s_bt_list = 0;
+}
+
+static void on_bt_settings_open(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_bt_win) { purr_win_show(s_bt_win); return; }
+
+    s_bt_win = purr_win_create("Bluetooth Settings");
+    purr_win_on_close(s_bt_win, on_bt_win_close, NULL);
+
+    purr_win_label(s_bt_win, "Devices (BLE)");
+    s_bt_list = purr_win_list(s_bt_win, 90, 60);
+    purr_win_list_on_select(s_bt_list, on_bt_select, NULL);
+
+    purr_wid_t btr = purr_win_row(s_bt_win, 4);
+    purr_win_button(s_bt_win, "Enable/Disable", on_bt_toggle, NULL);
+    purr_win_button(s_bt_win, "Scan",           on_bt_scan,   NULL);
+    purr_win_layout_end(btr);
+
+    s_bt_status_lbl = purr_win_label(s_bt_win, bt_mgr_is_enabled() ? "Bluetooth enabled." : "Bluetooth disabled.");
+    purr_win_show(s_bt_win);
 }
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -433,23 +505,15 @@ static int settings_init(void) {
     purr_win_layout_end(kbr);
     purr_kernel_keyboard_set_backlight(s_kb_backlight);
 
-    // ── WiFi section ────────────────────────────────────────────────────────
-    purr_win_label(s_win, "WiFi");
-    s_wifi_list = purr_win_list(s_win, 90, 30);
-    purr_win_list_on_select(s_wifi_list, on_wifi_select, NULL);
-    purr_wid_t wr = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "Scan",       on_wifi_scan,       NULL);
-    purr_win_button(s_win, "Disconnect", on_wifi_disconnect, NULL);
-    purr_win_layout_end(wr);
-
-    // ── Bluetooth section (BLE only) ───────────────────────────────────────
-    purr_win_label(s_win, "Bluetooth (BLE)");
-    s_bt_list = purr_win_list(s_win, 90, 30);
-    purr_win_list_on_select(s_bt_list, on_bt_select, NULL);
-    purr_wid_t btr = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "Enable/Disable", on_bt_toggle, NULL);
-    purr_win_button(s_win, "Scan",           on_bt_scan,   NULL);
-    purr_win_layout_end(btr);
+    // ── Network section ─────────────────────────────────────────────────────
+    // WiFi and Bluetooth each get their own dedicated window (opened here)
+    // instead of being built inline — keeps this main window's widget count
+    // small and gives each its own focused space.
+    purr_win_label(s_win, "Network");
+    purr_wid_t nr = purr_win_row(s_win, 4);
+    purr_win_button(s_win, "WiFi Settings",      on_wifi_settings_open, NULL);
+    purr_win_button(s_win, "Bluetooth Settings", on_bt_settings_open,   NULL);
+    purr_win_layout_end(nr);
 
     // ── Wallpaper section ──────────────────────────────────────────────────
     purr_win_label(s_win, "Wallpaper");
@@ -478,13 +542,14 @@ static int settings_init(void) {
     // ── Status bar ─────────────────────────────────────────────────────────
     s_status = purr_win_label(s_win, "Ready.");
 
-    refresh_wifi_status();
     purr_win_show(s_win);
     return 0;
 }
 
 static void settings_deinit(void) {
     close_wifi_dialog();
+    if (s_wifi_win) { purr_win_destroy(s_wifi_win); s_wifi_win = 0; s_wifi_status_lbl = 0; s_wifi_list = 0; }
+    if (s_bt_win)   { purr_win_destroy(s_bt_win);   s_bt_win   = 0; s_bt_status_lbl   = 0; s_bt_list   = 0; }
     purr_win_destroy(s_win);
     s_win = 0;
 }

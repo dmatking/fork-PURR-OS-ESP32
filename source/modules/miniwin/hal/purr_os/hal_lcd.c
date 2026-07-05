@@ -15,13 +15,21 @@ static uint16_t s_line_buf[480];
 static int16_t s_width  = 240;
 static int16_t s_height = 320;
 
-// rgb888 → rgb565 (big-endian, matching catcall_display_t expectation)
+// rgb888 -> rgb565, native (little-endian) byte order — catcall_display_t's
+// fill_rect()/push_pixels() contract expects native RGB565 and does the
+// big-endian conversion for the panel internally (st7789_fill_rect()/
+// st7789_push_pixels() both byte-swap before writing over SPI); this used
+// to ALSO byte-swap here, silently cancelling that swap out and sending
+// colors in the wrong order (a solid teal 0x008080 desktop fill rendered as
+// a dark purple/maroon). The LVGL-based backends (cupcake_hal.c,
+// kittenui_hal.c) already pass native RGB565 straight through with no
+// pre-swap — this now matches that same contract.
 static inline uint16_t rgb888_to_rgb565(uint32_t c)
 {
     uint16_t r = (c >> 16) & 0xF8u;
     uint16_t g = (c >>  8) & 0xFCu;
     uint16_t b = (c      ) & 0xF8u;
-    return __builtin_bswap16((uint16_t)((r << 8) | (g << 3) | (b >> 3)));
+    return (uint16_t)((r << 8) | (g << 3) | (b >> 3));
 }
 
 void mw_hal_lcd_init(void)

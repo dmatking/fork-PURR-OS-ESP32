@@ -35,6 +35,17 @@ extern const struct mf_rlefont_s mf_rlefont_DejaVuSans12;
 typedef struct {
     mw_handle_t    mw_win;
     bool           used;
+    // Set once MiniWin's own window-removal path has run for this window —
+    // either because we called mw_remove_window() ourselves (top-down, via
+    // mw_win_destroy()) or because the user tapped the title-bar close icon
+    // (bottom-up, MiniWin removes the window on its own before we hear about
+    // it). Lets mw_win_destroy() and the MW_WINDOW_REMOVED_MESSAGE handler
+    // below tell which of them is doing the tearing-down vs. just following
+    // up, so neither re-removes already-gone controls (MW_ASSERT crash) nor
+    // fires the close callback twice.
+    bool           torn_down;
+    purr_win_cb_t  close_cb;
+    void          *close_user;
 } win_slot_t;
 
 typedef struct {
@@ -66,6 +77,9 @@ static purr_win_t alloc_win(mw_handle_t h) {
         if (!s_wins[i].used) {
             s_wins[i].mw_win = h;
             s_wins[i].used = true;
+            s_wins[i].torn_down = false;
+            s_wins[i].close_cb = NULL;
+            s_wins[i].close_user = NULL;
             s_cursor_y[i] = 0;
             s_layout[i].active = false;
             s_ta_focused[i] = 0;
@@ -159,6 +173,8 @@ static void win_paint_func(mw_handle_t window_handle, const mw_gl_draw_info_t *d
         (int16_t)(r.width + 2), (int16_t)(r.height + 2));
 }
 
+static void mw_win_destroy(purr_win_t h);   // defined below; forward-declared for the close-icon handler
+
 static void win_message_func(const mw_message_t *msg)
 {
     if (!msg) return;
@@ -188,6 +204,30 @@ static void win_message_func(const mw_message_t *msg)
                 break;
             }
         }
+    } else if (msg->message_id == MW_WINDOW_REMOVED_MESSAGE) {
+        // Fires synchronously from inside mw_remove_window() — either ours
+        // (mw_win_destroy(), top-down: torn_down was already set true just
+        // before that call, so we skip out immediately below) or MiniWin's
+        // own title-bar close-icon handling calling it directly (bottom-up:
+        // torn_down is still false here, since nothing on our side initiated
+        // this). Only the bottom-up case needs handling — the app never
+        // asked to close, so nobody else is going to run its close callback
+        // or free our per-window bookkeeping unless we do it here.
+        mw_handle_t wh  = msg->recipient_handle;
+        purr_win_t  win = win_index_for_handle(wh);
+        if (win == 0 || s_wins[win-1].torn_down) return;
+
+        s_wins[win-1].torn_down = true;
+        purr_win_cb_t cb   = s_wins[win-1].close_cb;
+        void         *user = s_wins[win-1].close_user;
+        if (cb) cb((purr_wid_t)win, PURR_EVENT_CLICKED, user);
+        // Whether or not that callback itself already tore this window down
+        // (e.g. app_manager's does, via the app's own deinit()), this is a
+        // no-op by then — mw_win_destroy() guards on the pool slot's `used`
+        // flag. If no callback was registered at all (a dialog with no
+        // purr_win_on_close call), this is what actually frees the heap
+        // storage and pool slot instead of leaking them forever.
+        mw_win_destroy(win);
     }
 }
 
@@ -198,7 +238,7 @@ static purr_win_t mw_win_create(const char *title) {
     mw_handle_t h = mw_add_window(&r, title,
         win_paint_func, win_message_func,
         NULL, 0,
-        MW_WINDOW_FLAG_HAS_BORDER | MW_WINDOW_FLAG_HAS_TITLE_BAR,
+        MW_WINDOW_FLAG_HAS_BORDER | MW_WINDOW_FLAG_HAS_TITLE_BAR | MW_WINDOW_FLAG_CAN_BE_CLOSED,
         NULL);
     if (h == MW_INVALID_HANDLE) return 0;
     mw_set_window_visible(h, false);
@@ -210,17 +250,46 @@ static purr_win_t mw_win_create(const char *title) {
     return alloc_win(h);
 }
 
-static void mw_win_clear(purr_win_t h);   // defined below, frees textarea/list heap storage
+// Frees each of this window's widgets' heap storage (textarea buffer, list
+// entries) and marks their wid slots unused. also_remove_control must be
+// false when MiniWin has already torn the controls down itself (bottom-up
+// close-icon path) — calling mw_remove_control() on an already-removed
+// control handle hits MW_ASSERT("Bad control handle") and halts.
+static void free_widget_storage_for_window(mw_handle_t wh, bool also_remove_control);   // defined below
+
+static void mw_win_on_close(purr_win_t h, purr_win_cb_t cb, void *user) {
+    if (h < 1 || h > MAX_WINS) return;
+    s_wins[h-1].close_cb = cb;
+    s_wins[h-1].close_user = user;
+}
 
 static void mw_win_destroy(purr_win_t h) {
-    mw_win_clear(h);
-    mw_handle_t wh = get_win(h);
-    if (wh != MW_INVALID_HANDLE) {
+    if (h < 1 || h > MAX_WINS || !s_wins[h-1].used) return;
+    mw_handle_t wh = s_wins[h-1].mw_win;
+    bool already_torn_down = s_wins[h-1].torn_down;
+
+    free_widget_storage_for_window(wh, /*also_remove_control=*/!already_torn_down);
+    s_ta_focused[h-1] = 0;
+
+    if (!already_torn_down) {
+        // Normal top-down destroy: MiniWin hasn't touched this window yet.
+        // Mark torn_down before calling mw_remove_window() — it dispatches
+        // MW_WINDOW_REMOVED_MESSAGE synchronously, and by the time that
+        // reaches win_message_func() above this flag must already read true
+        // so it knows this removal is already being handled right here and
+        // doesn't fire the close callback a second time.
+        s_wins[h-1].torn_down = true;
 #ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
         wce_taskbar_unregister(wh);
 #endif
         mw_remove_window(wh);
     }
+    // else: MiniWin's title-bar close icon (or a nested call from within the
+    // close-callback dispatch above) already removed the window and its
+    // controls — nothing left to do here but release our own bookkeeping.
+
+    s_cursor_y[h-1] = 0;
+    s_layout[h-1].active = false;
     free_win(h);
 }
 
@@ -273,18 +342,22 @@ static void free_list_entries(int idx) {
     }
 }
 
-static void mw_win_clear(purr_win_t h) {
-    mw_handle_t wh = get_win(h);
-    if (wh == MW_INVALID_HANDLE) return;
-    if (h >= 1 && h <= MAX_WINS) s_ta_focused[h-1] = 0;
+static void free_widget_storage_for_window(mw_handle_t wh, bool also_remove_control) {
     for (int i = 0; i < MAX_WIDS; i++) {
         if (s_wids[i].used && s_wids[i].mw_win == wh) {
-            mw_remove_control(s_wids[i].mw_ctrl);
+            if (also_remove_control) mw_remove_control(s_wids[i].mw_ctrl);
             if (s_ta_buf[i]) { free(s_ta_buf[i]); s_ta_buf[i] = NULL; }
             free_list_entries(i);
             s_wids[i].used = false;
         }
     }
+}
+
+static void mw_win_clear(purr_win_t h) {
+    mw_handle_t wh = get_win(h);
+    if (wh == MW_INVALID_HANDLE) return;
+    if (h >= 1 && h <= MAX_WINS) s_ta_focused[h-1] = 0;
+    free_widget_storage_for_window(wh, /*also_remove_control=*/true);
     if (h >= 1 && h <= MAX_WINS) {
         s_cursor_y[h-1] = 0;
         s_layout[h-1].active = false;
@@ -640,6 +713,7 @@ static const catcall_ui_t s_miniwin_ui = {
     .win_show         = mw_win_show,
     .win_hide         = mw_win_hide,
     .win_clear        = mw_win_clear,
+    .win_on_close     = mw_win_on_close,
     .label_create     = mw_label_create,
     .label_set        = mw_label_set,
     .label_align      = mw_label_align,

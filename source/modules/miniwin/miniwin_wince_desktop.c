@@ -226,7 +226,7 @@ static void desktop_paint(mw_handle_t handle, const mw_gl_draw_info_t *d) {
                   s_smenu_sel == 1, s_smenu_pressed);
         {
             int nn = purr_kernel_notify_count();
-            char nlbl[20];
+            char nlbl[32];
             if (nn > 0) snprintf(nlbl, sizeof(nlbl), "Notifications (%d) >", nn);
             else        snprintf(nlbl, sizeof(nlbl), "Notifications >");
             mw_gl_string(d, SMENU_X + 8, (int16_t)(smy + 2 + SMENU_IH + 4), nlbl);

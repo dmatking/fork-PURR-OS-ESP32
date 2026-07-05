@@ -11,9 +11,21 @@ extern "C" {
 
 // ── Window manager limits ────────────────────────────────────────────────────
 #define MW_MAX_WINDOW_COUNT         20U
-#define MW_MAX_CONTROL_COUNT        40U
+// Settings alone now builds ~30 controls (Theme, Display, Keyboard Backlight,
+// WiFi list+buttons, Bluetooth list+buttons, Wallpaper list, Storage, System,
+// About) — bumped from 40 with real headroom for that plus other apps'
+// per-buddy/dialog windows (MeshChat, File Manager) accumulating over a
+// session. Each control is a small fixed struct — negligible memory cost.
+#define MW_MAX_CONTROL_COUNT        96U
 #define MW_MAX_TIMER_COUNT          8U
-#define MW_MESSAGE_QUEUE_SIZE       100U
+// Widget creation posts more than one message per widget (create + paint/
+// invalidate, at least) — Settings' ~30 controls, built in one synchronous
+// burst on the app's own task while MiniWin's render task drains the queue
+// one message at a time, exhausted the old 100-slot queue and hit
+// MW_ASSERT(items_in_queue < MW_MESSAGE_QUEUE_SIZE, "Message queue full").
+// Bumped with real headroom — mw_message_t is a handful of small fields, so
+// even 256 slots costs only a few KB.
+#define MW_MESSAGE_QUEUE_SIZE       256U
 
 // ── Display rotation ─────────────────────────────────────────────────────────
 // Override at build time with -DMW_DISPLAY_ROTATION_90 etc. if needed.
