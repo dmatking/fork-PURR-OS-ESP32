@@ -26,6 +26,7 @@ Output: cattobaked/<device>/
 import argparse
 import datetime
 import difflib
+import glob
 import json
 import os
 import shutil
@@ -211,6 +212,59 @@ def _idf_venv_python():
         if matches:
             return matches[-1]
     return None
+
+def _idf_tools_path(idf_python):
+    """Locate IDF_TOOLS_PATH (holds espidf.constraints.vX.Y.txt, toolchains,
+    etc). idf.py hard-fails ('espidf.constraints... doesn't exist') without
+    this set correctly on installations that don't use the ~/.espressif
+    default — e.g. the Windows installer's C:\\Espressif\\tools layout, which
+    is 3 levels up from the venv (tools/python/vX.Y.Z/venv)."""
+    env_path = os.environ.get("IDF_TOOLS_PATH", "")
+    if env_path and os.path.isdir(env_path):
+        return env_path
+    if idf_python:
+        # .../tools/python/vX.Y.Z/venv/Scripts/python.exe -> .../tools (5 levels up)
+        candidate = idf_python
+        for _ in range(5):
+            candidate = os.path.dirname(candidate)
+        if os.path.isdir(candidate) and glob.glob(os.path.join(candidate, "espidf.constraints.*")):
+            return candidate
+    default = os.path.expanduser("~/.espressif")
+    return default if os.path.isdir(default) else None
+
+def _idf_toolchain_bin_dirs(idf_tools_path):
+    """Resolve cmake/ninja/xtensa-esp-elf/riscv32-esp-elf/ccache bin dirs
+    directly from IDF_TOOLS_PATH's on-disk layout (tool/<version>/<extracted>/...),
+    same layout `idf_tools.py install` always produces regardless of platform.
+
+    This is a supplement to (not a replacement for) `idf_tools.py export`:
+    that command depends on an installed-tools registry file that some
+    installer flavors (e.g. the Windows EIM installer's C:\\Espressif\\tools
+    layout) don't populate the way idf_tools.py expects, silently reporting
+    every tool as 'not installed' and contributing nothing to PATH even
+    though the tools are genuinely sitting on disk. Purrstrap must be able to
+    build without relying on the user's shell already having these on PATH."""
+    if not idf_tools_path or not os.path.isdir(idf_tools_path):
+        return []
+    patterns = [
+        "cmake/*/bin",
+        "ninja/*",
+        "xtensa-esp-elf/*/xtensa-esp-elf/bin",
+        "riscv32-esp-elf/*/riscv32-esp-elf/bin",
+        "xtensa-esp-elf-gdb/*/xtensa-esp-elf-gdb/bin",
+        "riscv32-esp-elf-gdb/*/riscv32-esp-elf-gdb/bin",
+        "esp32ulp-elf/*/esp32ulp-elf/bin",
+        "ccache/*/*",
+        "dfu-util/*",
+        "openocd-esp32/*/openocd-esp32/bin",
+        "idf-exe/*",
+    ]
+    found = []
+    for pattern in patterns:
+        for match in sorted(glob.glob(os.path.join(idf_tools_path, pattern))):
+            if os.path.isdir(match) and match not in found:
+                found.append(match)
+    return found
 
 def _spiffsgen(idf_path):
     candidate = os.path.join(idf_path, "components", "spiffs", "spiffsgen.py")
@@ -548,6 +602,7 @@ UI_BACKEND_MAP = {
     "oled_ui":   "OLED",
     "blackpurr": "BLACKPURR",
     "cardstack": "CARDSTACK",
+    "cupcake":   "CUPCAKE",
     "lvgldebug": "LVGLDEBUG",
 }
 
@@ -692,29 +747,36 @@ def _build_kernel_spine(device, cfg, out_dir):
     env = os.environ.copy()
     env["IDF_PATH"] = idf
     env["PURR_DEVICE"] = device
+    _tools_path = _idf_tools_path(_idf_python)
+    if _tools_path:
+        env["IDF_TOOLS_PATH"] = _tools_path
     env["PURR_KERNEL_TYPE"] = cfg.get("device.kernel_type", "native")
 
-    # Inject IDF toolchain paths into env using idf_tools.py export.
-    # This adds xtensa-esp-elf-gcc and other cross-compile tools to PATH.
-    _idf_tools_py = os.path.join(idf, "tools", "idf_tools.py")
-    if os.path.isfile(_idf_tools_py):
-        try:
-            import subprocess as _sp
-            _r = _sp.run([_idf_python, _idf_tools_py, "export", "--format=key-value"],
-                         capture_output=True, text=True, env=env)
-            for _line in _r.stdout.splitlines():
-                if "=" not in _line:
-                    continue
-                _k, _, _v = _line.partition("=")
-                _k = _k.strip()
-                if _k == "PATH":
-                    # The value ends with ":$PATH" — replace that with the real PATH
-                    _extra = _v.replace(":$PATH", "").replace("$PATH", "")
-                    env["PATH"] = _extra + ":" + env.get("PATH", os.environ.get("PATH", ""))
-                else:
-                    env[_k] = _v
-        except Exception as _e:
-            warn(f"  idf_tools export failed: {_e} — toolchain may be missing from PATH")
+    # idf.py's own __main__ guard does `if 'MSYSTEM' in os.environ: print_warning(...)`
+    # as an if/elif/else chain — when MSYSTEM is set (Git Bash, MSYS2, any
+    # MinGW-derived shell always sets it) it prints a warning and returns
+    # WITHOUT calling main() at all. Every subprocess invocation silently
+    # no-ops (exit 0, no build, no error) if this parent process inherited
+    # MSYSTEM from a Git-Bash-launched purrstrap. Strip it so idf.py actually runs.
+    env.pop("MSYSTEM", None)
+
+    # Inject IDF toolchain paths (cmake, ninja, xtensa-esp-elf-gcc, ccache, ...)
+    # into PATH. Resolved directly from IDF_TOOLS_PATH's on-disk layout — see
+    # _idf_toolchain_bin_dirs()'s docstring for why this doesn't just shell out
+    # to `idf_tools.py export` (unreliable on some installer layouts).
+    _tool_bin_dirs = _idf_toolchain_bin_dirs(_tools_path)
+    if _tool_bin_dirs:
+        env["PATH"] = os.pathsep.join(_tool_bin_dirs) + os.pathsep + env.get("PATH", "")
+        info(f"  toolchain PATH: {len(_tool_bin_dirs)} tool dir(s) resolved from {_tools_path}")
+    else:
+        warn(f"  no toolchain bin dirs found under IDF_TOOLS_PATH={_tools_path} — "
+             f"cmake/ninja/gcc may be missing from PATH")
+
+    # esp_rom_elfs generates gdbinit debug helpers at build time; not fatal if
+    # missing (only affects `idf.py gdb`), but silences a spurious warning.
+    _rom_elf_dirs = sorted(glob.glob(os.path.join(_tools_path or "", "esp-rom-elfs", "*"))) if _tools_path else []
+    if _rom_elf_dirs:
+        env["ESP_ROM_ELF_DIR"] = _rom_elf_dirs[-1]
 
     # Chain sdkconfig: base defaults + generated device config + optional
     # hand-maintained overrides for quirks device.pcat can't express
@@ -727,6 +789,21 @@ def _build_kernel_spine(device, cfg, out_dir):
         env["SDKCONFIG_DEFAULTS"] = ";".join(chain)
 
     build_dir = os.path.join(coreos_dir, f"build_{device}")
+
+    # Every device build passes the same -C coreos_dir, so IDF's default
+    # merged sdkconfig output (${PROJECT_DIR}/sdkconfig, i.e. CoreOS/sdkconfig)
+    # is a SINGLE FILE SHARED BY EVERY DEVICE. SDKCONFIG_DEFAULTS only seeds
+    # it when it doesn't already exist — once any device's build creates it,
+    # every other device's incremental build silently reuses that stale,
+    # wrong-device Kconfig state instead of its own generated sdkconfig_<device>.
+    # Redirect it per-device so each build_<device>/ owns its own sdkconfig.
+    # NOTE: CMakeLists.txt's project.cmake checks the CMake variable SDKCONFIG
+    # (not $ENV{SDKCONFIG} — unlike SDKCONFIG_DEFAULTS, which IS read from the
+    # environment), so this must be passed as a -D cache define to idf.py, not
+    # as an env var.
+    os.makedirs(build_dir, exist_ok=True)
+    sdkconfig_path = os.path.join(build_dir, "sdkconfig")
+    sdkconfig_define = f"SDKCONFIG={sdkconfig_path}"
     firmware_out = os.path.join(out_dir, "firmware.bin")
     bootloader_out = os.path.join(out_dir, "bootloader.bin")
     partitions_out = os.path.join(out_dir, "partition-table.bin")
@@ -737,7 +814,8 @@ def _build_kernel_spine(device, cfg, out_dir):
     cmake_cache = os.path.join(build_dir, "CMakeCache.txt")
     if not os.path.isfile(cmake_cache):
         info(f"  idf.py set-target {chip}")
-        rc = run_live([_idf_python, idf_py, "-C", coreos_dir, "-B", build_dir,
+        rc = run_live([_idf_python, idf_py, "-D", sdkconfig_define,
+                       "-C", coreos_dir, "-B", build_dir,
                        "set-target", chip], env=env)
         if rc != 0:
             warn(f"  set-target failed (rc={rc})")
@@ -746,7 +824,8 @@ def _build_kernel_spine(device, cfg, out_dir):
         info(f"  set-target skipped (build dir exists)")
 
     info(f"  idf.py build")
-    rc = run_live([_idf_python, idf_py, "-C", coreos_dir, "-B", build_dir,
+    rc = run_live([_idf_python, idf_py, "-D", sdkconfig_define,
+                   "-C", coreos_dir, "-B", build_dir,
                    "build"], env=env)
     if rc != 0:
         warn(f"  idf.py build failed (rc={rc})")
@@ -968,14 +1047,17 @@ def cmd_monitor(args):
     info("press Ctrl+] to exit")
     div()
 
+    _idf_python = _idf_venv_python() or sys.executable
+    _mon_env = os.environ.copy()
+    _mon_env.pop("MSYSTEM", None)
     cmd = [
-        sys.executable, monitor_py,
+        _idf_python, monitor_py,
         "--port", port if port != "auto" else "/dev/ttyUSB0",
         "--baud", baud,
         elf,
     ]
     try:
-        subprocess.run(cmd, cwd=build_dir)
+        subprocess.run(cmd, cwd=build_dir, env=_mon_env)
     except KeyboardInterrupt:
         pass
 

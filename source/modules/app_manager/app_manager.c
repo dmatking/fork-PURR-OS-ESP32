@@ -26,6 +26,28 @@ static const char *s_scan_paths[] = {
 static app_entry_t s_apps[MAX_APPS];
 static int         s_app_count = 0;
 
+// app_manager_on_window_created() (see below) needs to know which app is
+// currently inside its synchronous init() call, to attribute a
+// purr_win_create() call to the right app_entry_t without every app needing
+// to report its own window handle. This USED to be a single shared global
+// (s_launching_app), set right before calling init() and cleared right
+// after — but each app launches on its own FreeRTOS task, and with the
+// ESP32-S3 being dual-core, two launches close together in time (e.g. two
+// quick taps) can genuinely run their init() calls concurrently on the two
+// cores. The second task's assignment stomped the first one mid-flight,
+// silently attributing the first app's window to the second app's entry —
+// the first app's ->window stayed 0 forever, and re-tapping its icon later
+// hit the "already running, just re-show the tracked window" path on a
+// handle that was never actually set. Nothing visible ever happened.
+//
+// Fixed by keying off the calling task's own handle instead of a shared
+// global — see find_app_by_current_task() below. xTaskGetCurrentTaskHandle()
+// is inherently race-free (it only ever returns the caller's own identity),
+// and s_ctxs[idx].task is written by xTaskCreate() in the ORIGINAL launching
+// context, before the new task can possibly start running — so by the time
+// that task calls purr_win_create(), its own ctx->task entry is guaranteed
+// to already be correct, regardless of how many other launches overlap.
+
 // ── Tier detection ─────────────────────────────────────────────────────────────
 
 static app_tier_t tier_from_ext(const char *filename)
@@ -153,8 +175,16 @@ static void meow_task(void *arg) {
     }
     // lua_runtime.init() picks up the pending path via s_meow_pending_path
     int rc = lua_rt->init();
-    ctx->app->state = (rc == 0) ? APP_STATE_STOPPED : APP_STATE_ERROR;
-    if (rc != 0) snprintf(ctx->app->error, sizeof(ctx->app->error), "lua_runtime init failed (%d)", rc);
+    // Only mark ERROR on failure — a successful init() means the script is up
+    // and running, not finished. Previously this immediately overwrote the
+    // RUNNING state set at launch with STOPPED the instant init() returned,
+    // which for every app here is almost instantly — so the Running Apps
+    // list and the re-launch guard below never actually worked. state now
+    // only becomes STOPPED via the explicit app_manager_stop().
+    if (rc != 0) {
+        ctx->app->state = APP_STATE_ERROR;
+        snprintf(ctx->app->error, sizeof(ctx->app->error), "lua_runtime init failed (%d)", rc);
+    }
     xSemaphoreGive(ctx->done);
     vTaskDelete(NULL);
 }
@@ -196,9 +226,16 @@ static int launch_meow(app_entry_t *app, int idx)
 static void native_task(void *arg) {
     app_task_ctx_t *ctx = (app_task_ctx_t *)arg;
     ESP_LOGI(TAG, "native app task start: %s", ctx->app->name);
+
     int rc = ctx->mod->init();
-    ctx->app->state = (rc == 0) ? APP_STATE_STOPPED : APP_STATE_ERROR;
-    if (rc != 0) snprintf(ctx->app->error, sizeof(ctx->app->error), "init() returned %d", rc);
+
+    // Only mark ERROR on failure — see meow_task()'s comment on why this no
+    // longer overwrites RUNNING with STOPPED just because the (non-blocking)
+    // init() call returned.
+    if (rc != 0) {
+        ctx->app->state = APP_STATE_ERROR;
+        snprintf(ctx->app->error, sizeof(ctx->app->error), "init() returned %d", rc);
+    }
     xSemaphoreGive(ctx->done);
     vTaskDelete(NULL);
 }
@@ -297,21 +334,19 @@ void app_manager_stop(int idx)
         ctx->mod->deinit();
     }
 
-    if (ctx->task) {
-        // Give the task up to 2s to exit cleanly after deinit
-        if (ctx->done) {
-            xSemaphoreTake(ctx->done, pdMS_TO_TICKS(2000));
-        }
-        // If still running, force-delete (last resort — may leak resources)
-        eTaskState ts = eTaskGetState(ctx->task);
-        if (ts != eDeleted) {
+    // A successful semaphore take proves native_task()/meow_task() already
+    // ran to completion and self-deleted (vTaskDelete(NULL)) — ctx->task is
+    // then a stale handle whose TCB may already be reclaimed/reused by an
+    // unrelated task, so it must not be touched. Only a genuine timeout means
+    // the task is still alive and actually needs force-deleting.
+    if (ctx->done) {
+        if (xSemaphoreTake(ctx->done, pdMS_TO_TICKS(2000)) == pdTRUE) {
+            ctx->task = NULL;
+        } else if (ctx->task) {
             ESP_LOGW(TAG, "force-deleting task for '%s'", app->name);
             vTaskDelete(ctx->task);
+            ctx->task = NULL;
         }
-        ctx->task = NULL;
-    }
-
-    if (ctx->done) {
         vSemaphoreDelete(ctx->done);
         ctx->done = NULL;
     }
@@ -319,6 +354,8 @@ void app_manager_stop(int idx)
     app->state = APP_STATE_STOPPED;
     ESP_LOGI(TAG, "stopped: %s", app->name);
 }
+
+const char *app_manager_get_pending_meow_path(void) { return s_meow_pending_path; }
 
 int app_manager_count(void)             { return s_app_count; }
 const app_entry_t *app_manager_get(int idx)
@@ -369,9 +406,44 @@ void app_manager_open_launcher(void)
     ESP_LOGI(TAG, "launcher window open");
 }
 
+// ── Window tracking ───────────────────────────────────────────────────────────
+// Wired up via purr_kernel_set_window_created_cb() below — see the comment
+// above s_ctxs' old s_launching_app field for why this doesn't need every
+// app to report its own window, and why it's keyed by task handle now.
+
+static void app_manager_on_win_close(purr_wid_t win, purr_event_t event, void *user) {
+    (void)win; (void)event;
+    app_entry_t *app = (app_entry_t *)user;
+    int idx = (int)(app - s_apps);
+    app_manager_stop(idx);
+}
+
+// Finds the app_entry_t whose launch task is the one calling right now —
+// race-free (xTaskGetCurrentTaskHandle() only ever returns the caller's own
+// identity), unlike the single shared s_launching_app global this replaced.
+// Returns NULL for calls from any other task (a widget callback invoked from
+// the UI's own render task, a follow-up dialog/window an app opens later,
+// etc.) — correctly leaving app->window as the app's *original* window from
+// its init() call, not overwritten by a later one.
+static app_entry_t *find_app_by_current_task(void) {
+    TaskHandle_t me = xTaskGetCurrentTaskHandle();
+    for (int i = 0; i < s_app_count; i++) {
+        if (s_ctxs[i].task == me) return s_ctxs[i].app;
+    }
+    return NULL;
+}
+
+static void app_manager_on_window_created(purr_win_t win) {
+    app_entry_t *app = find_app_by_current_task();
+    if (!app) return;
+    app->window = win;
+    purr_win_on_close(win, app_manager_on_win_close, (void *)app);
+}
+
 int app_manager_init(void)
 {
     memset(s_ctxs, 0, sizeof(s_ctxs));
+    purr_kernel_set_window_created_cb(app_manager_on_window_created);
     app_manager_scan();
     ESP_LOGI(TAG, "init complete");
     return 0;

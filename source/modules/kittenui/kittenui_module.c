@@ -224,7 +224,11 @@ int kittenui_init(void)
 void kittenui_deinit(void)
 {
     if (s_task) { vTaskDelete(s_task); s_task = NULL; }
+    // lv_deinit() only exists when LV_MEM_CUSTOM is off (or GC is on) — see
+    // lv_obj.c's matching guard.
+#if LV_ENABLE_GC || !LV_MEM_CUSTOM
     lv_deinit();
+#endif
 }
 
 // ── Module header ─────────────────────────────────────────────────────────────

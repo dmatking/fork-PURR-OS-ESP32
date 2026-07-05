@@ -24,7 +24,10 @@
 
 static const char *TAG = "cardstack_ui";
 
-#define STATUS_PEEK_H     22
+// STATUS_PEEK_H derives from cardstack.h's CARDSTACK_STATUS_PEEK_H — shared
+// with cardstack_win.c, which needs the same value to keep app windows (and
+// their close buttons) clear of the status hotzone below.
+#define STATUS_PEEK_H     CARDSTACK_STATUS_PEEK_H
 #define STATUS_EXPANDED_H 160
 #define EDGE_PX           30
 #define HOME_SWIPE_THRESH 60

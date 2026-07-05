@@ -238,6 +238,30 @@ same as today — this table just makes explicit which contract that module is
 expected to honor. A shell-tier module registering `catcall_ui_t` (or a
 windowed-tier module skipping it) would be a bug.
 
+### MiniWin desktop chrome: icon-grid vs. WinCE (experimental)
+
+Within the windowed tier, `miniwin` itself has two interchangeable desktop
+chrome implementations, chosen per-device at build time via
+`CONFIG_PURR_MINIWIN_DESKTOP_WINCE` (default off):
+
+- **Icon-grid (default)** — `miniwin_module.c`'s own status bar + app-icon
+  grid, tapping an icon launches via `app_manager_launch_idx()`.
+- **WinCE-style (`CONFIG_PURR_MINIWIN_DESKTOP_WINCE=y`, EXPERIMENTAL)** —
+  `miniwin_wince_desktop.c`: a taskbar with a Start button, a dynamic
+  Programs list built from the real `app_manager` registry, and automatic
+  taskbar buttons for every `purr_win_create()` window. Opt in per device
+  via a `sdkconfig_<device>.overrides` line (see `tdeck_plus`'s, the first
+  device dogfooding it) — not a proven default yet, and not mutually
+  compatible with `CONFIG_PURR_UI_WINCE_SHELL` (that flag is for kernels
+  that bake their own shell in directly instead of using this module).
+
+Because `app_manager` launches each app in its own FreeRTOS task, **any**
+MiniWin desktop task loop that touches the display/window manager directly
+(not through an app's `purr_win_*()` calls) must wrap that work in
+`purr_kernel_ui_lock()`/`purr_kernel_ui_unlock()`, matching `kittenui_task`'s
+existing pattern — skipping this causes two tasks to reach the display SPI
+driver concurrently and crash (`assert failed: spi_device_transmit ...`).
+
 ---
 
 ## Module Load Order

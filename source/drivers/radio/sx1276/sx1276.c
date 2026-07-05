@@ -278,6 +278,7 @@ static esp_err_t sx1276_init(const radio_config_t *cfg)
     uint8_t ver = reg_read(REG_VERSION);
     if (ver != 0x12) {
         ESP_LOGE(TAG, "unexpected version 0x%02X (expected 0x12)", ver);
+        purr_kernel_notify("LoRa unavailable", "SX1276 not detected", "sx1276");
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -446,6 +447,27 @@ static esp_err_t sx1276_set_power(uint8_t dbm)
     return ESP_OK;
 }
 
+// ── Catcall: set_modulation / set_sync_word ───────────────────────────────────
+// SX1276's sync word is a single register (REG_SYNC_WORD) — much simpler
+// than SX1262's split-nibble scheme. Both bracket with set_mode(STDBY)/
+// set_rx_continuous() like set_power above.
+
+static esp_err_t sx1276_set_modulation(uint8_t sf, uint32_t bw_hz, uint8_t cr)
+{
+    set_mode(MODE_STDBY);
+    apply_modulation(sf, bw_hz, cr);
+    set_rx_continuous();
+    return ESP_OK;
+}
+
+static esp_err_t sx1276_set_sync_word(uint8_t sync)
+{
+    set_mode(MODE_STDBY);
+    reg_write(REG_SYNC_WORD, sync);
+    set_rx_continuous();
+    return ESP_OK;
+}
+
 // ── Catcall: deinit ───────────────────────────────────────────────────────────
 
 static esp_err_t sx1276_deinit(void)
@@ -471,6 +493,8 @@ static const catcall_radio_t s_catcall = {
     .snr             = sx1276_snr,
     .set_frequency   = sx1276_set_frequency,
     .set_power       = sx1276_set_power,
+    .set_modulation  = sx1276_set_modulation,
+    .set_sync_word   = sx1276_set_sync_word,
     .deinit          = sx1276_deinit,
 };
 

@@ -1,6 +1,8 @@
 # PURR OS — System Modules
 
-System modules are `.purr` binaries of type `PURR_MOD_SYSTEM` or `PURR_MOD_UI`. They are loaded by the kernel at boot from `/flash/modules/` and run as FreeRTOS tasks. Three system modules ship with PURR OS: `driver_manager`, `app_manager`, and `miniwin`.
+System modules are `.purr` binaries of type `PURR_MOD_SYSTEM` or `PURR_MOD_UI`. They are loaded by the kernel at boot from `/flash/modules/` and run as FreeRTOS tasks.
+
+This doc predates several modules that now exist — `cupcake`/`cardstack` (UI backends) and `meshtastic` (mesh networking) aren't documented below yet. What follows is up to date for `driver_manager`, `app_manager`, and `miniwin`, plus the modules added most recently: `lua_runtime`, `wifi_mgr`, and `bt_mgr`.
 
 ---
 
@@ -53,7 +55,7 @@ const drv_entry_t *driver_manager_get_entry(int idx);
 const char       *drv_status_badge(drv_status_t s);
 ```
 
-`drv_entry_t` holds name, version, type, status, and a fail_reason string for `[FAIL]` entries. The app_manager (or a dedicated drivers app) can read this to display a driver status screen.
+`drv_entry_t` holds name, version, type, status, and a fail_reason string for `[FAIL]` entries. The `drivermgr` system app (`source/apps/system/drivermgr/`) is that dedicated drivers screen — a thin `purr_win_list` UI over this exact API, no backend changes needed. (Its app directory is deliberately named `drivermgr`, not `driver_manager` — giving it the same directory name as this module caused an ESP-IDF component-name collision that silently dropped this module's object files from the link.)
 
 ### Module header
 
@@ -129,7 +131,79 @@ typedef struct {
 
 ### Launch status
 
-Currently `.meow` launch returns error "lua runtime not loaded" until the Lua engine module is implemented. `.paws` and `.claw` return "dynamic loader not yet implemented" — in the precompiled model these apps are statically linked into the firmware, so the dynamic path is for future hot-loading from SD.
+`.meow` launch now works — see the `lua_runtime` module below. `.paws` and `.claw` return "dynamic loader not yet implemented" — in the precompiled model these apps are statically linked into the firmware, so the dynamic path is for future hot-loading from SD.
+
+---
+
+## lua_runtime
+
+**Source:** `source/modules/lua_runtime/`
+**Type:** `PURR_MOD_SYSTEM`
+**Version:** 0.1.0
+**Required catcalls:** none (UI access goes through `purr_win.h` at script-run time)
+
+Runs `.meow` scripts — previously dead code (`app_manager.c`'s `launch_meow()` looked up a `"lua_runtime"` module that never existed anywhere in the repo). Vendors a real Lua 5.4 VM (`source/lib/lib_lua/`, ~30 files, ported from the PURR-OS-0.11 archive) privately into this component, same vendoring pattern the `meshtastic` module already uses for nanopb.
+
+One global Lua state runs at a time. `init()` is called twice in the normal course of things: once at boot like any other system module (a no-op — nothing is pending yet, checked before allocating a VM so the boot-time call doesn't leak one), and again each time `app_manager.c`'s `launch_meow()` actually launches a `.meow` file (it reads the pending path via the new `app_manager_get_pending_meow_path()` accessor).
+
+Exposes three Lua namespaces — `win.*` (1:1 wrapper over `purr_win.h`: create/label/label_set/button/textarea/show/destroy — button callbacks are real Lua closures via a registry-ref trampoline), `sd.*` (path-based read/write), `system.*` (print/delay/time_ms). See `docs/06_Apps.md` for the Lua-facing API and an example script.
+
+**Threading note:** a script's main body runs synchronously inside its launch task, which exits right after the script returns (same as every native app's `init()`) — write scripts that build a window and return, then respond to taps via callbacks, not scripts that loop forever themselves; there's no locking between the script's own execution and a button-callback trampoline firing from the UI task.
+
+---
+
+## wifi_mgr
+
+**Source:** `source/modules/wifi_mgr/`
+**Type:** `PURR_MOD_SYSTEM`
+**Version:** 0.1.0
+
+Drives WiFi station mode — `esp_wifi_init()`/`esp_netif_init()` themselves run once at boot (`kernel_tdp_boot.c`, before any module loads), this module calls `esp_wifi_start()` and handles scan/connect/disconnect. Registers `WIFI_EVENT`/`IP_EVENT` handlers that call the existing (previously never-driven-on-this-path) `purr_kernel_set_wifi_connected()`, so the status-bar WiFi icon reflects real state for the first time.
+
+```c
+int  wifi_mgr_scan(void);                          // blocking, a few hundred ms
+int  wifi_mgr_scan_count(void);
+bool wifi_mgr_scan_at(int idx, wifi_scan_result_t *out);
+void wifi_mgr_connect(const char *ssid, const char *password);
+void wifi_mgr_disconnect(void);
+wifi_mgr_status_t wifi_mgr_status(void);           // IDLE / CONNECTING / CONNECTED / FAILED
+const char *wifi_mgr_ip_str(void);
+```
+
+Last-connected SSID/password persist to NVS (namespace `"wifi_sta"`); `wifi_mgr_init()` auto-reconnects if credentials are present. Driven from Settings' WiFi section.
+
+---
+
+## bt_mgr
+
+**Source:** `source/modules/bt_mgr/`
+**Type:** `PURR_MOD_SYSTEM`
+**Version:** 0.1.0
+
+Bluetooth — **BLE only**. T-Deck Plus's ESP32-S3 has no classic Bluetooth (BR/EDR) hardware at all (`SOC_BT_CLASSIC_SUPPORTED` isn't even defined for this chip in ESP-IDF's `soc_caps.h`, only `SOC_BLE_SUPPORTED` is) — Bluedroid is still the host stack (vs. NimBLE), it just only ever runs in BLE mode on this board. Also note: this ESP-IDF version defaults to BLE 5.0 extended-advertising APIs, which compile out the legacy `esp_ble_gap_start_advertising`/`set_scan_params`/`start_scanning` functions this module uses (link-time "undefined reference", not a compile error) — `sdkconfig_tdeck_plus.overrides` explicitly selects `CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y` / `CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n` (the two are mutually exclusive) to get them back, since this module's simple accessory-pairing use case doesn't need 5.0's extended/coded-PHY features.
+
+```c
+void bt_mgr_set_enabled(bool on);      // gates scanning/advertising — the Bluedroid host itself
+bool bt_mgr_is_enabled(void);          // stays initialized+enabled for the module's whole lifetime
+int  bt_mgr_scan(uint32_t duration_sec);
+int  bt_mgr_scan_count(void);
+bool bt_mgr_scan_at(int idx, bt_scan_result_t *out);
+esp_err_t bt_mgr_pair(const uint8_t addr[6]);   // "Just Works" bonding — no PIN entry UI exists yet
+```
+
+Driven from Settings' Bluetooth section. See `meshtastic`'s BLE companion service below for the other consumer of this module's "Bluedroid is up" precondition.
+
+---
+
+## meshtastic — BLE companion service addendum
+
+**Source:** `source/modules/meshtastic/mesh_ble.c`
+
+Not a new module, but a significant addition to the existing `meshtastic` module: implements Meshtastic's published phone-API BLE GATT service (service UUID `6ba1b218-...`, `toradio`/`fromradio`/`fromnum` characteristics) so the official Meshtastic phone app can connect to this device exactly as it would to a real Meshtastic node. **The UUIDs are reproduced from memory of the public spec, not fetched from a live copy of the Meshtastic firmware source during this work — verify against current `github.com/meshtastic/firmware` before relying on this for real phone interop.**
+
+Depends on `bt_mgr` having already brought up Bluedroid — relies on `device.pcat`'s `[flash]` load-priority ordering (`bt_mgr` at priority 2, `meshtastic` at priority 3) rather than an explicit dependency check. `mesh_ble_init()` is called from `mesh_manager_init()`; advertising is a separate step (`mesh_ble_set_advertising()`) gated on the user enabling Bluetooth in Settings.
+
+Also extended in this round: `mesh_router.c`'s node table now tracks a display name (parsed from NodeInfo packets, previously decoded and discarded) and `mesh_manager_send_text()` gained a `to` parameter for addressed direct messages (previously broadcast-only) — both needed by the new `meshchat` app (`docs/06_Apps.md`). The single RX-callback slot (`mesh_manager_set_rx_callback`) became a small multi-subscriber array (`mesh_manager_add_rx_callback`/`_remove_rx_callback`, up to `MESH_MAX_RX_CB`) since both `meshchat` and this BLE service need independent RX visibility.
 
 ---
 
@@ -230,4 +304,10 @@ To update the upstream source:
 |--------|------|------------------|------------------|
 | `driver_manager` | SYSTEM | — | — |
 | `app_manager` | SYSTEM | — | — (runtime) |
+| `lua_runtime` | SYSTEM | — | — |
+| `wifi_mgr` | SYSTEM | — | — |
+| `bt_mgr` | SYSTEM | — | — |
+| `meshtastic` | SYSTEM | — | RADIO (runtime) |
 | `miniwin` | UI | — | DISPLAY (TOUCH optional) |
+
+This table is incomplete for UI backends beyond `miniwin` (`cupcake`, `cardstack`, `kittenui`, etc. aren't listed) — out of scope for this update, listed here for the modules actually touched.

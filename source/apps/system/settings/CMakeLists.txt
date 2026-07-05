@@ -6,5 +6,8 @@ idf_component_register(
         .
         ../../../kernel/core
         ../../../kernel/catcalls
-    REQUIRES esp_common driver freertos nvs_flash miniwin app_manager
+        ../../../modules/wifi_mgr
+        ../../../modules/bt_mgr
+        ../../../modules/meshtastic
+    REQUIRES esp_common driver freertos nvs_flash esp_hw_support spi_flash miniwin app_manager wifi_mgr bt_mgr meshtastic
 )

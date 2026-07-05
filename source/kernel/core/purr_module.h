@@ -25,7 +25,7 @@
 #include <stdint.h>
 
 #define PURR_MODULE_MAGIC       0x50555252u   // 'PURR'
-#define PURR_MODULE_ABI_VERSION 1
+#define PURR_MODULE_ABI_VERSION 2
 
 // Module types
 #define PURR_MOD_DRIVER   0x01

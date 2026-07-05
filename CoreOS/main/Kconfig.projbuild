@@ -44,6 +44,16 @@ menu "PURR OS"
                 LVGL 8 and the kernel notification API (PURR_KERNEL_VERSION
                 >= 1.0.0).
 
+        config PURR_UI_BACKEND_CUPCAKE
+            bool "Cupcake (LVGL 8, Android 1.5-style launcher)"
+            help
+                Android 1.5 ("Cupcake")-style launcher: a home screen with a
+                small number of pinned app shortcuts plus a bottom dock, and
+                a separate all-apps drawer (opened from the dock's center
+                button) showing every registered app in a scrollable grid.
+                Status bar + drag-down notification panel forked from
+                Cardstack. Requires LVGL 8 and the kernel notification API.
+
         config PURR_UI_BACKEND_LVGLDEBUG
             bool "LVGL Debug (touch/HAL diagnostics)"
             help
@@ -65,5 +75,37 @@ menu "PURR OS"
             MiniWin's own desktop module. Tells miniwin_module.c to skip
             starting its own desktop/task since the kernel already started
             its own.
+
+    config PURR_MINIWIN_DESKTOP_WINCE
+        bool "MiniWin: WinCE-style desktop (taskbar + start menu) [EXPERIMENTAL]"
+        default n
+        depends on PURR_UI_BACKEND_MINIWIN && !PURR_UI_WINCE_SHELL
+        help
+            EXPERIMENTAL — opt in per-device, not a default. Generalized
+            version of the WinCE-style taskbar/start-menu chrome (see
+            miniwin_wince_desktop.c) for any native-kernel MiniWin device —
+            replaces the default icon-grid desktop. The Start Menu's
+            Programs list is built from the real app_manager registry, and
+            every purr_win_create() window gets a taskbar button
+            automatically. Mutually exclusive with PURR_UI_WINCE_SHELL, which
+            is for kernels that bake their own shell in directly instead of
+            using this module.
+
+            Known-rough edges as of introduction: apps launch in their own
+            FreeRTOS task via app_manager, so any UI backend's own render
+            task loop must serialize against that with purr_kernel_ui_lock()
+            or risk racing the display driver. Build-time opt-in only for
+            now — see docs/01_Architecture.md.
+
+    config PURR_TDECK_PLUS_PHYSICAL_KEYBOARD
+        bool "T-Deck Plus: init physical BBQ20 keyboard"
+        default y
+        help
+            Disable to skip BBQ20 I2C keyboard init entirely and rely solely
+            on the on-screen keyboard (Cupcake's purr_win_keyboard_show()) —
+            useful for bring-up/testing without the physical keyboard
+            attached. Previously there was no way to disable this at all —
+            bbq20_drv_init() was unconditionally hardcoded into
+            kernel_tdp_boot.c.
 
 endmenu

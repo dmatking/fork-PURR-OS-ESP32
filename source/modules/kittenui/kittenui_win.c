@@ -16,6 +16,13 @@
 static lv_obj_t *s_wins[MAX_WINS];
 static lv_obj_t *s_wids[MAX_WIDS];
 
+// Active purr_win_row()/purr_win_col() container per window, if any — see
+// content_parent()'s comment for why this exists.
+static lv_obj_t *s_active_layout[MAX_WINS];
+// For a layout container's wid, which window index owns it, so layout_end()
+// (which only receives the container's wid) can clear the right slot above.
+static int s_layout_owner_win[MAX_WIDS];
+
 static purr_win_t alloc_win(lv_obj_t *obj) {
     for (int i = 0; i < MAX_WINS; i++) {
         if (!s_wins[i]) { s_wins[i] = obj; return (purr_win_t)(i + 1); }
@@ -84,6 +91,7 @@ static purr_win_t kw_win_create(const char *title) {
 static void kw_win_destroy(purr_win_t h) {
     lv_obj_t *w = get_win(h);
     if (w) lv_obj_del(w);
+    if (h >= 1 && h <= MAX_WINS) s_active_layout[h - 1] = NULL;
     free_win(h);
 }
 
@@ -102,14 +110,28 @@ static void kw_win_clear(purr_win_t h) {
     if (!w) return;
     lv_obj_t *content = lv_win_get_content(w);
     if (content) lv_obj_clean(content);
+    if (h >= 1 && h <= MAX_WINS) s_active_layout[h - 1] = NULL;
 }
 
 // ── Labels ────────────────────────────────────────────────────────────────────
 
+// purr_win_row()/purr_win_col() create a flex container (see kw_layout_begin)
+// but every widget-creation call below used to parent straight to the
+// window's top-level content area regardless, so the container sat there
+// empty and every "row" of buttons/labels just landed in the same vertical
+// stack as everything else — every app that groups widgets into a row
+// (calculator's keypad, settings'/about's/fileman's button rows, ...)
+// rendered as one long vertical stack instead. Parent into whichever layout
+// is currently active for this window, falling back to the window content.
+static lv_obj_t *content_parent(purr_win_t h, lv_obj_t *w) {
+    if (h >= 1 && h <= MAX_WINS && s_active_layout[h - 1]) return s_active_layout[h - 1];
+    return lv_win_get_content(w);
+}
+
 static purr_wid_t kw_label_create(purr_win_t h, const char *text) {
     lv_obj_t *w = get_win(h);
     if (!w) return 0;
-    lv_obj_t *lbl = lv_label_create(lv_win_get_content(w));
+    lv_obj_t *lbl = lv_label_create(content_parent(h, w));
     lv_label_set_text(lbl, text);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(lbl, LV_PCT(100));
@@ -136,7 +158,7 @@ static purr_wid_t kw_btn_create(purr_win_t h, const char *label,
                                   purr_win_cb_t cb, void *user) {
     lv_obj_t *w = get_win(h);
     if (!w) return 0;
-    lv_obj_t *btn = lv_btn_create(lv_win_get_content(w));
+    lv_obj_t *btn = lv_btn_create(content_parent(h, w));
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, label);
     lv_obj_center(lbl);
@@ -162,7 +184,7 @@ static void kw_btn_enable(purr_wid_t wid, bool enabled) {
 static purr_wid_t kw_ta_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
     lv_obj_t *w = get_win(h);
     if (!w) return 0;
-    lv_obj_t *ta = lv_textarea_create(lv_win_get_content(w));
+    lv_obj_t *ta = lv_textarea_create(content_parent(h, w));
     lv_obj_set_size(ta, LV_PCT(w_pct), LV_PCT(h_pct));
     lv_textarea_set_one_line(ta, false);
     return alloc_wid(ta);
@@ -299,10 +321,10 @@ static void kw_list_cb(purr_wid_t wid, purr_win_cb_t cb, void *user) {
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
-static purr_wid_t kw_layout_begin(purr_win_t h, purr_layout_t dir, uint8_t pad) {
+static purr_wid_t kw_layout_begin(purr_win_t h, purr_layout_t dir, uint8_t pad, bool grow) {
     lv_obj_t *w = get_win(h);
     if (!w) return 0;
-    lv_obj_t *cont = lv_obj_create(lv_win_get_content(w));
+    lv_obj_t *cont = lv_obj_create(content_parent(h, w));
     lv_obj_set_size(cont, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(cont, pad, 0);
     lv_obj_set_style_border_width(cont, 0, 0);
@@ -310,11 +332,19 @@ static purr_wid_t kw_layout_begin(purr_win_t h, purr_layout_t dir, uint8_t pad) 
     lv_obj_set_flex_flow(cont,
         (dir == PURR_LAYOUT_ROW) ? LV_FLEX_FLOW_ROW : LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
-    return alloc_wid(cont);
+    if (grow) lv_obj_set_flex_grow(cont, 1);
+    purr_wid_t wid = alloc_wid(cont);
+    if (wid >= 1 && wid <= MAX_WIDS) s_layout_owner_win[wid - 1] = (int)(h - 1);
+    if (h >= 1 && h <= MAX_WINS) s_active_layout[h - 1] = cont;
+    return wid;
 }
 
 static void kw_layout_end(purr_wid_t wid) {
-    (void)wid; // nothing to do in LVGL — container stays valid until win_clear
+    if (wid < 1 || wid > MAX_WIDS) return;
+    int win_idx = s_layout_owner_win[wid - 1];
+    if (win_idx >= 0 && win_idx < MAX_WINS && s_active_layout[win_idx] == get_wid(wid)) {
+        s_active_layout[win_idx] = NULL;
+    }
 }
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────

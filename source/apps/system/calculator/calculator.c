@@ -98,7 +98,11 @@ static void apply_op(void) {
 static void on_op(purr_wid_t wid, purr_event_t event, void *user) {
     (void)wid; (void)event;
     char op = *(const char *)user;
-    apply_op();
+    // If no digit was entered since the last operator/equals (e.g. pressing
+    // "+" then "-" before typing a number), just swap the pending operator
+    // instead of re-applying the previous one against the same operand —
+    // otherwise "5, +, -, 3, =" silently double-counted the first operand.
+    if (!s_fresh) apply_op();
     s_op    = op;
     s_fresh = true;
 }

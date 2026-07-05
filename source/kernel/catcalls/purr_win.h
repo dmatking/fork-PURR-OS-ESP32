@@ -47,7 +47,9 @@
 // ── Window lifecycle ──────────────────────────────────────────────────────────
 
 static inline purr_win_t purr_win_create(const char *title) {
-    return _UI_CALL(purr_win_t, 0, win_create, title);
+    purr_win_t win = _UI_CALL(purr_win_t, 0, win_create, title);
+    if (win) purr_kernel_notify_window_created(win);
+    return win;
 }
 static inline void purr_win_destroy(purr_win_t win) {
     _UI_VOID(win_destroy, win);
@@ -60,6 +62,9 @@ static inline void purr_win_hide(purr_win_t win) {
 }
 static inline void purr_win_clear(purr_win_t win) {
     _UI_VOID(win_clear, win);
+}
+static inline void purr_win_on_close(purr_win_t win, purr_win_cb_t cb, void *user) {
+    _UI_VOID(win_on_close, win, cb, user);
 }
 
 // ── Labels ────────────────────────────────────────────────────────────────────
@@ -137,10 +142,20 @@ static inline void purr_win_list_on_select(purr_wid_t wid,
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 static inline purr_wid_t purr_win_row(purr_win_t win, uint8_t pad) {
-    return _UI_CALL(purr_wid_t, 0, layout_begin, win, PURR_LAYOUT_ROW, pad);
+    return _UI_CALL(purr_wid_t, 0, layout_begin, win, PURR_LAYOUT_ROW, pad, false);
 }
 static inline purr_wid_t purr_win_col(purr_win_t win, uint8_t pad) {
-    return _UI_CALL(purr_wid_t, 0, layout_begin, win, PURR_LAYOUT_COL, pad);
+    return _UI_CALL(purr_wid_t, 0, layout_begin, win, PURR_LAYOUT_COL, pad, false);
+}
+// _grow variants: the container expands to fill the remaining space in its
+// parent's flex layout instead of hugging its own content — required for a
+// row/col whose children are percentage-sized (e.g. a list+preview split),
+// since a hug-content parent can't resolve percentage-sized children.
+static inline purr_wid_t purr_win_row_grow(purr_win_t win, uint8_t pad) {
+    return _UI_CALL(purr_wid_t, 0, layout_begin, win, PURR_LAYOUT_ROW, pad, true);
+}
+static inline purr_wid_t purr_win_col_grow(purr_win_t win, uint8_t pad) {
+    return _UI_CALL(purr_wid_t, 0, layout_begin, win, PURR_LAYOUT_COL, pad, true);
 }
 static inline void purr_win_layout_end(purr_wid_t container) {
     _UI_VOID(layout_end, container);

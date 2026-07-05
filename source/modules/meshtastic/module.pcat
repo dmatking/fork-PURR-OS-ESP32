@@ -1,0 +1,9 @@
+# modules/meshtastic/module.pcat
+
+name              = "meshtastic"
+version           = "0.1.0"
+module_type       = "PURR_MOD_SYSTEM"
+kernel_min        = "0.9.0"
+kernel_max        = ""
+provides          = ["mesh_send", "mesh_rx", "mesh_node_table"]
+required_catcalls = ["radio"]

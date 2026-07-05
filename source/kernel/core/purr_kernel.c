@@ -74,6 +74,26 @@ const catcall_radio_t   *purr_kernel_radio(void)   { return s_radio; }
 const catcall_gps_t     *purr_kernel_gps(void)     { return s_gps; }
 const catcall_ui_t      *purr_kernel_ui(void)      { return s_ui; }
 
+esp_err_t purr_kernel_keyboard_set_backlight(uint8_t brightness) {
+    for (int i = 0; i < s_input_count; i++) {
+        if (s_inputs[i] && s_inputs[i]->set_backlight) {
+            return s_inputs[i]->set_backlight(brightness);
+        }
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+// ── App window tracking ───────────────────────────────────────────────────────
+
+static purr_window_created_cb_t s_window_created_cb = NULL;
+
+void purr_kernel_set_window_created_cb(purr_window_created_cb_t cb) {
+    s_window_created_cb = cb;
+}
+void purr_kernel_notify_window_created(purr_win_t win) {
+    if (s_window_created_cb) s_window_created_cb(win);
+}
+
 // ── UI thread safety ──────────────────────────────────────────────────────────
 //
 // LVGL (and any other catcall_ui_t backend) is not safe to call from two

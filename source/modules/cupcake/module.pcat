@@ -1,0 +1,21 @@
+[module]
+name        = "cupcake"
+version     = "0.1.0"
+type        = "ui"
+description = "Cupcake — Android 1.5-style launcher (home grid + dock + app drawer)"
+author      = "PURR OS"
+
+[requires]
+catcalls    = "display"
+kernel_min  = "1.0.0"
+
+# PURR package dependencies (resolved by `purrstrap pkg add`), distinct from
+# [build].requires below which lists IDF/C component names for the compiler —
+# this section only names other PURR packages by their device.pcat/source
+# directory slug, with a semver constraint.
+[depends]
+app_manager = ">=0.1.0"
+
+[build]
+sources     = "cupcake_module.c cupcake_hal.c cupcake_ui.c cupcake_win.c"
+requires    = "lvgl app_manager"

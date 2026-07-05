@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "esp_err.h"
 
-#define CATCALL_RADIO_VERSION 1
+#define CATCALL_RADIO_VERSION 2
 
 typedef struct {
     uint32_t frequency_hz;
@@ -26,5 +26,11 @@ typedef struct {
     float      (*snr)(void);
     esp_err_t  (*set_frequency)(uint32_t hz);
     esp_err_t  (*set_power)(uint8_t dbm);
+    // Retune modulation params after init() — needed by anything that must
+    // match a specific radio preset (e.g. Meshtastic's LONG_FAST: SF11,
+    // BW250kHz, CR4/5, sync 0x2B), since radio_config_t's sf/bandwidth_hz/
+    // coding_rate are otherwise only applied once, at init() time.
+    esp_err_t  (*set_modulation)(uint8_t sf, uint32_t bw_hz, uint8_t cr);
+    esp_err_t  (*set_sync_word)(uint8_t sync);
     esp_err_t  (*deinit)(void);
 } catcall_radio_t;

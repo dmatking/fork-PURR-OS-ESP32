@@ -152,7 +152,7 @@ typedef struct {
 
 **Source:** `source/kernel/catcalls/catcall_input.h`
 **Flag:** `CATCALL_FLAG_INPUT` (`1<<2`)
-**Version:** `CATCALL_INPUT_VERSION 1`
+**Version:** `CATCALL_INPUT_VERSION 2` (bumped from 1 — added `set_backlight`)
 
 Handles non-touch input: keyboards, trackballs, rotary encoders.
 
@@ -179,8 +179,14 @@ typedef struct {
     esp_err_t (*init)(void);
     bool      (*poll_event)(input_event_t *out);
     esp_err_t (*deinit)(void);
+
+    // Optional — only implemented by drivers with a controllable backlight
+    // (e.g. bbq20's under-key LEDs). NULL for drivers without one (trackball).
+    esp_err_t (*set_backlight)(uint8_t brightness);
 } catcall_input_t;
 ```
+
+`purr_kernel_keyboard_set_backlight(uint8_t brightness)` (`purr_kernel.h`) dispatches to whichever registered input driver implements `set_backlight` — callers (Settings' keyboard backlight section) don't need to know which specific driver has one, mirroring how screen brightness goes through `catcall_display` rather than a specific display driver.
 
 ### Functions
 
@@ -324,9 +330,9 @@ typedef struct {
 
 **Source:** `source/kernel/catcalls/catcall_ui.h`
 **Flag:** `CATCALL_FLAG_UI` (`1<<5`)
-**Version:** `CATCALL_UI_VERSION 1`
+**Version:** `CATCALL_UI_VERSION 4` (this doc's struct listing below predates several version bumps — `win_on_close`, a `list_*` widget family, and the keyboard hooks all exist now but aren't shown here; the `layout_begin` signature below is current)
 
-The UI catcall is the widget/windowing abstraction layer added in v0.12.0. UI modules (KittenUI, MiniWin, oled_ui) register an implementation at boot; all apps call through `purr_win.h` which dispatches to the registered backend. Apps never touch LVGL or MiniWin APIs directly, making them portable across all display/UI combinations.
+The UI catcall is the widget/windowing abstraction layer added in v0.12.0. UI modules (KittenUI, MiniWin, oled_ui, cupcake, cardstack) register an implementation at boot; all apps call through `purr_win.h` which dispatches to the registered backend. Apps never touch LVGL or MiniWin APIs directly, making them portable across all display/UI combinations.
 
 ```c
 typedef uint32_t purr_win_t;   // opaque window handle
@@ -374,7 +380,13 @@ typedef struct {
     void          (*textarea_on_change)(purr_wid_t wid, purr_win_cb_t cb, void *user);
 
     // Layout containers
-    purr_wid_t (*layout_begin)(purr_win_t win, purr_layout_t type, uint8_t padding);
+    // grow: fills the remaining space in the parent's flex layout instead of
+    // hugging its own content — needed for a row/col holding percentage-sized
+    // children (a list, a textarea, a split view), which otherwise collapse
+    // to 0 size inside a content-sized parent. Added this round (`grow`
+    // param + purr_win_row_grow()/col_grow() wrappers) to fix File Manager's
+    // list+preview split rendering at 0px — see docs/06_Apps.md.
+    purr_wid_t (*layout_begin)(purr_win_t win, purr_layout_t type, uint8_t padding, bool grow);
     void       (*layout_end)  (purr_wid_t container);
 
     // On-screen keyboard

@@ -27,6 +27,9 @@ static const char *TAG = "xp_desktop";
 #define TASKBAR_H      28
 #define START_BTN_W    56
 #define CLOCK_W        52
+#define NOTIF_BTN_W    36
+#define NOTIF_PANEL_W  200
+#define NOTIF_PANEL_MAX_H 160
 #define MENU_W         160
 #define MENU_ITEM_H    28
 #define DESKTOP_COLOR  lv_color_make(0x00, 0x80, 0x80)   // XP teal
@@ -42,6 +45,13 @@ static lv_obj_t *s_taskbar   = NULL;
 static lv_obj_t *s_clock_lbl = NULL;
 static lv_obj_t *s_start_menu = NULL;
 static bool      s_menu_open  = false;
+
+// Notification bell — see build_notif_panel()/kittenui_desktop_tick()
+static lv_obj_t *s_notif_btn   = NULL;
+static lv_obj_t *s_notif_lbl   = NULL;
+static lv_obj_t *s_notif_panel = NULL;
+static bool      s_notif_open  = false;
+static int       s_notif_last_count = -1;   // forces first-tick redraw
 
 // Taskbar window strip (middle section)
 static lv_obj_t *s_win_strip = NULL;
@@ -227,9 +237,12 @@ static void build_start_menu(void)
     }
 }
 
+static void close_notif_panel(void);   // defined below, in the notif-bell section
+
 static void start_btn_cb(lv_event_t *e)
 {
     (void)e;
+    if (s_notif_open) close_notif_panel();
     if (s_menu_open) {
         if (s_start_menu) { lv_obj_del(s_start_menu); s_start_menu = NULL; }
         s_menu_open = false;
@@ -247,6 +260,107 @@ static void desktop_click_cb(lv_event_t *e)
         lv_obj_del(s_start_menu);
         s_start_menu = NULL;
         s_menu_open  = false;
+    }
+    if (s_notif_open && s_notif_panel) {
+        lv_obj_del(s_notif_panel);
+        s_notif_panel = NULL;
+        s_notif_open  = false;
+    }
+}
+
+// ── Notification bell ─────────────────────────────────────────────────────────
+// Renders whatever's in the kernel's notification ring buffer
+// (purr_kernel_notify*() — see purr_kernel.h) — every producer just calls
+// purr_kernel_notify(title, body, source) and it shows up here automatically,
+// same as it already does on Cardstack.
+
+static void close_notif_panel(void)
+{
+    if (s_notif_panel) { lv_obj_del(s_notif_panel); s_notif_panel = NULL; }
+    s_notif_open = false;
+}
+
+static void notif_clear_cb(lv_event_t *e)
+{
+    (void)e;
+    purr_kernel_notify_clear();
+    close_notif_panel();
+}
+
+static void build_notif_panel(void)
+{
+    lv_coord_t sh = lv_disp_get_ver_res(NULL);
+    lv_coord_t sw = lv_disp_get_hor_res(NULL);
+
+    int n = purr_kernel_notify_count();
+    int row_h = MENU_ITEM_H + 8;
+    int panel_h = 8 + (n > 0 ? n * row_h : MENU_ITEM_H) + MENU_ITEM_H;
+    if (panel_h > NOTIF_PANEL_MAX_H) panel_h = NOTIF_PANEL_MAX_H;
+
+    s_notif_panel = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_notif_panel);
+    lv_obj_add_style(s_notif_panel, &s_sty_menu, 0);
+    lv_obj_set_size(s_notif_panel, NOTIF_PANEL_W, panel_h);
+    lv_obj_set_pos(s_notif_panel, sw - NOTIF_PANEL_W, sh - TASKBAR_H - panel_h - 2);
+    lv_obj_set_flex_flow(s_notif_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollbar_mode(s_notif_panel, LV_SCROLLBAR_MODE_AUTO);
+
+    if (n == 0) {
+        lv_obj_t *lbl = lv_label_create(s_notif_panel);
+        lv_label_set_text(lbl, "No notifications");
+        lv_obj_set_style_text_color(lbl, lv_color_make(0x80, 0x80, 0x80), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_pad_all(lbl, 8, 0);
+        return;
+    }
+
+    for (int i = 0; i < n; i++) {
+        purr_notification_t note;
+        if (!purr_kernel_notify_at(i, &note)) continue;
+
+        lv_obj_t *row = lv_obj_create(s_notif_panel);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_height(row, row_h);
+        lv_obj_set_style_pad_all(row, 4, 0);
+        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *title = lv_label_create(row);
+        lv_label_set_text(title, note.title);
+        lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(title, lv_color_black(), 0);
+        lv_obj_set_width(title, LV_PCT(100));
+        lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+
+        lv_obj_t *body = lv_label_create(row);
+        lv_label_set_text(body, note.body);
+        lv_obj_set_style_text_font(body, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(body, lv_color_make(0x50, 0x50, 0x50), 0);
+        lv_obj_set_width(body, LV_PCT(100));
+        lv_obj_set_pos(body, 0, 16);
+        lv_label_set_long_mode(body, LV_LABEL_LONG_DOT);
+    }
+
+    lv_obj_t *clear_btn = lv_btn_create(s_notif_panel);
+    lv_obj_remove_style_all(clear_btn);
+    lv_obj_add_style(clear_btn, &s_sty_menu_item, 0);
+    lv_obj_add_style(clear_btn, &s_sty_menu_item_pr, LV_STATE_PRESSED);
+    lv_obj_set_width(clear_btn, LV_PCT(100));
+    lv_obj_t *clear_lbl = lv_label_create(clear_btn);
+    lv_label_set_text(clear_lbl, "Clear all");
+    lv_obj_center(clear_lbl);
+    lv_obj_add_event_cb(clear_btn, notif_clear_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void notif_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_menu_open) { lv_obj_del(s_start_menu); s_start_menu = NULL; s_menu_open = false; }
+    if (s_notif_open) {
+        close_notif_panel();
+    } else {
+        build_notif_panel();
+        s_notif_open = true;
     }
 }
 
@@ -429,6 +543,19 @@ void kittenui_desktop_init(void)
     lv_obj_set_style_pad_column(s_win_strip, 2, 0);
     lv_obj_clear_flag(s_win_strip, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Notification bell (between window strip and clock)
+    s_notif_btn = lv_btn_create(s_taskbar);
+    lv_obj_remove_style_all(s_notif_btn);
+    lv_obj_set_size(s_notif_btn, NOTIF_BTN_W, TASKBAR_H - 6);
+    lv_obj_set_style_bg_opa(s_notif_btn, LV_OPA_TRANSP, 0);
+    lv_obj_add_event_cb(s_notif_btn, notif_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    s_notif_lbl = lv_label_create(s_notif_btn);
+    lv_obj_set_style_text_color(s_notif_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(s_notif_lbl, &lv_font_montserrat_14, 0);
+    lv_label_set_text(s_notif_lbl, LV_SYMBOL_BELL);
+    lv_obj_center(s_notif_lbl);
+
     // Clock (right-aligned)
     s_clock_lbl = lv_label_create(s_taskbar);
     lv_obj_remove_style_all(s_clock_lbl);
@@ -462,4 +589,18 @@ void kittenui_desktop_tick(void)
     char buf[8];
     snprintf(buf, sizeof(buf), "%02lu:%02lu", (unsigned long)hours, (unsigned long)mins);
     lv_label_set_text(s_clock_lbl, buf);
+
+    // Notification bell badge — only touch the label (and re-render an
+    // already-open panel) when the count actually changed, same idea as the
+    // clock only needing to move once a minute; avoids rebuilding LVGL
+    // objects every tick for no reason.
+    int count = purr_kernel_notify_count();
+    if (count != s_notif_last_count) {
+        s_notif_last_count = count;
+        char nbuf[16];
+        if (count > 0) snprintf(nbuf, sizeof(nbuf), LV_SYMBOL_BELL " %d", count);
+        else           snprintf(nbuf, sizeof(nbuf), LV_SYMBOL_BELL);
+        if (s_notif_lbl) lv_label_set_text(s_notif_lbl, nbuf);
+        if (s_notif_open) { close_notif_panel(); build_notif_panel(); s_notif_open = true; }
+    }
 }

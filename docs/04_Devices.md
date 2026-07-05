@@ -139,6 +139,8 @@ If BOARD_POWERON is not set HIGH, all I2C and SPI peripherals appear absent.
 - RP2040-based keyboard bridge at I2C 0x55, shared bus with GT911
 - Read protocol: plain `Wire.requestFrom(0x55, 1)` — no write preamble needed. Returns 0x00 when no key is pressed
 - A `beginTransmission` / `endTransmission(false)` probe before `requestFrom` confuses the RP2040 bridge and returns no key data
+- Has a controllable under-key LED backlight (register `0x05`, single byte 0-255) — driven via `bbq20_set_backlight()`, exposed generically through `catcall_input_t.set_backlight` + `purr_kernel_keyboard_set_backlight()`, controllable from Settings
+- `CONFIG_PURR_TDECK_PLUS_PHYSICAL_KEYBOARD` (default `y`, `CoreOS/main/Kconfig.projbuild`) can disable BBQ20 init entirely for bring-up/testing without the physical keyboard attached — the on-screen keyboard (`purr_win_keyboard_show()`) still works either way. Previously there was no way to disable this at all; it was unconditionally hardcoded into `kernel_tdp_boot.c`.
 
 ---
 

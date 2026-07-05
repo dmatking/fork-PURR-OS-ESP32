@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-#define CATCALL_UI_VERSION 2
+#define CATCALL_UI_VERSION 4
 
 typedef uint32_t purr_win_t;   // window handle
 typedef uint32_t purr_wid_t;   // widget handle (label, button, textarea, etc.)
@@ -53,6 +53,13 @@ typedef struct {
     void       (*win_hide)    (purr_win_t win);
     void       (*win_clear)   (purr_win_t win);   // remove all child widgets
 
+    // Fires cb when the window's native title-bar close button is clicked,
+    // in addition to the backend's own default hide-on-close behavior — lets
+    // something outside the app (app_manager) know the user asked to fully
+    // close this window, without the backend needing to know what that
+    // means. Optional: backends that don't implement it can leave this NULL.
+    void       (*win_on_close) (purr_win_t win, purr_win_cb_t cb, void *user);
+
     // ── Labels ─────────────────────────────────────────────────────────────
     purr_wid_t (*label_create) (purr_win_t win, const char *text);
     void       (*label_set)    (purr_wid_t wid, const char *text);
@@ -82,7 +89,12 @@ typedef struct {
 
     // ── Layout helpers ─────────────────────────────────────────────────────
     // Begin a row or column container inside win. Returns container widget.
-    purr_wid_t (*layout_begin) (purr_win_t win, purr_layout_t dir, uint8_t pad);
+    // grow: when true, the container expands to fill the remaining space in
+    // its parent's flex layout instead of hugging its own content — needed
+    // for any row/col holding percentage-sized children (e.g. a list+preview
+    // split), which otherwise collapse to 0 size inside a content-sized
+    // parent. false preserves the original hug-content behavior.
+    purr_wid_t (*layout_begin) (purr_win_t win, purr_layout_t dir, uint8_t pad, bool grow);
     void       (*layout_end)   (purr_wid_t container);
 
     // ── Keyboard ───────────────────────────────────────────────────────────

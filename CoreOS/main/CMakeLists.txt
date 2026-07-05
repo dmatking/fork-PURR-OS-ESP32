@@ -66,6 +66,9 @@ idf_component_register(
         esp_common
         esp_system
         esp_timer
+        esp_netif
+        esp_event
+        esp_wifi
         driver
         freertos
         nvs_flash

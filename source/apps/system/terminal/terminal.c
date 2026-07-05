@@ -202,6 +202,7 @@ static int terminal_init(void) {
     s_send = purr_win_button(s_win, "Send", on_send, NULL);
 
     purr_win_textarea_focus(s_in);
+    purr_win_keyboard_show(s_win, s_in);
     purr_win_show(s_win);
 
     term_println("PURR OS Terminal v1.0");
@@ -211,6 +212,7 @@ static int terminal_init(void) {
 }
 
 static void terminal_deinit(void) {
+    purr_win_keyboard_hide(s_win);
     purr_win_destroy(s_win);
     s_win = 0; s_out = 0; s_in = 0; s_send = 0;
 }

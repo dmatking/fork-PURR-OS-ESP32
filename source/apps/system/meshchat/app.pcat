@@ -1,0 +1,9 @@
+# apps/system/meshchat/app.pcat
+
+name        = "meshchat"
+version     = "1.0.0"
+tier        = "claw"
+author      = "PURR OS"
+description = "MeshChat: MSN-style buddy list + private chat over Meshtastic, no phone required."
+
+idf_requires = "esp_common driver freertos"

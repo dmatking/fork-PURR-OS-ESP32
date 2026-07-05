@@ -55,8 +55,10 @@
 #define ST7789_WS169_W     240
 #define ST7789_WS169_H     280
 
-// SPI host and clock
+// SPI host and clock — overridable at runtime via st7789_set_spi_host(),
+// default preserved for every device that doesn't call it.
 #define ST7789_SPI_HOST  SPI2_HOST
+static spi_host_device_t s_spi_host = ST7789_SPI_HOST;
 #define ST7789_CLK_HZ    (80 * 1000 * 1000)
 
 // LEDC backlight
@@ -140,6 +142,11 @@ void st7789_configure(int cs, int dc, int mosi, int miso, int sclk, int rst, int
     s_pins.sclk_pin = sclk;
     s_pins.rst_pin  = rst;
     s_pins.bl_pin   = bl;
+}
+
+void st7789_set_spi_host(spi_host_device_t host)
+{
+    s_spi_host = host;
 }
 
 // ── Low-level SPI helpers ─────────────────────────────────────────────────────
@@ -352,7 +359,7 @@ static esp_err_t st7789_init(const display_config_t *cfg)
         .quadhd_io_num   = -1,
         .max_transfer_sz = ST7789_WIDTH * ST7789_HEIGHT * 2 + 8,
     };
-    esp_err_t ret = spi_bus_initialize(ST7789_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
+    esp_err_t ret = spi_bus_initialize(s_spi_host, &bus_cfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "spi_bus_initialize failed: %s", esp_err_to_name(ret));
         return ret;
@@ -364,7 +371,7 @@ static esp_err_t st7789_init(const display_config_t *cfg)
         .spics_io_num   = s_pins.cs_pin,
         .queue_size     = 1,
     };
-    ESP_ERROR_CHECK(spi_bus_add_device(ST7789_SPI_HOST, &dev_cfg, &s_spi));
+    ESP_ERROR_CHECK(spi_bus_add_device(s_spi_host, &dev_cfg, &s_spi));
 
     // Panel init sequence
     uint8_t madctl = ws169 ? MADCTL_PORTRAIT

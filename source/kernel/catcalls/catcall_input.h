@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "esp_err.h"
 
-#define CATCALL_INPUT_VERSION 1
+#define CATCALL_INPUT_VERSION 2
 
 typedef enum {
     INPUT_EVENT_NONE     = 0,
@@ -28,4 +28,8 @@ typedef struct {
     esp_err_t  (*init)(void);
     bool       (*poll_event)(input_event_t *out);   // non-blocking, returns false if queue empty
     esp_err_t  (*deinit)(void);
+
+    // Optional — only implemented by drivers with a controllable backlight
+    // (e.g. bbq20's under-key LEDs). NULL for drivers without one (trackball).
+    esp_err_t  (*set_backlight)(uint8_t brightness);
 } catcall_input_t;

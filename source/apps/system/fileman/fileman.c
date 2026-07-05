@@ -2,13 +2,14 @@
 // Uses purr_win.h only — works on KittenUI (LVGL) and MiniWin identically.
 //
 // Two panels: left = directory listing, right = text file preview.
-// Roots:  /spiffs  (PURR internal flash)
-//         /sd      (SD card, if mounted)
+// Roots:  /flash   (PURR internal flash, SPIFFS)
+//         /sdcard  (SD card, if mounted)
 
 #include <string.h>
 #include <stdio.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "purr_win.h"
@@ -27,7 +28,7 @@ static purr_wid_t s_file_list  = 0;   // left: selectable entry list
 static purr_wid_t s_prev_area  = 0;   // right: file preview (textarea)
 static purr_wid_t s_status_lbl = 0;
 
-static char s_cwd[PATH_MAX_LEN] = "/spiffs";
+static char s_cwd[PATH_MAX_LEN] = "/flash";
 static char s_entries[MAX_ENTRIES][64];
 static int  s_entry_types[MAX_ENTRIES]; // 0=file, 1=dir
 static int  s_entry_count = 0;
@@ -37,6 +38,16 @@ static int  s_selected    = -1;
 // refresh_list() can be called from a task with a modest stack budget.
 static char        s_label_bufs[MAX_ENTRIES][68];
 static const char *s_label_ptrs[MAX_ENTRIES];
+
+// ── File ops dialog (New Folder / Rename / Delete confirm) ────────────────────
+// One small popup window reused for all three ops — only one can be open at
+// a time, matching how the rest of this app already assumes single-focus use.
+
+typedef enum { DLG_NONE, DLG_NEW_FOLDER, DLG_RENAME, DLG_DELETE_CONFIRM } dlg_mode_t;
+
+static dlg_mode_t s_dlg_mode  = DLG_NONE;
+static purr_win_t s_dlg_win   = 0;
+static purr_wid_t s_dlg_input = 0;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -58,8 +69,8 @@ static void refresh_list(void) {
     struct dirent *ent;
 
     // Parent entry if not at a root
-    bool at_root = (strcmp(s_cwd, "/spiffs") == 0 ||
-                    strcmp(s_cwd, "/sd")     == 0);
+    bool at_root = (strcmp(s_cwd, "/flash") == 0 ||
+                    strcmp(s_cwd, "/sdcard")     == 0);
     if (!at_root) {
         strncpy(s_entries[s_entry_count], "..", sizeof(s_entries[0]) - 1);
         s_entry_types[s_entry_count] = 1;
@@ -132,9 +143,9 @@ static void navigate_to(const char *path) {
 // "Up" — go to parent
 static void on_up(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
-    if (strcmp(s_cwd, "/spiffs") == 0 || strcmp(s_cwd, "/sd") == 0) {
+    if (strcmp(s_cwd, "/flash") == 0 || strcmp(s_cwd, "/sdcard") == 0) {
         // At a root — show root chooser
-        navigate_to("/spiffs");
+        navigate_to("/flash");
         return;
     }
     char parent[PATH_MAX_LEN];
@@ -143,7 +154,7 @@ static void on_up(purr_wid_t w, purr_event_t e, void *u) {
     if (slash && slash != parent) {
         *slash = '\0';
     } else {
-        strcpy(parent, "/spiffs");
+        strcpy(parent, "/flash");
     }
     navigate_to(parent);
 }
@@ -151,7 +162,7 @@ static void on_up(purr_wid_t w, purr_event_t e, void *u) {
 // Navigate to SPIFFS root
 static void on_goto_spiffs(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
-    navigate_to("/spiffs");
+    navigate_to("/flash");
 }
 
 // Navigate to SD root
@@ -161,7 +172,7 @@ static void on_goto_sd(purr_wid_t w, purr_event_t e, void *u) {
         set_status("SD card not mounted.");
         return;
     }
-    navigate_to("/sd");
+    navigate_to("/sdcard");
 }
 
 // List entries are selected and opened in one tap/click — MiniWin and
@@ -211,23 +222,135 @@ static void on_list_event(purr_wid_t w, purr_event_t e, void *u) {
     }
 }
 
+// ── File ops (New Folder / Rename / Delete) ───────────────────────────────────
+
+static void close_dialog(void) {
+    if (s_dlg_win) purr_win_destroy(s_dlg_win);
+    s_dlg_win   = 0;
+    s_dlg_input = 0;
+    s_dlg_mode  = DLG_NONE;
+}
+
+static void on_dialog_cancel(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    close_dialog();
+}
+
+static void on_dialog_confirm(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    const char *name = purr_win_textarea_get(s_dlg_input);
+    dlg_mode_t mode = s_dlg_mode;
+
+    if ((mode == DLG_NEW_FOLDER || mode == DLG_RENAME) && (!name || !*name)) {
+        return;  // ignore empty name, leave dialog open
+    }
+
+    char full[PATH_MAX_LEN];
+    if (mode == DLG_NEW_FOLDER) {
+        snprintf(full, sizeof(full), "%s/%s", s_cwd, name);
+        if (mkdir(full, 0755) != 0) set_status("New folder failed.");
+    } else if (mode == DLG_RENAME) {
+        if (s_selected < 0 || s_selected >= s_entry_count) { close_dialog(); return; }
+        char oldpath[PATH_MAX_LEN];
+        snprintf(oldpath, sizeof(oldpath), "%s/%s", s_cwd, s_entries[s_selected]);
+        snprintf(full, sizeof(full), "%s/%s", s_cwd, name);
+        if (rename(oldpath, full) != 0) set_status("Rename failed.");
+    }
+
+    close_dialog();
+    refresh_list();
+}
+
+static void on_delete_yes(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_selected >= 0 && s_selected < s_entry_count) {
+        char full[PATH_MAX_LEN];
+        snprintf(full, sizeof(full), "%s/%s", s_cwd, s_entries[s_selected]);
+        int rc = s_entry_types[s_selected] ? rmdir(full) : remove(full);
+        if (rc != 0) set_status("Delete failed (directory not empty?).");
+    }
+    close_dialog();
+    refresh_list();
+}
+
+static void on_delete_no(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    close_dialog();
+}
+
+// Opens the shared dialog window with a title label, input textarea +
+// on-screen keyboard, and Create/Rename + Cancel buttons.
+static void open_text_dialog(dlg_mode_t mode, const char *title) {
+    if (s_dlg_win) close_dialog();
+    s_dlg_mode = mode;
+
+    s_dlg_win = purr_win_create(title);
+    purr_win_label(s_dlg_win, "Name:");
+    s_dlg_input = purr_win_textarea(s_dlg_win, 90, 20);
+
+    purr_wid_t row = purr_win_row(s_dlg_win, 4);
+    purr_win_button(s_dlg_win, (mode == DLG_RENAME) ? "Rename" : "Create",
+                     on_dialog_confirm, NULL);
+    purr_win_button(s_dlg_win, "Cancel", on_dialog_cancel, NULL);
+    purr_win_layout_end(row);
+
+    purr_win_textarea_focus(s_dlg_input);
+    purr_win_keyboard_show(s_dlg_win, s_dlg_input);
+    purr_win_show(s_dlg_win);
+}
+
+static void on_new_folder(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    open_text_dialog(DLG_NEW_FOLDER, "New Folder");
+}
+
+static void on_rename(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_selected < 0 || s_selected >= s_entry_count) { set_status("No file selected."); return; }
+    if (strcmp(s_entries[s_selected], "..") == 0) return;
+    open_text_dialog(DLG_RENAME, "Rename");
+}
+
+static void on_delete(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_selected < 0 || s_selected >= s_entry_count) { set_status("No file selected."); return; }
+    if (strcmp(s_entries[s_selected], "..") == 0) return;
+
+    s_dlg_mode = DLG_DELETE_CONFIRM;
+    char title[96];
+    snprintf(title, sizeof(title), "Delete %s?", s_entries[s_selected]);
+    s_dlg_win = purr_win_create(title);
+    purr_win_label(s_dlg_win, "This cannot be undone.");
+    purr_wid_t row = purr_win_row(s_dlg_win, 4);
+    purr_win_button(s_dlg_win, "Yes", on_delete_yes, NULL);
+    purr_win_button(s_dlg_win, "No",  on_delete_no,  NULL);
+    purr_win_layout_end(row);
+    purr_win_show(s_dlg_win);
+}
+
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
 static int fileman_init(void) {
     s_win = purr_win_create("File Manager");
 
-    // Toolbar row: SPIFFS | SD | Up
+    // Toolbar row: SPIFFS | SD | Up | New | Rename | Delete
     purr_wid_t toolbar = purr_win_row(s_win, 4);
     purr_win_button(s_win, "SPIFFS", on_goto_spiffs, NULL);
     purr_win_button(s_win, "SD",     on_goto_sd,     NULL);
     purr_win_button(s_win, "Up",     on_up,          NULL);
+    purr_win_button(s_win, "New",    on_new_folder,  NULL);
+    purr_win_button(s_win, "Rename", on_rename,      NULL);
+    purr_win_button(s_win, "Delete", on_delete,      NULL);
     purr_win_layout_end(toolbar);
 
     // Path header
     s_path_lbl = purr_win_label(s_win, s_cwd);
 
-    // Content row: file list (60%) | preview (40%)
-    purr_wid_t content = purr_win_row(s_win, 0);
+    // Content row: file list (60%) | preview (40%) — grow variant so this
+    // row fills the remaining window height instead of hugging its own
+    // content, which is required for the percentage-sized list/textarea
+    // inside it to resolve against a real (non-zero) parent height.
+    purr_wid_t content = purr_win_row_grow(s_win, 0);
     s_file_list = purr_win_list(s_win, 55, 70);
     purr_win_list_on_select(s_file_list, on_list_event, NULL);
     s_prev_area = purr_win_textarea(s_win, 40, 70);
@@ -242,11 +365,12 @@ static int fileman_init(void) {
 }
 
 static void fileman_deinit(void) {
+    close_dialog();
     purr_win_destroy(s_win);
     s_win = 0;
     s_entry_count = 0;
     s_selected = -1;
-    strncpy(s_cwd, "/spiffs", PATH_MAX_LEN - 1);
+    strncpy(s_cwd, "/flash", PATH_MAX_LEN - 1);
 }
 
 // ── Module header ─────────────────────────────────────────────────────────────

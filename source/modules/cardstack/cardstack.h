@@ -15,6 +15,11 @@
 extern "C" {
 #endif
 
+// Height of the persistent status-bar strip at the top of the screen —
+// shared between cardstack_ui.c (which builds the strip) and cardstack_win.c
+// (which must keep app windows, and their close buttons, entirely below it).
+#define CARDSTACK_STATUS_PEEK_H 22
+
 int      cardstack_hal_init(void);
 uint16_t cardstack_hal_width(void);
 uint16_t cardstack_hal_height(void);

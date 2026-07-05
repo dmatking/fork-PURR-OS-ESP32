@@ -21,35 +21,53 @@
 #include "../../../kernel/core/purr_module.h"
 #include "../../../kernel/core/purr_kernel.h"
 #include "../../../kernel/catcalls/catcall_radio.h"
+#include "sx1262.h"
 
 static const char *TAG = "sx1262";
 
 // ── Pin config ────────────────────────────────────────────────────────────────
+// Defaults match Heltec's wiring. Real per-device pins (e.g. T-Deck Plus,
+// which shares its SPI bus with the display/SD card) are set at runtime via
+// sx1262_configure(), called by a device's specialized kernel boot before
+// the module loader runs — same pattern as gt911_configure()/st7789_configure().
 
-#ifndef SX1262_PIN_MOSI
-#define SX1262_PIN_MOSI 10
-#endif
-#ifndef SX1262_PIN_MISO
-#define SX1262_PIN_MISO 11
-#endif
-#ifndef SX1262_PIN_SCLK
-#define SX1262_PIN_SCLK 9
-#endif
-#ifndef SX1262_PIN_CS
-#define SX1262_PIN_CS   8
-#endif
-#ifndef SX1262_PIN_RST
-#define SX1262_PIN_RST  12
-#endif
-#ifndef SX1262_PIN_BUSY
-#define SX1262_PIN_BUSY 13
-#endif
-#ifndef SX1262_PIN_IRQ
-#define SX1262_PIN_IRQ  14
-#endif
+#define SX1262_DEFAULT_MOSI 10
+#define SX1262_DEFAULT_MISO 11
+#define SX1262_DEFAULT_SCLK 9
+#define SX1262_DEFAULT_CS   8
+#define SX1262_DEFAULT_RST  12
+#define SX1262_DEFAULT_BUSY 13
+#define SX1262_DEFAULT_IRQ  14
 
+static int s_pin_mosi = SX1262_DEFAULT_MOSI;
+static int s_pin_miso = SX1262_DEFAULT_MISO;
+static int s_pin_sclk = SX1262_DEFAULT_SCLK;
+static int s_pin_cs   = SX1262_DEFAULT_CS;
+static int s_pin_rst  = SX1262_DEFAULT_RST;
+static int s_pin_busy = SX1262_DEFAULT_BUSY;
+static int s_pin_irq  = SX1262_DEFAULT_IRQ;
+
+void sx1262_configure(int mosi, int miso, int sclk, int cs, int rst, int busy, int irq)
+{
+    s_pin_mosi = mosi;
+    s_pin_miso = miso;
+    s_pin_sclk = sclk;
+    s_pin_cs   = cs;
+    s_pin_rst  = rst;
+    s_pin_busy = busy;
+    s_pin_irq  = irq;
+}
+
+// SPI host — overridable at runtime via sx1262_set_spi_host(), default
+// preserved for every device that doesn't call it.
 #define SX1262_SPI_HOST  SPI2_HOST
+static spi_host_device_t s_spi_host = SX1262_SPI_HOST;
 #define SX1262_SPI_FREQ  (8 * 1000 * 1000)  // 8 MHz
+
+void sx1262_set_spi_host(spi_host_device_t host)
+{
+    s_spi_host = host;
+}
 
 // ── SX1262 SPI commands ───────────────────────────────────────────────────────
 
@@ -71,6 +89,14 @@ static const char *TAG = "sx1262";
 #define CMD_SET_DIO_IRQ_PARAMS  0x08
 #define CMD_SET_REGULATOR_MODE  0xA0
 #define CMD_SET_PA_CONFIG       0x95
+#define CMD_WRITE_REGISTER      0x0D
+
+// LoRa sync word lives at these two register addresses. Each byte packs the
+// sync word nibble with a fixed 0x04 low nibble — a known SX126x quirk (not
+// a plain single-byte register write), matching the convention used by
+// reference implementations (e.g. RadioLib) for this chip family.
+#define REG_LORA_SYNC_WORD_MSB  0x0740
+#define REG_LORA_SYNC_WORD_LSB  0x0741
 #define CMD_CALIBRATE_IMAGE     0x98
 
 // SX1262 standby modes
@@ -108,7 +134,7 @@ static int8_t  s_last_signal_rssi;
 static void wait_busy(void)
 {
     int64_t deadline = esp_timer_get_time() + BUSY_TIMEOUT_US;
-    while (gpio_get_level(SX1262_PIN_BUSY) && esp_timer_get_time() < deadline) {
+    while (gpio_get_level(s_pin_busy) && esp_timer_get_time() < deadline) {
         // tight spin — BUSY typically falls within microseconds
         esp_rom_delay_us(10);
     }
@@ -137,6 +163,17 @@ static void write_command(uint8_t cmd, const uint8_t *params, size_t param_len)
         memcpy(buf + 1, params, copy);
     }
     spi_transfer(buf, NULL, 1 + param_len);
+}
+
+// WriteRegister: [cmd][addr_msb][addr_lsb][data...]
+static void write_register(uint16_t addr, const uint8_t *data, size_t len)
+{
+    uint8_t buf[3 + 8];
+    buf[0] = CMD_WRITE_REGISTER;
+    buf[1] = (uint8_t)(addr >> 8);
+    buf[2] = (uint8_t)(addr & 0xFF);
+    if (data && len > 0) memcpy(buf + 3, data, len);
+    spi_transfer(buf, NULL, 3 + len);
 }
 
 // Read response: sends cmd + status_byte + param_len bytes, returns data
@@ -224,7 +261,7 @@ static esp_err_t sx1262_init(const radio_config_t *cfg)
 {
     // GPIO: RST, BUSY, IRQ
     gpio_config_t gp = {
-        .pin_bit_mask = (1ULL << SX1262_PIN_RST),
+        .pin_bit_mask = (1ULL << s_pin_rst),
         .mode         = GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -232,27 +269,34 @@ static esp_err_t sx1262_init(const radio_config_t *cfg)
     };
     gpio_config(&gp);
 
-    gp.pin_bit_mask = (1ULL << SX1262_PIN_BUSY) | (1ULL << SX1262_PIN_IRQ);
+    gp.pin_bit_mask = (1ULL << s_pin_busy) | (1ULL << s_pin_irq);
     gp.mode         = GPIO_MODE_INPUT;
     gp.pull_up_en   = GPIO_PULLUP_ENABLE;
     gpio_config(&gp);
 
     // Hardware reset
-    gpio_set_level(SX1262_PIN_RST, 0);
+    gpio_set_level(s_pin_rst, 0);
     vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level(SX1262_PIN_RST, 1);
+    gpio_set_level(s_pin_rst, 1);
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // SPI bus
+    // SPI bus — max_transfer_sz must cover whatever the largest consumer on a
+    // shared bus needs (e.g. T-Deck Plus shares this bus with the display),
+    // not just this driver's own 256-byte LoRa payload cap. Only the first
+    // spi_bus_initialize() call for a given host actually takes effect
+    // (later calls just return ESP_ERR_INVALID_STATE, handled below), so
+    // whichever driver initializes the bus first "wins" this value — 256
+    // would silently cap a shared bus other devices need larger transfers
+    // on. Use a size generous enough for a full small-display frame.
     spi_bus_config_t bus = {
-        .mosi_io_num     = SX1262_PIN_MOSI,
-        .miso_io_num     = SX1262_PIN_MISO,
-        .sclk_io_num     = SX1262_PIN_SCLK,
+        .mosi_io_num     = s_pin_mosi,
+        .miso_io_num     = s_pin_miso,
+        .sclk_io_num     = s_pin_sclk,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
-        .max_transfer_sz = 256,
+        .max_transfer_sz = 320 * 240 * 2 + 8,
     };
-    esp_err_t ret = spi_bus_initialize(SX1262_SPI_HOST, &bus, SPI_DMA_CH_AUTO);
+    esp_err_t ret = spi_bus_initialize(s_spi_host, &bus, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "spi_bus_initialize: %s", esp_err_to_name(ret));
         return ret;
@@ -261,11 +305,11 @@ static esp_err_t sx1262_init(const radio_config_t *cfg)
     spi_device_interface_config_t dev = {
         .clock_speed_hz = SX1262_SPI_FREQ,
         .mode           = 0,
-        .spics_io_num   = SX1262_PIN_CS,
+        .spics_io_num   = s_pin_cs,
         .queue_size     = 4,
         .pre_cb         = NULL,
     };
-    ret = spi_bus_add_device(SX1262_SPI_HOST, &dev, &s_spi);
+    ret = spi_bus_add_device(s_spi_host, &dev, &s_spi);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "spi_bus_add_device: %s", esp_err_to_name(ret));
         return ret;
@@ -471,6 +515,30 @@ static esp_err_t sx1262_set_power(uint8_t dbm)
     return ESP_OK;
 }
 
+// ── Catcall: set_modulation / set_sync_word ───────────────────────────────────
+// Both bracket with standby()/start_rx_continuous() like set_frequency/
+// set_power above — modulation params and the sync word can't be changed
+// while the radio is actively receiving.
+
+static esp_err_t sx1262_set_modulation(uint8_t sf, uint32_t bw_hz, uint8_t cr)
+{
+    standby();
+    esp_err_t ret = set_modulation(sf, bw_hz, cr);
+    start_rx_continuous();
+    return ret;
+}
+
+static esp_err_t sx1262_set_sync_word(uint8_t sync)
+{
+    standby();
+    uint8_t msb = (uint8_t)((sync & 0xF0) | 0x04);
+    uint8_t lsb = (uint8_t)(((sync & 0x0F) << 4) | 0x04);
+    write_register(REG_LORA_SYNC_WORD_MSB, &msb, 1);
+    write_register(REG_LORA_SYNC_WORD_LSB, &lsb, 1);
+    start_rx_continuous();
+    return ESP_OK;
+}
+
 // ── Catcall: deinit ───────────────────────────────────────────────────────────
 
 static esp_err_t sx1262_deinit(void)
@@ -478,7 +546,7 @@ static esp_err_t sx1262_deinit(void)
     standby();
     { uint8_t p = 0x00; write_command(CMD_SET_SLEEP, &p, 1); }
     spi_bus_remove_device(s_spi);
-    spi_bus_free(SX1262_SPI_HOST);
+    spi_bus_free(s_spi_host);
     s_spi = NULL;
     ESP_LOGI(TAG, "deinit OK");
     return ESP_OK;
@@ -497,6 +565,8 @@ static const catcall_radio_t s_catcall = {
     .snr             = sx1262_snr,
     .set_frequency   = sx1262_set_frequency,
     .set_power       = sx1262_set_power,
+    .set_modulation  = sx1262_set_modulation,
+    .set_sync_word   = sx1262_set_sync_word,
     .deinit          = sx1262_deinit,
 };
 

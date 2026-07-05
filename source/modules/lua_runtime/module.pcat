@@ -1,0 +1,14 @@
+# modules/lua_runtime/module.pcat
+# Lua 5.4 scripting runtime for .meow apps — vendors Lua 5.4 (source/lib/lib_lua)
+# privately into this component and binds system.*/sd.*/win.* to purr_win.h/
+# purr_kernel.h. Dispatched by app_manager.c's launch_meow()/meow_task() via
+# the kernel module registry, same as any other PURR_MOD_SYSTEM module.
+
+name            = "lua_runtime"
+version         = "0.1.0"
+module_type     = "PURR_MOD_SYSTEM"
+kernel_min      = "0.9.0"
+kernel_max      = ""
+
+provides        = ["meow_scripting"]
+required_catcalls = []   # UI access goes through purr_win.h at script-run time, not a hard boot dependency

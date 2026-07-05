@@ -1,6 +1,6 @@
 # devices/tdeck_plus/device.pcat
-# T-Deck Plus — ESP32-S3, 3.2" ST7789, GT911 touch, trackball, LoRa SX1276, GPS
-# Large screen. Full radio set (WiFi + BT built-in, LoRa SX1276, GPS). Base OS profile.
+# T-Deck Plus — ESP32-S3, 3.2" ST7789, GT911 touch, trackball, LoRa SX1262, GPS
+# Large screen. Full radio set (WiFi + BT built-in, LoRa SX1262, GPS). Base OS profile.
 
 [device]
 name        = "tdeck_plus"
@@ -18,46 +18,54 @@ display     = "st7789"
 touch       = "gt911"
 input       = "trackball"
 keyboard    = "bbq20"
-radio       = "sx1276"
+radio       = "sx1262"
 gps         = "generic_nmea"
 
 [radio]
 wifi        = true
 bt          = true
-lora        = "sx1276"
+lora        = "sx1262"
 
-# NOTE: deliberately windowed-tier (miniwin) rather than blackpurr's shell
-# tier — a product decision to run windowed system apps on this device,
-# not a bug fix. See docs/01_Architecture.md's two-tier UI model.
+# NOTE: temporarily testing cardstack (Rabbit R1-style card UI) on this
+# device for stabilization work — was miniwin+experimental WinCE desktop
+# before this. Switch ui back to "miniwin" to restore that.
 [modules]
-ui          = "miniwin"
+ui          = "cupcake"
 app_manager = "app_manager"
+mesh        = "meshtastic"
 
 [ui]
 theme       = "wce"
 
 [apps]
 settings    = true
-about       = true
 terminal    = true
 fileman     = true
 calculator  = true
 hwtest      = true
+drivermgr   = true
+meshchat    = true
 
 [flash]
 display/st7789    = 1
 touch/gt911       = 1
 input/trackball   = 1
-miniwin           = 2
+cardstack         = 2
 app_manager       = 2
-radio/sx1276      = 2
+radio/sx1262      = 2
+driver_manager    = 2
+wifi_mgr          = 2
+bt_mgr            = 2
+lua_runtime       = 2
 gps/generic_nmea  = 3
+meshtastic        = 3
 apps/settings     = 3
-apps/about        = 3
 apps/terminal     = 3
 apps/fileman      = 3
 apps/calculator   = 3
 apps/hwtest       = 3
+apps/drivermgr    = 3
+apps/meshchat     = 3
 
 [pins]
 display_cs    = 12
@@ -78,17 +86,24 @@ trackball_left = 1
 trackball_right= 2
 trackball_click= 0
 
-lora_mosi     = 6
-lora_miso     = 5
-lora_sclk     = 7
+# LoRa shares the same SPI2_HOST bus as display/SD below (confirmed against
+# LilyGo's own utilities.h/TDECK_PINS.h) — these were previously wrong
+# (mosi/miso/sclk described a separate bus that doesn't exist on this board),
+# left over from when this device incorrectly ran the sx1276 driver.
+lora_mosi     = 41
+lora_miso     = 38
+lora_sclk     = 40
 lora_cs       = 9
 lora_rst      = 17
+lora_busy     = 13
 lora_irq      = 45
 
 gps_tx        = 43
 gps_rx        = 44
 
-sd_cs         = 13
+# sd_cs was previously 13, which collided with the real LoRa BUSY pin above —
+# corrected against LilyGo's TDECK_SDCARD_CS.
+sd_cs         = 39
 sd_mosi       = 41
 sd_miso       = 38
 sd_sclk       = 40

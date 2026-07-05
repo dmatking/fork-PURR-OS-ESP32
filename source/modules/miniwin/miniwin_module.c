@@ -37,7 +37,11 @@ static const char *TAG = "miniwin";
 // the MiniWin task themselves — defining them here too would be a duplicate
 // symbol. This module still only compiles in when CONFIG_PURR_UI_BACKEND_MINIWIN
 // is set, so non-WinCE devices are unaffected.
-#ifndef CONFIG_PURR_UI_WINCE_SHELL
+//
+// CONFIG_PURR_MINIWIN_DESKTOP_WINCE opts a device into the generalized WinCE
+// taskbar+start-menu desktop (miniwin_wince_desktop.c) instead of this file's
+// icon-grid desktop — same duplicate-symbol concern, same guard.
+#if !defined(CONFIG_PURR_UI_WINCE_SHELL) && !defined(CONFIG_PURR_MINIWIN_DESKTOP_WINCE)
 
 // MiniWin framework callbacks — the library calls these at init and repaint time.
 void mw_user_init(void) {}
@@ -72,6 +76,17 @@ static void draw_status_bar(const mw_gl_draw_info_t *draw_info)
     snprintf(buf, sizeof(buf), "RAM %uK", (unsigned)(purr_kernel_free_ram() / 1024));
     mw_gl_set_solid_fill_colour(MW_HAL_LCD_WHITE);
     mw_gl_string(draw_info, 2, 3, buf);
+
+    // Notification count — see purr_kernel_notify() in purr_kernel.h. Same
+    // kernel-level ring buffer Cardstack already renders; this is the
+    // icon-grid MiniWin desktop's equivalent (no popup UI yet, just a
+    // visible count so it isn't entirely invisible on this backend).
+    int notif_n = purr_kernel_notify_count();
+    if (notif_n > 0) {
+        snprintf(buf, sizeof(buf), "Notif %d", notif_n);
+        mw_gl_set_solid_fill_colour(MW_HAL_LCD_YELLOW);
+        mw_gl_string(draw_info, w - 185, 3, buf);
+    }
 
     bool wifi = purr_kernel_wifi_connected();
     mw_gl_set_solid_fill_colour(wifi ? MW_HAL_LCD_GREEN : MW_HAL_LCD_RED);
@@ -155,6 +170,16 @@ void mw_user_root_message_function(const mw_message_t *message)
     }
 }
 
+#endif  // !CONFIG_PURR_UI_WINCE_SHELL && !CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+
+#if defined(CONFIG_PURR_MINIWIN_DESKTOP_WINCE) && !defined(CONFIG_PURR_UI_WINCE_SHELL)
+#include "miniwin_wince_desktop.h"
+#endif
+
+// miniwin_task() itself is shared by both desktop styles (icon-grid and
+// WinCE) — only the periodic repaint target below differs between them.
+#ifndef CONFIG_PURR_UI_WINCE_SHELL
+
 static TaskHandle_t s_task = NULL;
 
 static void miniwin_task(void *arg)
@@ -176,6 +201,7 @@ static void miniwin_task(void *arg)
     // Init trackball cursor overlay
     miniwin_cursor_init(disp_w, disp_h);
 
+#ifndef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
     // Desktop boots empty with app icons (drawn in mw_user_root_paint_function).
     // Launcher now opens on demand: Enter key with nothing focused, or tapping
     // the start-menu icon/desktop icon directly.
@@ -186,12 +212,31 @@ static void miniwin_task(void *arg)
     // display driver's own GRAM-clear left it as (black) until SOMETHING
     // else happens to repaint the root window. Force the first paint now.
     mw_paint_window_client(MW_ROOT_WINDOW_HANDLE);
+#endif
 
     // MiniWin message pump
     TickType_t last_status_redraw = xTaskGetTickCount();
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+    // WinCE desktop draws its own background + taskbar in mw_user_init()'s
+    // window (see miniwin_wince_desktop.c); only the taskbar's RAM readout
+    // needs a periodic repaint, targeting that window instead of root.
+    mw_util_rect_t status_rect = { (int16_t)(disp_w - 50), (int16_t)(disp_h - 20), 48, 18 };
+#else
     mw_util_rect_t status_rect = { 0, 0, (int16_t)disp_w, STATUS_BAR_H };
+#endif
 
     while (1) {
+        // app_manager launches each app in its own task, and that task's
+        // purr_win_*() calls take purr_kernel_ui_lock() (see purr_win.h's
+        // _UI_CALL/_UI_VOID macros) before touching MiniWin. This task's own
+        // message pump / repaint calls MiniWin directly and must take the
+        // same lock, or the two tasks can both reach the ST7789 SPI driver
+        // at once — observed on hardware as
+        // "assert failed: spi_device_transmit ... (ret_trans == trans_desc)"
+        // followed by a full reset the moment an app launches. KittenUI's
+        // task loop already does this (see kittenui_module.c); MiniWin's
+        // didn't.
+        purr_kernel_ui_lock();
         mw_process_message();
         miniwin_keyboard_poll();  // drain all inputs: cursor gets pointer/click, keys → focused win
         miniwin_cursor_poll();    // redraw cursor on top of frame if position changed
@@ -201,10 +246,20 @@ static void miniwin_task(void *arg)
         TickType_t now = xTaskGetTickCount();
         if ((now - last_status_redraw) >= pdMS_TO_TICKS(1000)) {
             last_status_redraw = now;
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+            mw_paint_window_client_rect(wce_desktop_handle(), &status_rect);
+#else
             mw_paint_window_client_rect(MW_ROOT_WINDOW_HANDLE, &status_rect);
+#endif
         }
+        purr_kernel_ui_unlock();
 
-        taskYIELD();
+        // taskYIELD() only hands off to an equal/higher-priority READY task —
+        // with nothing else ready it just spins straight back here, taking
+        // and releasing the (now real) ui_lock thousands of times a second
+        // and starving any app task waiting on that same lock. KittenUI's
+        // task loop already sleeps instead of spinning; match it.
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
 

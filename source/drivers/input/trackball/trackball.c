@@ -221,6 +221,15 @@ static void update_state(void)
             .modifiers = 0,
         };
         enqueue(&ev);
+        // TEMPORARY diagnostic for the "drifts on its own when idle" report —
+        // remove once root-caused. Raw levels show whether this is genuine
+        // electrical chatter on a specific pin vs. a debounce/deadzone bug.
+        ESP_LOGI(TAG, "move dx=%d dy=%d  raw[UP,DN,LT,RT]=%d,%d,%d,%d  debounced[UP,DN,LT,RT]=%d,%d,%d,%d",
+                 combined_dx, combined_dy,
+                 gpio_get_level(s_pins[DIR_UP]), gpio_get_level(s_pins[DIR_DOWN]),
+                 gpio_get_level(s_pins[DIR_LEFT]), gpio_get_level(s_pins[DIR_RIGHT]),
+                 s_prev_state[DIR_UP], s_prev_state[DIR_DOWN],
+                 s_prev_state[DIR_LEFT], s_prev_state[DIR_RIGHT]);
     }
 
     // Click

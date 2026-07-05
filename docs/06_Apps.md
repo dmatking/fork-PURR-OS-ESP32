@@ -6,11 +6,13 @@ PURR OS has three app tiers, each with a distinct file extension and capability 
 
 | Extension | Name | API access | Typical use |
 |-----------|------|-----------|-------------|
-| `.meow` | Lua script | `win.*`, `sd.*`, `kitt.*` | Scripted tools, dashboards, simple games |
+| `.meow` | Lua script | `win.*`, `sd.*`, `system.*` | Scripted tools, dashboards, simple games |
 | `.paws` | Compiled userland | `win.*`, `sd.*` | Native apps with no direct kernel calls |
 | `.claw` | Compiled kernel-access | Full `purr_kernel_*` + `win.*` + `sd.*` | System tools, emulators, advanced shells |
 
 All three tiers access UI through the same `purr_win.h` dispatch layer (or `win.*` Lua bindings) — apps are not tied to a specific UI framework.
+
+`.meow` scripts are executed by the `lua_runtime` module (`source/modules/lua_runtime/`), which vendors a real Lua 5.4 VM (`source/lib/lib_lua/`) — previously dead code (`app_manager.c` looked up a `"lua_runtime"` module that never existed), now a working system module.
 
 ---
 
@@ -92,10 +94,14 @@ void        purr_win_textarea_on_change(purr_wid_t wid, purr_win_cb_t cb, void *
 ```c
 purr_wid_t purr_win_row       (purr_win_t win, uint8_t padding);  // horizontal row
 purr_wid_t purr_win_col       (purr_win_t win, uint8_t padding);  // vertical column
+purr_wid_t purr_win_row_grow  (purr_win_t win, uint8_t padding);  // row that fills remaining space
+purr_wid_t purr_win_col_grow  (purr_win_t win, uint8_t padding);  // column that fills remaining space
 void       purr_win_layout_end(purr_wid_t container);
 ```
 
 Widgets created between `purr_win_row()` / `purr_win_col()` and `purr_win_layout_end()` are placed inside that container. On KittenUI this uses LVGL flex layout; on MiniWin it uses simple stacking.
+
+The plain `_row`/`_col` variants hug their own content (right for a row of buttons). Use the `_grow` variant when the container holds **percentage-sized** children — a list, a textarea, a split view — since a content-sized container can't resolve a percentage-sized child (it collapses to 0 size). `fileman.c`'s file-list/preview split is the reference example.
 
 ### On-screen keyboard
 
@@ -110,80 +116,66 @@ On KittenUI: shows LVGL's built-in keyboard. On MiniWin: no-op — physical keyb
 
 ## .meow — Lua Scripts
 
-`.meow` files are Lua 5.4 scripts run in a sandboxed VM by app_manager. The VM exposes three namespaces.
+`.meow` files are Lua 5.4 scripts run by `lua_runtime` (`source/modules/lua_runtime/`), a `PURR_MOD_SYSTEM` module that vendors the real Lua 5.4 VM (`source/lib/lib_lua/`, ported from the PURR-OS-0.11 archive) and binds it to the current codebase's plain-C `purr_win.h`/SD APIs — not KITT's old C++ singleton. One global Lua state runs at a time, matching the single-.meow-VM assumption `app_manager.c` already makes elsewhere.
+
+The VM exposes three namespaces: `system.*`, `sd.*`, `win.*` — no `kitt.*` (that was the 0.11-era C++ API this doesn't use).
 
 ### `win.*` — Window API
 
+A thin, 1:1 Lua wrapper over `purr_win.h`'s own C API — same handles, same call shape:
+
 ```lua
-win.title("My App")
-win.clear(color)               -- fill window with RGB565 color
-win.text(x, y, "Hello")
-win.rect(x, y, w, h, color)
-win.button(id, x, y, w, h, "label")
-win.on_touch(function(x, y) end)
-win.on_button(id, function() end)
-win.show()
-win.close()
+local win = win.create("My App")
+local lbl = win.label(win, "Hello!")
+win.label_set(lbl, "Updated text")
+
+local wid = win.button(win, "Tap me", function()
+    win.label_set(lbl, "Tapped!")
+end)
+
+local ta = win.textarea(win, 100, 60)   -- w_pct, h_pct
+win.textarea_set(ta, "some text")
+local text = win.textarea_get(ta)
+
+win.show(win)
+win.destroy(win)
 ```
+
+Button callbacks are plain Lua closures — the VM keeps a registry reference and trampolines back into Lua on click. **Threading note**: a script's main body runs synchronously inside its launch task, which exits right after the script returns (same as every native app's `init()`) — write UI-building scripts that build the window and return, then respond to taps via callbacks, rather than scripts that loop forever themselves.
 
 ### `sd.*` — SD Card API
 
 ```lua
-local f = sd.open("myapp/data.txt", "r")
-local contents = f:read("*a")
-f:close()
-
-local f2 = sd.open("myapp/out.txt", "w")
-f2:write("hello world\n")
-f2:close()
-
-local files = sd.list("myapp/")
-sd.mkdir("myapp/new_dir/")
-local ok = sd.exists("myapp/data.txt")
+local contents, err = sd.read("/sdcard/myapp/data.txt")
+if contents then
+    local ok = sd.write("/sdcard/myapp/out.txt", "hello world\n")
+end
 ```
 
-### `kitt.*` — KITT Kernel API
+Plain path-based read/write (no file-handle object) — use full `/flash/...` or `/sdcard/...` paths like any other PURR OS app.
+
+### `system.*` — System API
 
 ```lua
--- Display
-local w, h = kitt.display_size()
-
--- LoRa radio
-kitt.radio_send("hello from PURR OS")
-local msg = kitt.radio_recv()        -- nil if nothing waiting
-local rssi = kitt.radio_rssi()
-
--- GPS
-local fix = kitt.gps_fix()
-if fix and fix.valid then
-    print(fix.latitude, fix.longitude, fix.altitude_m, fix.satellites)
-end
-
--- System info
-print(kitt.free_ram())              -- bytes
-print(kitt.uptime_ms())             -- milliseconds
-kitt.reboot()
+system.print("logged via ESP_LOGI")
+system.delay(100)              -- milliseconds
+local now = system.time_ms()
 ```
 
 ### Example .meow app
 
 ```lua
 -- hello.meow
-
-win.title("Hello PURR")
-win.clear(0x0000)
-
+local win_h = win.create("Hello PURR")
+local lbl   = win.label(win_h, "Tapped: 0")
 local count = 0
-win.button(1, 10, 50, 100, 30, "Tap me!")
 
-win.on_button(1, function()
+win.button(win_h, "Tap me!", function()
     count = count + 1
-    win.clear(0x0000)
-    win.text(10, 10, "Tapped: " .. count)
+    win.label_set(lbl, "Tapped: " .. count)
 end)
 
-win.text(10, 10, "Tapped: 0")
-win.show()
+win.show(win_h)
 ```
 
 ---
@@ -282,13 +274,15 @@ These are baked into the SPIFFS flash image for medium/large-screen devices:
 
 | App | Tier | Description |
 |-----|------|-------------|
-| `settings` | `.claw` | Theme (WCE/Dark via NVS), brightness, SD status, reboot |
-| `about` | `.claw` | OS + KITT version, chip, free RAM, uptime (live), active drivers |
+| `settings` | `.claw` | Theme (WCE/Dark via NVS), brightness, keyboard backlight, WiFi (scan/connect), Bluetooth (BLE scan/pair), wallpaper, SD status, About (OS/KITT version, chip, RAM, uptime, drivers — folded in from the old standalone About app), reboot |
 | `terminal` | `.claw` | Shell: `ls`, `cat`, `echo`, `modules`, `mem`, `uptime`, `reboot` |
-| `fileman` | `.claw` | Browse SPIFFS + SD; Prev/Next/Open navigation; text file preview |
+| `fileman` | `.claw` | Browse SPIFFS + SD; New Folder/Rename/Delete; text file preview |
 | `calculator` | `.paws` | Basic arithmetic, decimal support, ERR:DIV0 guard |
+| `hwtest` | `.claw` | Hardware diagnostics |
+| `drivermgr` | `.claw` | Lists scanned drivers (`driver_manager` module) with OK/COMPAT/FAIL/SKIP status |
+| `meshchat` | `.claw` | MSN-style buddy list + private 1:1 chat over the mesh (see `docs/03_Modules.md`'s meshtastic section) — standalone, no phone required |
 
-`settings` and `about` are staple system features — always present on any medium/large screen device. The rest follow the same `purr_win.h` API and can be excluded on flash-constrained builds.
+`settings` is a staple system feature — always present on any medium/large screen device (it absorbed the old standalone `about` app). The rest follow the same `purr_win.h` API and can be excluded on flash-constrained builds. There is no standalone `about` app anymore.
 
 ---
 
@@ -310,7 +304,7 @@ SD apps with the same name as a flash app shadow the flash version — useful fo
 ### Option A — .meow (fastest)
 
 1. Create `myapp.meow` on the SD card at `/sdcard/apps/myapp.meow`
-2. Write Lua using `win.*`, `sd.*`, `kitt.*`
+2. Write Lua using `win.*`, `sd.*`, `system.*`
 3. Power on — appears in the Cat Apps launcher
 4. Tap to launch
 
@@ -332,14 +326,18 @@ Same as .paws but set `tier = "claw"` in app.pcat and include `purr_kernel.h`.
 ```
 source/apps/
   system/             built-in system apps
-    settings/         theme, brightness, SD, reboot
-    about/            OS info, chip info, uptime, driver status
+    settings/         theme, brightness, keyboard backlight, WiFi, Bluetooth, wallpaper, About, SD, reboot
     terminal/         built-in shell
     fileman/          file manager
     calculator/       calculator
+    hwtest/           hardware diagnostics
+    drivermgr/        driver status list (UI over the driver_manager module)
+    meshchat/         MSN-style buddy list + private chat over Meshtastic
   exclusive/          in-house exclusives (rewrite in progress)
     magicmac/         Mac OS inspired shell
     magidos/          DOS inspired shell
 ```
+
+Note: the `drivermgr` app directory is named differently from the `driver_manager` backend module (`source/modules/driver_manager/`) on purpose — ESP-IDF component names are derived from the directory name, and giving the app the same directory name as the module caused a silent component-name collision (one component's object files displaced the other's in the final link, producing "undefined reference" errors for functions that were actually compiled — just discarded).
 
 User apps live on the SD card at `/sdcard/apps/` — they are never in the repo.

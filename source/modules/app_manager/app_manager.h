@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "../../kernel/catcalls/catcall_ui.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +38,8 @@ typedef struct {
     app_tier_t  tier;
     app_state_t state;
     char        error[96];       // populated on APP_STATE_ERROR
+    purr_win_t  window;          // set automatically when the app calls purr_win_create();
+                                  // 0 if it hasn't (yet), or never will
 } app_entry_t;
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -61,6 +64,11 @@ const app_entry_t *app_manager_get(int idx);
 
 // Open the Cat Apps launcher UI over the current MiniWin context
 void app_manager_open_launcher(void);
+
+// The path of the .meow script currently being launched — set right before
+// launch_meow() creates its task, valid for lua_runtime's init() to read
+// during that same launch. Only one Lua VM runs at a time on these boards.
+const char *app_manager_get_pending_meow_path(void);
 
 #ifdef __cplusplus
 }

@@ -12,6 +12,15 @@
 #include "MiniWin/ui/ui_button.h"
 #include "MiniWin/ui/ui_text_box.h"
 #include "MiniWin/ui/ui_list_box.h"
+#include "sdkconfig.h"
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+#include "miniwin_wince_desktop.h"
+#endif
+
+// mw_ui_text_box_add_new() hard-requires a non-NULL tt_font (see its null
+// check in ui_text_box.c) — this widget apparently had no working consumer
+// anywhere in the codebase before today, since nothing else sets it either.
+extern const struct mf_rlefont_s mf_rlefont_DejaVuSans12;
 
 // ── Handle pool ───────────────────────────────────────────────────────────────
 
@@ -119,6 +128,18 @@ static void layout_place(purr_win_t h, int16_t width, int16_t height,
 
 static void win_paint_func(mw_handle_t window_handle, const mw_gl_draw_info_t *draw_info)
 {
+    // MiniWin does not clear a window's client area on its own before its
+    // controls draw themselves — without an explicit fill here, whatever was
+    // on screen before this window (the desktop, a previous window) shows
+    // through around/behind labels and buttons that don't fully cover their
+    // own row, which reads as a stale "layered" image behind the real UI.
+    mw_util_rect_t client = mw_get_window_client_rect(window_handle);
+    mw_gl_set_fill(MW_GL_FILL);
+    mw_gl_set_border(MW_GL_BORDER_OFF);
+    mw_gl_set_solid_fill_colour(MW_CONTROL_UP_COLOUR);
+    mw_gl_clear_pattern();
+    mw_gl_rectangle(draw_info, 0, 0, client.width, client.height);
+
     purr_win_t win = win_index_for_handle(window_handle);
     if (win == 0) return;
     purr_wid_t focused = s_ta_focused[win-1];
@@ -181,6 +202,11 @@ static purr_win_t mw_win_create(const char *title) {
         NULL);
     if (h == MW_INVALID_HANDLE) return 0;
     mw_set_window_visible(h, false);
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+    // Every window that goes through purr_win_create() gets a taskbar
+    // button automatically — apps don't call wce_taskbar_register themselves.
+    wce_taskbar_register(h, title);
+#endif
     return alloc_win(h);
 }
 
@@ -189,13 +215,26 @@ static void mw_win_clear(purr_win_t h);   // defined below, frees textarea/list 
 static void mw_win_destroy(purr_win_t h) {
     mw_win_clear(h);
     mw_handle_t wh = get_win(h);
-    if (wh != MW_INVALID_HANDLE) mw_remove_window(wh);
+    if (wh != MW_INVALID_HANDLE) {
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+        wce_taskbar_unregister(wh);
+#endif
+        mw_remove_window(wh);
+    }
     free_win(h);
 }
 
 static void mw_win_show(purr_win_t h) {
     mw_handle_t wh = get_win(h);
-    if (wh != MW_INVALID_HANDLE) mw_set_window_visible(wh, true);
+    if (wh == MW_INVALID_HANDLE) return;
+    mw_set_window_visible(wh, true);
+    mw_bring_window_to_front(wh);
+    // Becoming visible does not by itself trigger a repaint (same class of
+    // gotcha as mw_init() not painting the root window on its own — see
+    // miniwin_module.c) — without this, a newly-launched app can sit fully
+    // initialized but invisible on screen until some unrelated event happens
+    // to force a repaint.
+    mw_paint_all();
 }
 
 static void mw_win_hide(purr_win_t h) {
@@ -391,6 +430,12 @@ static purr_wid_t mw_ta_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
 
     memset(&s_ta_data[slot], 0, sizeof(s_ta_data[slot]));
     s_ta_data[slot].text = s_ta_buf[slot];
+    s_ta_data[slot].tt_font = &mf_rlefont_DejaVuSans12;
+    // fg_colour/bg_colour default to 0 (black) from the memset above, which
+    // renders as an all-black box (black text on a black fill) — not a
+    // crash, just invisible. Give it a readable black-on-white default.
+    s_ta_data[slot].fg_colour = MW_HAL_LCD_BLACK;
+    s_ta_data[slot].bg_colour = MW_HAL_LCD_WHITE;
 
     int16_t disp_w = mw_hal_lcd_get_display_width();
     int16_t disp_h = mw_hal_lcd_get_display_height();
@@ -405,12 +450,31 @@ static purr_wid_t mw_ta_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
     return alloc_wid(wh, ctrl, NULL, NULL);
 }
 
+// MiniWin's real MW_TEXT_BOX_SET_TEXT_MESSAGE handler (ui_text_box.c)
+// recalculates text_height_pixels whenever the content changes — required
+// because text_box_paint_function background-fills everything below
+// text_height_pixels every repaint. Our append/set skip that message path
+// (they mutate the buffer directly), so without this the control keeps
+// whatever text_height_pixels was computed at creation time — for a
+// textarea that starts empty and gets its real content filled in right
+// after (about.c, etc.), that's ~0, so the very next repaint immediately
+// paints over almost all of the text it just drew.
+static void mw_ta_recalc_height(int idx) {
+    mw_handle_t ctrl = s_wids[idx].mw_ctrl;
+    s_ta_data[idx].text_height_pixels = mw_gl_tt_get_render_text_lines(
+        mw_get_control_rect(ctrl).width,
+        s_ta_data[idx].justification,
+        s_ta_data[idx].tt_font,
+        s_ta_data[idx].text);
+}
+
 static void mw_ta_append(purr_wid_t wid, const char *text) {
     wid_slot_t *s = get_wid(wid);
     if (!s) return;
     int idx = (int)(wid - 1);
     if (!s_ta_buf[idx]) return;
     strncat(s_ta_buf[idx], text, MW_TA_BUF_SIZE - strlen(s_ta_buf[idx]) - 1);
+    mw_ta_recalc_height(idx);
     mw_paint_control(s->mw_ctrl);
 }
 
@@ -421,6 +485,8 @@ static void mw_ta_set(purr_wid_t wid, const char *text) {
     if (!s_ta_buf[idx]) return;
     strncpy(s_ta_buf[idx], text, MW_TA_BUF_SIZE - 1);
     s_ta_buf[idx][MW_TA_BUF_SIZE - 1] = '\0';
+    s_ta_data[idx].lines_to_scroll = 0;   // full replace — scroll back to top
+    mw_ta_recalc_height(idx);
     mw_paint_control(s->mw_ctrl);
 }
 
@@ -538,7 +604,8 @@ static void mw_list_cb(purr_wid_t wid, purr_win_cb_t cb, void *user) {
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
-static purr_wid_t mw_layout_begin(purr_win_t h, purr_layout_t dir, uint8_t pad) {
+static purr_wid_t mw_layout_begin(purr_win_t h, purr_layout_t dir, uint8_t pad, bool grow) {
+    (void)grow;  // MiniWin's manual cursor-based layout has no flex-grow concept
     if (h < 1 || h > MAX_WINS) return 0;
     layout_state_t *l = &s_layout[h-1];
     l->active = (dir == PURR_LAYOUT_ROW);

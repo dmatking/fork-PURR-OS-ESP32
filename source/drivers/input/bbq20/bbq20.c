@@ -38,6 +38,12 @@ static const char *TAG = "bbq20";
 #define BBQ20_I2C_FREQ_HZ 400000
 #define BBQ20_I2C_PORT    0       // shared with GT911
 
+// BBQ10Keyboard-style register map (SolderParty/LilyGo T-Deck keyboard
+// firmware) — REG_BKL is the under-key LED backlight brightness register,
+// written directly rather than through the FIFO-pop bare-read path the
+// rest of this driver uses.
+#define BBQ20_REG_BKL     0x05
+
 #define BBQ20_POLL_MS  20
 #define EVENT_QUEUE_DEPTH 32
 
@@ -131,6 +137,15 @@ static bool bbq20_poll_event(input_event_t *out)
     return xQueueReceive(s_queue, out, 0) == pdTRUE;
 }
 
+// ── Backlight ─────────────────────────────────────────────────────────────────
+
+esp_err_t bbq20_set_backlight(uint8_t brightness)
+{
+    if (!s_initialized || !s_dev) return ESP_ERR_INVALID_STATE;
+    uint8_t wire[2] = { BBQ20_REG_BKL, brightness };
+    return i2c_master_transmit(s_dev, wire, sizeof(wire), pdMS_TO_TICKS(50));
+}
+
 // ── Catcall: deinit ───────────────────────────────────────────────────────────
 
 static esp_err_t bbq20_deinit(void)
@@ -152,6 +167,7 @@ static const catcall_input_t s_catcall = {
     .init            = bbq20_init,
     .poll_event      = bbq20_poll_event,
     .deinit          = bbq20_deinit,
+    .set_backlight   = bbq20_set_backlight,
 };
 
 // ── Module lifecycle ──────────────────────────────────────────────────────────

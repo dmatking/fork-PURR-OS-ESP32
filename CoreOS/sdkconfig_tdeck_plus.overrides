@@ -1,0 +1,62 @@
+# PURR OS — tdeck_plus manual overrides (hand-maintained; chained after the
+# AUTO-GENERATED CoreOS/sdkconfig_tdeck_plus in SDKCONFIG_DEFAULTS)
+
+# WinCE-style taskbar+start-menu desktop instead of the default icon-grid
+# desktop — EXPERIMENTAL, opted into on this device for testing/dogfooding
+# ahead of a possible wider rollout to the T-Deck series. Semi-workable as
+# of introduction: apps render and launch, but this is new and rough-edged
+# code, not a proven default yet.
+CONFIG_PURR_MINIWIN_DESKTOP_WINCE=y
+
+# LVGL's internal object/style pool defaulted to a fixed 32KB arena
+# (Kconfig caps the built-in pool at 128KB max — bumping it there still
+# wasn't enough and produced the identical crash), completely separate from
+# the 8MB PSRAM. Cupcake keeps every opened app's window resident (Minimize
+# doesn't destroy it, and simply opening several apps in a row without
+# closing the previous ones does the same), so 3+ full windows' worth of
+# widgets exhausts any small fixed pool — and LVGL doesn't null-check every
+# internal allocation, so it crashes rather than failing gracefully.
+# Verified via a live crash backtrace (theme_apply -> lv_obj_add_style
+# dereferencing a failed allocation while building a 3rd open window's
+# button grid), reproduced identically even after the 128KB bump.
+#
+# Fix: LV_MEM_CUSTOM routes LVGL's allocator to plain malloc/free/realloc
+# (this lvgl__lvgl component's Kconfig doesn't expose custom alloc/free
+# function names, only whether to use them, so real heap_caps_malloc(...,
+# MALLOC_CAP_SPIRAM) routing isn't reachable without vendoring a modified
+# copy of the managed component) — but CONFIG_SPIRAM_USE_MALLOC=y already
+# means malloc() draws from the full general heap (currently ~8.3MB free
+# at boot) instead of a tiny fixed arena, which is what actually matters
+# here. Individual LVGL objects are small enough to stay under
+# CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL (16KB) and land in internal SRAM
+# rather than PSRAM specifically, but internal SRAM alone dwarfs the old
+# 32/128KB ceiling. The genuinely large allocations (wallpaper pixel
+# buffers) already explicitly request MALLOC_CAP_SPIRAM directly in
+# cupcake_ui.c, so PSRAM is already in use where it actually matters.
+CONFIG_LV_MEM_CUSTOM=y
+
+# Bluetooth — Bluedroid host stack, BLE only. ESP32-S3 has NO classic
+# Bluetooth (BR/EDR) hardware at all — SOC_BT_CLASSIC_SUPPORTED isn't even
+# defined for this chip in ESP-IDF's soc_caps.h (only SOC_BLE_SUPPORTED is),
+# so CONFIG_BT_CLASSIC_ENABLED can't be turned on regardless of what's set
+# here. Bluedroid (vs. NimBLE) was still the right host-stack choice since
+# it's the more full-featured/dual-mode-capable stack in general, but on
+# this specific board it only ever runs in BLE mode.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_GATTS_ENABLE=y
+CONFIG_BT_GATTC_ENABLE=y
+
+# BLE 4.2 legacy GAP API (esp_ble_gap_start_advertising/set_scan_params/
+# start_scanning — what bt_mgr.c/mesh_ble.c actually call) vs. BLE 5.0
+# extended-advertising API are mutually exclusive in this IDF version
+# (component's own Kconfig help: "BLE 4.2 and BLE 5.0 cannot be used
+# simultaneously") — this build defaulted to 5.0-only, which compiles the
+# legacy functions out entirely (link-time "undefined reference", not a
+# compile error, since only the .c bodies are excluded, not the header
+# prototypes). Simple accessory pairing + basic advertising doesn't need
+# 5.0's extended/coded-PHY features, so take 4.2 instead of rewriting to
+# the ext_adv/ext_scan API surface.
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n

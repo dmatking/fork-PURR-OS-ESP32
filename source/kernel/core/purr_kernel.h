@@ -17,7 +17,7 @@ extern "C" {
 
 // ── Version ───────────────────────────────────────────────────────────────────
 
-#define PURR_KERNEL_VERSION  "1.0.0-dp1"
+#define PURR_KERNEL_VERSION  "1.0.0-dp2"
 #define KITT_VERSION         "0.10.0"
 
 // ── Module loader ─────────────────────────────────────────────────────────────
@@ -71,6 +71,13 @@ const catcall_input_t    *purr_kernel_input_at(int idx); // iterate all inputs
 const catcall_radio_t   *purr_kernel_radio(void);
 const catcall_gps_t     *purr_kernel_gps(void);
 const catcall_ui_t      *purr_kernel_ui(void);
+
+// Calls set_backlight() on whichever registered input driver implements it
+// (e.g. bbq20) — keeps callers decoupled from which specific input driver
+// actually has a backlight, mirroring how brightness goes through
+// catcall_display rather than a specific display driver. No-op (returns
+// ESP_ERR_NOT_SUPPORTED) if no registered input driver implements it.
+esp_err_t purr_kernel_keyboard_set_backlight(uint8_t brightness);
 
 // ── UI thread safety ──────────────────────────────────────────────────────────
 // LVGL (and other catcall_ui_t backends) are not safe to call from more than
@@ -128,6 +135,21 @@ int  purr_kernel_notify_count(void);
 bool purr_kernel_notify_at(int idx, purr_notification_t *out);
 
 void purr_kernel_notify_clear(void);
+
+// ── App window tracking ───────────────────────────────────────────────────────
+// Generic hook so purr_win.h can announce every window it creates without
+// knowing app_manager exists — app_manager is the (single) consumer, opting
+// in via purr_kernel_set_window_created_cb() at its own init, same pattern as
+// the catcall registries above. Lets app_manager associate a running app with
+// its purr_win_t so a "Running Apps" UI can show/restore it later, without
+// every individual app needing to report its own window handle.
+
+typedef void (*purr_window_created_cb_t)(purr_win_t win);
+
+void purr_kernel_set_window_created_cb(purr_window_created_cb_t cb);
+
+// Called by purr_win_create() — not meant to be called directly by apps.
+void purr_kernel_notify_window_created(purr_win_t win);
 
 // ── Boot readiness ────────────────────────────────────────────────────────────
 // Set once by the specialized kernel boot, after every static module/app has

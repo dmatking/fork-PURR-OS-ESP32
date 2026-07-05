@@ -205,7 +205,9 @@ def build_target(slug, src_dir, pcat_path, kind):
     # Generate IDF component CMakeLists.txt inside the module source dir
     # (only if one doesn't already exist — don't clobber hand-written ones)
     cmake_path = os.path.join(src_dir, "CMakeLists.txt")
-    kernel_rel = os.path.relpath(os.path.join(REPO_DIR, "source", "kernel"), src_dir)
+    # .replace(os.sep, "/"): CMake requires forward slashes even on Windows —
+    # see generate_components_manifest()'s comment on the same issue.
+    kernel_rel = os.path.relpath(os.path.join(REPO_DIR, "source", "kernel"), src_dir).replace(os.sep, "/")
     src_list   = "\n        ".join(c_files)
     req        = cfg.get("idf_requires", "esp_common driver freertos nvs_flash")
     cmake_txt  = (
@@ -249,7 +251,11 @@ def generate_components_manifest(targets):
                    if (f.endswith(".c") or f.endswith(".cpp"))
                    and os.path.isfile(os.path.join(src_dir, f))]
         if c_files:
-            rel = os.path.relpath(src_dir, REPO_DIR)
+            # CMake requires forward slashes even on Windows — backslash is
+            # a string escape character there, so os.path.relpath()'s native
+            # separator breaks the generated file (e.g. "\m" isn't a valid
+            # escape, causing a cryptic "Syntax error in cmake code").
+            rel = os.path.relpath(src_dir, REPO_DIR).replace(os.sep, "/")
             lines.append(f"    ${{CMAKE_SOURCE_DIR}}/../{rel}")
 
     # System apps: source/apps/system/<name>/app.pcat + CMakeLists.txt
@@ -261,7 +267,7 @@ def generate_components_manifest(targets):
             if (os.path.isdir(app_dir)
                     and os.path.isfile(os.path.join(app_dir, "app.pcat"))
                     and os.path.isfile(os.path.join(app_dir, "CMakeLists.txt"))):
-                rel = os.path.relpath(app_dir, REPO_DIR)
+                rel = os.path.relpath(app_dir, REPO_DIR).replace(os.sep, "/")
                 lines.append(f"    ${{CMAKE_SOURCE_DIR}}/../{rel}")
 
     lines += [")", ""]

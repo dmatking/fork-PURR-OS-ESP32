@@ -1,0 +1,14 @@
+# modules/bt_mgr/module.pcat
+# Bluetooth manager — Bluedroid host, BLE only (T-Deck Plus's ESP32-S3 has no
+# classic BT hardware). Scan/pair driven from Settings; the Meshtastic BLE
+# companion service (in the meshtastic module) advertises independently once
+# bt_mgr_is_enabled() is true.
+
+name            = "bt_mgr"
+version         = "0.1.0"
+module_type     = "PURR_MOD_SYSTEM"
+kernel_min      = "0.9.0"
+kernel_max      = ""
+
+provides        = ["bluetooth_ble"]
+required_catcalls = []
