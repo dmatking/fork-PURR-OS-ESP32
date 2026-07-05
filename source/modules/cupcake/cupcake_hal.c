@@ -9,8 +9,10 @@
 #include "cupcake.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 
 static const char *TAG = "cupcake_hal";
 
@@ -102,7 +104,11 @@ int cupcake_hal_init(void)
         ESP_LOGW(TAG, "no touch catcall — cupcake will run touchless");
     }
 
-    BaseType_t tr = xTaskCreate(lv_tick_task, "cupcake_tick", 4096, NULL, 1, NULL);
+    // No storage access anywhere in this task (just lv_tick_inc + sleep) —
+    // safe on a PSRAM-backed stack, unlike cupcake_task itself (see
+    // cupcake_module.c's comment on why that one stays internal).
+    static TaskHandle_t s_tick_task = NULL;
+    BaseType_t tr = xTaskCreateWithCaps(lv_tick_task, "cupcake_tick", 4096, NULL, 1, &s_tick_task, MALLOC_CAP_SPIRAM);
     if (tr != pdPASS) {
         ESP_LOGE(TAG, "failed to create tick task");
         return -1;

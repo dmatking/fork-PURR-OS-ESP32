@@ -35,6 +35,18 @@ CONFIG_PURR_MINIWIN_DESKTOP_WINCE=y
 # cupcake_ui.c, so PSRAM is already in use where it actually matters.
 CONFIG_LV_MEM_CUSTOM=y
 
+# LV_CONF_SKIP defaults to y in this component's own Kconfig ("Uncheck this
+# to use custom lv_conf.h") — meaning our source/config/lv_conf.h (wired in
+# via LV_CONF_PATH in CoreOS/CMakeLists.txt) was being silently skipped
+# entirely, regardless of LV_CONF_PATH being correctly set at the compiler-
+# flag level. Root-caused live: preprocessed lv_mem.c showed
+# LV_MEM_CUSTOM_ALLOC still expanding to plain malloc despite our override
+# file existing and being correctly referenced — traced via -dM macro dump
+# to CONFIG_LV_CONF_SKIP=1 (its default) short-circuiting
+# lv_conf_internal.h's #include LV_CONF_PATH block entirely. Must explicitly
+# disable it for our override to ever take effect.
+CONFIG_LV_CONF_SKIP=n
+
 # Internal DRAM is drastically scarcer than expected in practice — confirmed
 # live via a periodic heap-watch log: free internal RAM drops to ~1-2KB
 # within ~14s of boot and *stays* there indefinitely (flat, not a leak —

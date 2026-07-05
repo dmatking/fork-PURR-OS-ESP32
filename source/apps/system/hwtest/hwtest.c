@@ -7,6 +7,8 @@
 #include <stdarg.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
 #include "purr_win.h"
 #include "purr_kernel.h"
 #include "purr_module.h"
@@ -89,7 +91,8 @@ static void poller_task(void *arg) {
         }
         vTaskDelay(pdMS_TO_TICKS(30));
     }
-    vTaskDelete(NULL);
+    // Must match the WithCaps variant used to create this task.
+    vTaskDeleteWithCaps(NULL);
 }
 
 // ── Close button ─────────────────────────────────────────────────────────────
@@ -127,7 +130,9 @@ static int hwtest_init(void) {
     purr_win_show(s_win);
 
     s_running = true;
-    xTaskCreate(poller_task, "hwtest_poll", 3072, NULL, 4, &s_poller);
+    // No NVS/flash/SD access in this task's body — safe on a PSRAM-backed
+    // stack (see app_manager.c's launch_native()/launch_meow() pattern).
+    xTaskCreateWithCaps(poller_task, "hwtest_poll", 3072, NULL, 4, &s_poller, MALLOC_CAP_SPIRAM);
     return 0;
 }
 

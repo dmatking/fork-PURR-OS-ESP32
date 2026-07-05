@@ -16,6 +16,8 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "purr_win.h"
 #include "purr_kernel.h"
@@ -94,7 +96,9 @@ static void buddy_refresh_task(void *arg) {
         refresh_buddy_list();
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
-    vTaskDelete(NULL);
+    // Must match the WithCaps variant used to create this task (see its
+    // xTaskCreateWithCaps() call site below).
+    vTaskDeleteWithCaps(NULL);
 }
 
 // ── Chat log helper (same scroll-drop-half pattern as terminal.c) ───────────
@@ -190,7 +194,10 @@ static int meshchat_init(void) {
     mesh_manager_add_rx_callback(on_mesh_rx);
 
     s_running = true;
-    xTaskCreate(buddy_refresh_task, "meshchat_ref", 4096, NULL, 3, &s_refresh_task);
+    // No NVS/flash/SD access anywhere in this task's own body — safe on a
+    // PSRAM-backed stack (see app_manager.c's launch_native()/launch_meow()
+    // for the same pattern).
+    xTaskCreateWithCaps(buddy_refresh_task, "meshchat_ref", 4096, NULL, 3, &s_refresh_task, MALLOC_CAP_SPIRAM);
     return 0;
 }
 

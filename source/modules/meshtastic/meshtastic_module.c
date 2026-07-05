@@ -15,6 +15,8 @@
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
 #include <string.h>
 #include <stdio.h>
 #include <pb_decode.h>
@@ -215,7 +217,11 @@ int mesh_manager_init(void)
     s_node_id = ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16)
               | ((uint32_t)mac[4] <<  8) |  (uint32_t)mac[5];
 
-    BaseType_t ret = xTaskCreate(mesh_task, "meshtastic", 8192, NULL, 4, &s_task);
+    // No NVS/flash/SD access anywhere in mesh_task()'s own call graph
+    // (mesh_radio.c/mesh_router.c audited) — safe on a PSRAM-backed stack,
+    // matching app_manager.c's launch_native()/launch_meow() pattern. Must
+    // be paired with vTaskDeleteWithCaps() in mesh_manager_deinit() below.
+    BaseType_t ret = xTaskCreateWithCaps(mesh_task, "meshtastic", 8192, NULL, 4, &s_task, MALLOC_CAP_SPIRAM);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "failed to create mesh task");
         return -1;
@@ -233,7 +239,9 @@ int mesh_manager_init(void)
 void mesh_manager_deinit(void)
 {
     mesh_ble_deinit();
-    if (s_task) { vTaskDelete(s_task); s_task = NULL; }
+    // Must match the WithCaps variant used to create this task (PSRAM-backed
+    // stack, see mesh_manager_init() above).
+    if (s_task) { vTaskDeleteWithCaps(s_task); s_task = NULL; }
     s_ready = false;
 }
 

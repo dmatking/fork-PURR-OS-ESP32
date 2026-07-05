@@ -11,4 +11,23 @@ if(NOT _manifest_loaded)
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+# Force LVGL's allocator onto PSRAM instead of the board's scarce internal
+# SRAM — see source/config/lv_conf.h for the full rationale. LV_CONF_PATH is
+# honored by lv_conf_internal.h ahead of any Kconfig fallback (as long as
+# CONFIG_LV_CONF_SKIP=n — see sdkconfig_tdeck_plus.overrides, it defaults to
+# y and silently skips this whole mechanism otherwise), and setting it as a
+# global build property (rather than a per-component include path) applies
+# it to every component, including the vendored lvgl__lvgl itself.
+#
+# Deliberately NOT pre-quoted here: lv_conf_internal.h does
+# `#include __LV_TO_STR(LV_CONF_PATH)`, where __LV_TO_STR itself stringizes
+# (#x) its argument. Passing an already-quoted value here double-stringizes
+# it into a malformed nested-quote path ("\"C:/...\"") that GCC rejects with
+# "fatal error: ...: Invalid argument" — confirmed live. LV_CONF_PATH must
+# be the bare, unquoted path so __LV_TO_STR's own #x produces the single
+# pair of quotes #include actually needs.
+get_filename_component(PURR_LV_CONF_PATH "${CMAKE_CURRENT_LIST_DIR}/../source/config/lv_conf.h" ABSOLUTE)
+idf_build_set_property(COMPILE_DEFINITIONS "LV_CONF_PATH=${PURR_LV_CONF_PATH}" APPEND)
+
 project(purr_os)

@@ -15,6 +15,30 @@ static const char *TAG = "cupcake";
 
 static TaskHandle_t s_task = NULL;
 
+// Dedicated static internal-RAM stack — cupcake_task is the LVGL render/
+// dispatch loop every app's button/widget callback actually runs on
+// (lv_timer_handler -> lv_event_send -> the app's purr_win_cb_t), including
+// any NVS/flash-touching callback (e.g. settings.c's nvs_save_str/
+// nvs_save_u8 on its theme/brightness/wallpaper buttons) — confirmed live
+// via a real crash backtrace (cupcake_task -> lv_timer_handler ->
+// lv_indev_read_timer_cb -> lv_event_send -> btn_event_cb -> on_bt_scan ->
+// bt_mgr_scan -> xQueueSemaphoreTake). A PSRAM-backed stack here would
+// crash the instant any such callback disables the flash cache — see
+// app_manager.c's "static stack pool" comment for the full mechanism. This
+// puts cupcake_task's own stack in the same protected category as
+// settings/fileman's, not a PSRAM-eligible app task — it's core UI-kernel
+// dispatch structure, not "just another app."
+//
+// Sized at 8192 (down from the previous dynamic allocation's 12288) —
+// static internal-RAM reservations are fixed at link time, and 12288 here
+// on top of settings/fileman's existing 8192-each static stacks overflowed
+// the internal DRAM segment by 3408 bytes at link time. 8192 matches the
+// size already proven safe for settings/fileman's own (arguably more
+// complex, NVS+VFS-touching) code paths.
+#define CUPCAKE_STACK_SIZE 8192
+static StackType_t  s_cupcake_stack[CUPCAKE_STACK_SIZE];
+static StaticTask_t s_cupcake_tcb;
+
 static void cupcake_task(void *arg)
 {
     (void)arg;
@@ -55,9 +79,10 @@ int cupcake_init(void)
     extern void cupcake_win_register(void);
     cupcake_win_register();
 
-    BaseType_t ret = xTaskCreate(cupcake_task, "cupcake", 12288, NULL, 4, &s_task);
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "failed to create cupcake task");
+    s_task = xTaskCreateStatic(cupcake_task, "cupcake", CUPCAKE_STACK_SIZE, NULL, 4,
+                                s_cupcake_stack, &s_cupcake_tcb);
+    if (!s_task) {
+        ESP_LOGE(TAG, "xTaskCreateStatic failed for cupcake task");
         return -1;
     }
 
