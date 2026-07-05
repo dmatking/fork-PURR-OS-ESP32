@@ -13,9 +13,14 @@
 
 #include "lvgl.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "../../kernel/catcalls/catcall_ui.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "cupcake.h"
+
+static const char *TAG = "cupcake_win";
 
 #define MAX_WINS  16
 #define MAX_WIDS  128
@@ -133,7 +138,10 @@ static void close_btn_event_cb(lv_event_t *e) {
 // ── Window ────────────────────────────────────────────────────────────────────
 
 static purr_win_t ck_win_create(const char *title) {
-    lv_obj_t *win = lv_win_create(lv_scr_act(), 32);
+    lv_obj_t *scr = lv_scr_act();
+    lv_obj_t *win = lv_win_create(scr, 32);
+    ESP_LOGI(TAG, "win_create '%s': scr=%p win=%p scr_children_before=%d core=%d",
+             title, (void *)scr, (void *)win, (int)lv_obj_get_child_cnt(scr), xPortGetCoreID());
     lv_win_add_title(win, title);
 
     // Allocated early so button callbacks get the purr_win_t handle (not the
@@ -191,7 +199,7 @@ static void ck_win_on_close(purr_win_t h, purr_win_cb_t cb, void *user) {
 
 static void ck_win_show(purr_win_t h) {
     lv_obj_t *w = get_win(h);
-    if (!w) return;
+    if (!w) { ESP_LOGW(TAG, "win_show: handle=%u has no lv_obj!", (unsigned)h); return; }
     lv_obj_clear_flag(w, LV_OBJ_FLAG_HIDDEN);
     // Every app window is a same-parent (lv_scr_act()) sibling of the home
     // screen, the drawer, and every other app's window — move_foreground()
@@ -200,6 +208,13 @@ static void ck_win_show(purr_win_t h) {
     // layer always composited above lv_scr_act() regardless of sibling
     // order, so it's structurally never covered by this.
     lv_obj_move_foreground(w);
+    lv_area_t coords;
+    lv_obj_get_coords(w, &coords);
+    ESP_LOGI(TAG, "win_show: handle=%u obj=%p hidden=%d abs=(%d,%d)-(%d,%d) idx=%d/%d core=%d",
+             (unsigned)h, (void *)w, (int)lv_obj_has_flag(w, LV_OBJ_FLAG_HIDDEN),
+             (int)coords.x1, (int)coords.y1, (int)coords.x2, (int)coords.y2,
+             (int)lv_obj_get_index(w), (int)lv_obj_get_child_cnt(lv_obj_get_parent(w)),
+             xPortGetCoreID());
 }
 
 static void ck_win_hide(purr_win_t h) {

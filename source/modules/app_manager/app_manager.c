@@ -5,6 +5,7 @@
 #include "../../kernel/core/purr_module.h"
 #include "../../kernel/catcalls/purr_win.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -206,10 +207,18 @@ static int launch_meow(app_entry_t *app, int idx)
     ctx->mod  = lua_rt;
     ctx->done = xSemaphoreCreateBinary();
 
-    app->state = APP_STATE_RUNNING;
     ESP_LOGI(TAG, "launch .meow: %s", app->path);
 
-    xTaskCreate(meow_task, app->name, 8192, ctx, 5, &ctx->task);
+    BaseType_t ok = xTaskCreate(meow_task, app->name, 8192, ctx, 5, &ctx->task);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "xTaskCreate failed for '%s' — likely out of internal heap", app->name);
+        app->state = APP_STATE_ERROR;
+        snprintf(app->error, sizeof(app->error), "xTaskCreate failed (out of memory?)");
+        vSemaphoreDelete(ctx->done);
+        ctx->done = NULL;
+        return -1;
+    }
+    app->state = APP_STATE_RUNNING;
     return 0;
 }
 
@@ -225,9 +234,12 @@ static int launch_meow(app_entry_t *app, int idx)
 
 static void native_task(void *arg) {
     app_task_ctx_t *ctx = (app_task_ctx_t *)arg;
-    ESP_LOGI(TAG, "native app task start: %s", ctx->app->name);
+    ESP_LOGI(TAG, "native app task start: %s (core=%d prio=%u)",
+             ctx->app->name, xPortGetCoreID(), (unsigned)uxTaskPriorityGet(NULL));
 
     int rc = ctx->mod->init();
+    ESP_LOGI(TAG, "native app task init() returned: %s rc=%d window=%u",
+             ctx->app->name, rc, (unsigned)ctx->app->window);
 
     // Only mark ERROR on failure — see meow_task()'s comment on why this no
     // longer overwrites RUNNING with STOPPED just because the (non-blocking)
@@ -261,12 +273,30 @@ static int launch_native(app_entry_t *app, int idx)
     ctx->mod  = mod;
     ctx->done = xSemaphoreCreateBinary();
 
-    app->state = APP_STATE_RUNNING;
-    ESP_LOGI(TAG, "launch .%s: %s (pre-linked module)", tier_name(app->tier), app->name);
+    ESP_LOGI(TAG, "launch .%s: %s (pre-linked module) — free heap: internal=%u largest_internal_block=%u",
+             tier_name(app->tier), app->name,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
     // Stack size: .claw apps get more stack (kernel access)
     uint32_t stack = (app->tier == APP_TIER_CLAW) ? 16384 : 8192;
-    xTaskCreate(native_task, app->name, stack, ctx, 5, &ctx->task);
+    BaseType_t ok = xTaskCreate(native_task, app->name, stack, ctx, 5, &ctx->task);
+    if (ok != pdPASS) {
+        // xTaskCreate's return value was never checked before — a silent
+        // failure here (task stacks come out of internal DRAM regardless of
+        // PSRAM being present, and that pool is small and shared with
+        // WiFi/BT/LoRa/LVGL buffers) left `state` stuck at RUNNING forever
+        // with no task ever created, so every later tap on ANY app silently
+        // no-op'd via the `state == APP_STATE_RUNNING` guard below — exactly
+        // matching "apps just don't open" with zero error or crash.
+        ESP_LOGE(TAG, "xTaskCreate failed for '%s' (stack=%u) — likely out of internal heap", app->name, (unsigned)stack);
+        app->state = APP_STATE_ERROR;
+        snprintf(app->error, sizeof(app->error), "xTaskCreate failed (out of memory?)");
+        vSemaphoreDelete(ctx->done);
+        ctx->done = NULL;
+        return -1;
+    }
+    app->state = APP_STATE_RUNNING;
     return 0;
 }
 
