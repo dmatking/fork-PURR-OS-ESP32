@@ -16,6 +16,7 @@
 #include "purr_kernel.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -476,6 +477,16 @@ void app_main(void)
     purr_register_static_modules();
     purr_kernel_load_static_modules();
 
+    // bt_mgr no longer brings the NimBLE controller/host up here (or
+    // anywhere in boot) — confirmed live that doing so unconditionally at
+    // boot permanently starved this board's small internal DMA-capable
+    // memory pool within seconds, breaking every SD card read (and
+    // therefore .meow/.hiss script loading) for the rest of boot.
+    // Bring-up is now lazy: bt_mgr_ensure_active() runs the first time a
+    // user actually asks for Bluetooth (Settings' toggle, or Meshtastic's
+    // BLE phone-companion toggle). See bt_mgr.h/mesh_ble.c for the full
+    // story.
+
     // app_manager's own init() scans for apps before the P3 system apps
     // (settings/about/terminal/fileman/calculator) have registered, so its
     // first scan always finds 0. Re-scan now that every priority tier above
@@ -488,6 +499,20 @@ void app_main(void)
 
     if (purr_kernel_sd_available()) {
         ESP_LOGI(TAG, "=== phase 2: SD extras ===");
+        // One-time snapshot of the MALLOC_CAP_DMA pool right at the point
+        // where live captures show "esp_dma_capable_malloc(172): Not
+        // enough heap memory" -> "sdmmc_read_blocks failed" starting to
+        // happen (this scan is the first thing to touch the SD card after
+        // bt_mgr/wifi_mgr/meshtastic have all loaded). purr_kernel.c's
+        // periodic heapwatch log only ticks every 2s and its first tick
+        // lands ~800ms+ after this point — too late to see the pool state
+        // at the actual moment of failure. dma_free is the reserved
+        // CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL pool specifically (32KB by
+        // default), distinct from and narrower than internal_free.
+        ESP_LOGW(TAG, "phase 2 DMA pool: dma_free=%u largest_dma=%u internal_free=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         purr_kernel_scan_modules("/sdcard/modules", NULL);
         purr_kernel_scan_modules("/sdcard/drivers", NULL);
     }

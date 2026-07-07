@@ -13,6 +13,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -58,6 +59,7 @@ static app_tier_t tier_from_ext(const char *filename)
     const char *ext = strrchr(filename, '.');
     if (!ext) return APP_TIER_PAWS;
     if (strcmp(ext, ".meow") == 0) return APP_TIER_MEOW;
+    if (strcmp(ext, ".hiss") == 0) return APP_TIER_HISS;
     if (strcmp(ext, ".claw") == 0) return APP_TIER_CLAW;
     return APP_TIER_PAWS;   // .paws and anything else
 }
@@ -66,6 +68,7 @@ static const char *tier_name(app_tier_t t)
 {
     switch (t) {
     case APP_TIER_MEOW: return "meow";
+    case APP_TIER_HISS: return "hiss";
     case APP_TIER_PAWS: return "paws";
     case APP_TIER_CLAW: return "claw";
     default:            return "?";
@@ -105,6 +108,7 @@ static void scan_dir(const char *dir)
         const char *ext = strrchr(ent->d_name, '.');
         if (!ext) continue;
         if (strcmp(ext, ".meow") != 0 &&
+            strcmp(ext, ".hiss") != 0 &&
             strcmp(ext, ".paws") != 0 &&
             strcmp(ext, ".claw") != 0) continue;
 
@@ -194,7 +198,15 @@ static void report_launch_oom(app_entry_t *app)
 // The path of the script is passed via a thin task-arg struct written into NVS
 // (or a global, since only one Lua VM runs at a time on these boards).
 
-static char s_meow_pending_path[128];
+static char   s_meow_pending_path[128];
+// Script source preloaded into PSRAM by launch_meow() — see its comment and
+// app_manager.h's accessor doc for why this exists instead of meow_task()
+// calling fopen() itself.
+static char   *s_meow_pending_code = NULL;
+static size_t  s_meow_pending_len  = 0;
+// True when the pending script is .hiss-tier — read by lua_runtime_init()
+// to decide whether to register kitt.*/radio.*/gps.*. Set in launch_meow().
+static bool    s_meow_pending_privileged = false;
 
 static void meow_task(void *arg) {
     app_task_ctx_t *ctx = (app_task_ctx_t *)arg;
@@ -203,12 +215,19 @@ static void meow_task(void *arg) {
         ESP_LOGE(TAG, "lua_runtime module not loaded — cannot run .meow");
         ctx->app->state = APP_STATE_ERROR;
         snprintf(ctx->app->error, sizeof(ctx->app->error), "lua_runtime not loaded");
+        if (s_meow_pending_code) { heap_caps_free(s_meow_pending_code); s_meow_pending_code = NULL; s_meow_pending_len = 0; }
         xSemaphoreGive(ctx->done);
         vTaskDeleteWithCaps(NULL);
         return;
     }
-    // lua_runtime.init() picks up the pending path via s_meow_pending_path
+    // lua_runtime.init() picks up the preloaded buffer via
+    // app_manager_get_pending_meow_code() (falls back to
+    // app_manager_get_pending_meow_path() only if no buffer is pending).
     int rc = lua_rt->init();
+    // The buffer's job is done the instant init() returns — lua_run_code()
+    // compiles it into Lua bytecode via luaL_loadbuffer() and doesn't retain
+    // the raw source afterward, whether the script ran clean or errored out.
+    if (s_meow_pending_code) { heap_caps_free(s_meow_pending_code); s_meow_pending_code = NULL; s_meow_pending_len = 0; }
     // Only mark ERROR on failure — a successful init() means the script is up
     // and running, not finished. Previously this immediately overwrote the
     // RUNNING state set at launch with STOPPED the instant init() returned,
@@ -223,6 +242,27 @@ static void meow_task(void *arg) {
     vTaskDeleteWithCaps(NULL);
 }
 
+// Scans a .hiss script's own source for a "-- purr-sig: <value>" comment —
+// the same self-declared, honor-system tag catstrap.py's cmd_validate()/
+// build_app() read at build time on the dev machine, but this is the copy
+// that actually matters: it gates whether launch_meow() below lets an
+// unsigned .hiss script run. A whole-buffer strstr() rather than a strict
+// line-anchored parser — good enough for an honor-system tag, and simpler
+// than re-deriving line boundaries on-device. Falls back to "unsigned" for
+// no tag, or a value not in this list.
+static const char *scan_purr_sig(const char *code) {
+    static const char *values[] = { "dev-signed", "trusted-signed", "dev-approved" };
+    const char *p = strstr(code, "purr-sig:");
+    if (!p) return "unsigned";
+    p += strlen("purr-sig:");
+    while (*p == ' ' || *p == '\t') p++;
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        size_t len = strlen(values[i]);
+        if (strncmp(p, values[i], len) == 0) return values[i];
+    }
+    return "unsigned";
+}
+
 static int launch_meow(app_entry_t *app, int idx)
 {
     const purr_module_header_t *lua_rt = purr_kernel_get_module("lua_runtime");
@@ -234,6 +274,105 @@ static int launch_meow(app_entry_t *app, int idx)
     }
 
     strncpy(s_meow_pending_path, app->path, sizeof(s_meow_pending_path) - 1);
+    s_meow_pending_privileged = (app->tier == APP_TIER_HISS);
+
+    // Preload the script into a PSRAM buffer here, on this function's own
+    // caller's stack — for the only launch path that exists today (a
+    // launcher tap), that's the UI backend's own dispatch task
+    // (e.g. Cupcake's cupcake_task), which already runs on a static
+    // internal-RAM stack for exactly this reason (see cupcake_module.c).
+    // fopen()/fread() briefly disable the flash cache; doing that here
+    // instead of inside meow_task() means meow_task() never touches flash
+    // at all and can safely run on an ordinary PSRAM stack below — a
+    // PSRAM-stack meow_task() calling fopen() directly was confirmed live to
+    // crash with esp_task_stack_is_sane_cache_disabled(), the same class
+    // launch_native()'s "EXCEPTION" comment documents for settings/fileman.
+    if (s_meow_pending_code) {
+        heap_caps_free(s_meow_pending_code);
+        s_meow_pending_code = NULL;
+        s_meow_pending_len  = 0;
+    }
+    FILE *f = fopen(app->path, "rb");
+    if (!f) {
+        app->state = APP_STATE_ERROR;
+        snprintf(app->error, sizeof(app->error), "cannot open script");
+        // DMA pool numbers correlate this with the boot-time "esp_dma_capable_
+        // malloc(172): Not enough heap memory" -> "sdmmc_read_blocks failed"
+        // pattern (see kernel_tdp_boot.c's phase-2 DMA snapshot) — fopen()/
+        // fread() of an /sdcard script goes through the same diskio_sdmmc
+        // path, and its per-transaction DMA-capable scratch buffer can fail
+        // the exact same way well after boot, whenever this reserved pool
+        // is contended. TEMPORARY diagnostic, same as purr_kernel.c's
+        // heapwatch — remove once the SD/DMA contention issue is found.
+        ESP_LOGE(TAG, "launch .meow: fopen failed for '%s' (dma_free=%u largest_dma=%u internal_free=%u)",
+                 app->path,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        return -1;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) {
+        fclose(f);
+        app->state = APP_STATE_ERROR;
+        snprintf(app->error, sizeof(app->error), "empty or unreadable script");
+        return -1;
+    }
+    char *code = heap_caps_malloc((size_t)sz + 1, MALLOC_CAP_SPIRAM);
+    if (!code) {
+        fclose(f);
+        ESP_LOGE(TAG, "launch .meow: PSRAM alloc failed for '%s' (%ld bytes)", app->name, sz);
+        report_launch_oom(app);
+        return -1;
+    }
+    size_t nread = fread(code, 1, (size_t)sz, f);
+    fclose(f);
+    code[nread] = '\0';
+
+    // A short read here previously went completely unnoticed — the script
+    // would silently run truncated instead of erroring. Same DMA-pool
+    // contention this file's fopen() failure branch above documents can
+    // fail *mid-read* instead of on open, which fread() surfaces as
+    // nread < sz rather than a NULL return. TEMPORARY diagnostic (matches
+    // the fopen-failure log above) — remove once the SD/DMA contention
+    // issue is found, or promote to a real error+retry if this fires.
+    if (nread != (size_t)sz) {
+        ESP_LOGW(TAG, "launch .meow: short read for '%s' (%u/%ld bytes, dma_free=%u largest_dma=%u internal_free=%u)",
+                 app->name, (unsigned)nread, sz,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    }
+
+    // Developer Mode gate — .hiss only (see purr_kernel_dev_mode_enabled()'s
+    // doc comment). A signed script (dev-signed/trusted-signed/dev-approved)
+    // always runs; only "unsigned" is blocked, and only when Developer Mode
+    // is off. Rejected here, before any task/semaphore exists, so nothing
+    // downstream needs to know this ever almost ran.
+    if (app->tier == APP_TIER_HISS) {
+        const char *sig = scan_purr_sig(code);
+        if (strcmp(sig, "unsigned") == 0 && !purr_kernel_dev_mode_enabled()) {
+            heap_caps_free(code);
+            // Clear pending state fully (not just the code buffer) — a
+            // dangling s_meow_pending_path with no matching code would make
+            // lua_runtime_init()'s "nothing pending" check (empty code AND
+            // empty path) false, letting a *later*, unrelated init() call
+            // fall through to its fopen()-based fallback and run this exact
+            // script anyway, bypassing the rejection above.
+            s_meow_pending_path[0]   = '\0';
+            s_meow_pending_privileged = false;
+            app->state = APP_STATE_ERROR;
+            snprintf(app->error, sizeof(app->error),
+                     "unsigned .hiss — enable Developer Mode in Settings");
+            ESP_LOGW(TAG, "launch .hiss: '%s' rejected — unsigned, Developer Mode off", app->name);
+            return -1;
+        }
+    }
+
+    s_meow_pending_code = code;
+    s_meow_pending_len  = nread;
 
     app_task_ctx_t *ctx = &s_ctxs[idx];
     ctx->app  = app;
@@ -242,22 +381,36 @@ static int launch_meow(app_entry_t *app, int idx)
     if (!ctx->done) {
         // See launch_native()'s matching check for why this is necessary.
         ESP_LOGE(TAG, "xSemaphoreCreateBinary failed for '%s' — out of memory", app->name);
+        heap_caps_free(s_meow_pending_code);
+        s_meow_pending_code = NULL;
+        s_meow_pending_len  = 0;
         report_launch_oom(app);
         return -1;
     }
 
-    ESP_LOGI(TAG, "launch .meow: %s", app->path);
+    ESP_LOGI(TAG, "launch .meow: %s (%u bytes preloaded to PSRAM)", app->path, (unsigned)nread);
 
-    // Stack lives in PSRAM (MALLOC_CAP_SPIRAM) — see launch_native()'s
-    // comment for why: internal DRAM alone is too fragmented/small to
-    // reliably fit an 8-16KB task stack once WiFi/BT/LoRa/LVGL buffers are
-    // all resident, and this board has 8MB of otherwise-idle PSRAM.
-    BaseType_t ok = xTaskCreateWithCaps(meow_task, app->name, 8192, ctx, 5, &ctx->task, MALLOC_CAP_SPIRAM);
+    ctx->static_stack = false;
+    // 8192 -> 16384: a looping .meow script (e.g. clock.meow) that calls
+    // back into the Lua VM every iteration (string.format/math.floor/
+    // win.* table lookups via luaV_finishget's slow path) crashed live
+    // with EXCCAUSE InstructionFetchError and a CORRUPTED backtrace after
+    // running for 1.4-3.5s — the classic signature of a corrupted return
+    // address, i.e. stack exhaustion, not caught cleanly since this task
+    // has no guard-page. This stack is PSRAM-backed (MALLOC_CAP_SPIRAM,
+    // abundant — unlike this board's tight internal DRAM budget
+    // documented elsewhere in this session's work), so doubling it here
+    // is cheap. Scripts that build a UI and return (the documented
+    // "supported" .meow pattern) never ran long enough to hit this.
+    BaseType_t ok = xTaskCreateWithCaps(meow_task, app->name, 16384, ctx, 5, &ctx->task, MALLOC_CAP_SPIRAM);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreateWithCaps failed for '%s' — out of PSRAM too?", app->name);
         report_launch_oom(app);
         vSemaphoreDelete(ctx->done);
         ctx->done = NULL;
+        heap_caps_free(s_meow_pending_code);
+        s_meow_pending_code = NULL;
+        s_meow_pending_len  = 0;
         return -1;
     }
     app->state = APP_STATE_RUNNING;
@@ -448,7 +601,7 @@ int app_manager_launch_path(const char *path)
         if (strcmp(s_apps[i].path, path) == 0) {
             app_entry_t *app = &s_apps[i];
             if (app->state == APP_STATE_RUNNING) return 0;
-            if (app->tier == APP_TIER_MEOW) return launch_meow(app, i);
+            if (app->tier == APP_TIER_MEOW || app->tier == APP_TIER_HISS) return launch_meow(app, i);
             return launch_native(app, i);
         }
     }
@@ -497,6 +650,13 @@ void app_manager_stop(int idx)
 
 const char *app_manager_get_pending_meow_path(void) { return s_meow_pending_path; }
 
+const char *app_manager_get_pending_meow_code(size_t *out_len) {
+    if (out_len) *out_len = s_meow_pending_len;
+    return s_meow_pending_code;
+}
+
+bool app_manager_get_pending_meow_privileged(void) { return s_meow_pending_privileged; }
+
 int app_manager_count(void)             { return s_app_count; }
 const app_entry_t *app_manager_get(int idx)
 {
@@ -535,7 +695,7 @@ void app_manager_open_launcher(void)
     }
 
     if (s_app_count == 0) {
-        purr_win_label(win, "No apps installed.\nCopy .meow or .paws files to /sdcard/apps");
+        purr_win_label(win, "No apps installed.\nCopy .meow/.hiss/.paws files to /sdcard/apps");
     } else {
         for (int i = 0; i < s_app_count; i++) {
             purr_win_button(win, s_apps[i].name, launcher_btn_cb, (void *)(intptr_t)i);
@@ -607,7 +767,7 @@ PURR_MODULE_REGISTER(app_manager) = {
     .module_type       = PURR_MOD_SYSTEM,
     .name              = "app_manager",
     .version           = "0.1.0",
-    .kernel_min        = "0.9.0",
+    .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = 0,
     .required_catcalls = 0,   // display/touch used at runtime via catcall, not hard-required

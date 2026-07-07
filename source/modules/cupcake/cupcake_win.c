@@ -320,6 +320,12 @@ static purr_wid_t ck_ta_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
     lv_obj_t *ta = lv_textarea_create(parent);
     lv_obj_set_size(ta, LV_PCT(w_pct), LV_PCT(h_pct));
     lv_textarea_set_one_line(ta, false);
+    // Membership in the physical-keyboard group, not focus — every textarea
+    // joins so ck_ta_focus() below can pick the right one later. NULL group
+    // (no input catcall registered) just means this app is touch/on-screen-
+    // keyboard-only, same as before this bridge existed.
+    lv_group_t *g = cupcake_hal_keypad_group();
+    if (g) lv_group_add_obj(g, ta);
     return alloc_wid(ta);
 }
 
@@ -345,7 +351,13 @@ static const char *ck_ta_get(purr_wid_t wid) {
 
 static void ck_ta_focus(purr_wid_t wid) {
     lv_obj_t *o = get_wid(wid);
-    if (o) lv_obj_add_state(o, LV_STATE_FOCUSED);
+    if (!o) return;
+    lv_group_t *g = cupcake_hal_keypad_group();
+    // lv_group_focus_obj() applies LV_STATE_FOCUSED itself and, more
+    // importantly, retargets the keypad indev's group so BBQ20 keystrokes
+    // land on this textarea instead of whichever one last had focus.
+    if (g) lv_group_focus_obj(o);
+    else   lv_obj_add_state(o, LV_STATE_FOCUSED);
 }
 
 static void ck_ta_cb(purr_wid_t wid, purr_win_cb_t cb, void *user) {

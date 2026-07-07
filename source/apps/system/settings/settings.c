@@ -41,6 +41,9 @@ static char        s_theme[16]  = "wce";
 static purr_wid_t  s_kb_backlight_lbl = 0;
 static uint8_t     s_kb_backlight = 0;
 
+static purr_wid_t  s_dev_mode_lbl = 0;
+static uint8_t     s_dev_mode     = 0;   // 0/1 — see purr_kernel.h's doc comment
+
 static purr_wid_t  s_about_lbl = 0;
 
 #define MAX_WIFI_RESULTS 24
@@ -97,6 +100,7 @@ static void nvs_load(void) {
     nvs_get_str(h, "theme", s_theme, &len);
     nvs_get_u8(h, "brightness", &s_brightness);
     nvs_get_u8(h, "kb_backlight", &s_kb_backlight);
+    nvs_get_u8(h, "dev_mode", &s_dev_mode);
     nvs_close(h);
 }
 
@@ -264,8 +268,10 @@ static void on_wifi_select(purr_wid_t w, purr_event_t e, void *u) {
     purr_win_layout_end(row);
 
     purr_win_textarea_focus(s_wifi_dlg_input);
-    purr_win_keyboard_show(s_wifi_dlg_win, s_wifi_dlg_input);
+    // win_show() first — see terminal.c's terminal_init() for why (Cupcake's
+    // win_show() raises the window above whatever kb_show() just showed).
     purr_win_show(s_wifi_dlg_win);
+    purr_win_keyboard_show(s_wifi_dlg_win, s_wifi_dlg_input);
 }
 
 static void on_wifi_scan(purr_wid_t w, purr_event_t e, void *u) {
@@ -334,8 +340,18 @@ static void set_bt_status(const char *msg) {
 
 static void on_bt_toggle(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
-    bool on = !bt_mgr_is_enabled();
-    bt_mgr_set_enabled(on);
+    bool want_on = !bt_mgr_is_enabled();
+    bool on = bt_mgr_set_enabled(want_on);
+    // bt_mgr_set_enabled() now lazily brings the NimBLE controller/host up
+    // on its first enable — it can fail here (e.g. still no DMA-capable
+    // memory available for some other reason) where it never used to be
+    // able to at this point before (activation used to always happen at
+    // boot instead). Only follow through on the Meshtastic companion
+    // toggle if activation actually succeeded.
+    if (want_on && !on) {
+        set_bt_status("Bluetooth failed to start.");
+        return;
+    }
     mesh_ble_set_advertising(on);   // Meshtastic phone-app companion service follows the same toggle
     set_bt_status(on ? "Bluetooth enabled." : "Bluetooth disabled.");
 }
@@ -397,6 +413,23 @@ static void on_bt_settings_open(purr_wid_t w, purr_event_t e, void *u) {
 
     s_bt_status_lbl = purr_win_label(s_bt_win, bt_mgr_is_enabled() ? "Bluetooth enabled." : "Bluetooth disabled.");
     purr_win_show(s_bt_win);
+}
+
+// ── Developer Mode ────────────────────────────────────────────────────────────
+// Gates whether unsigned .hiss scripts are allowed to run — see
+// purr_kernel_set_dev_mode()'s doc comment in purr_kernel.h. Only "unsigned"
+// .hiss scripts are affected; a signed one always runs regardless of this.
+// Off by default — persisted so it survives a reboot, same as brightness/
+// kb_backlight above.
+
+static void on_dev_mode_toggle(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    s_dev_mode = s_dev_mode ? 0 : 1;
+    purr_kernel_set_dev_mode(s_dev_mode != 0);
+    nvs_save_u8("dev_mode", s_dev_mode);
+    purr_win_label_set(s_dev_mode_lbl, s_dev_mode ? "Developer Mode: ON" : "Developer Mode: OFF");
+    set_status(s_dev_mode ? "Developer Mode enabled — unsigned .hiss scripts allowed."
+                           : "Developer Mode disabled — unsigned .hiss scripts blocked.");
 }
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -465,6 +498,7 @@ static void build_about_text(char *buf, size_t sz) {
 
 static int settings_init(void) {
     nvs_load();
+    purr_kernel_set_dev_mode(s_dev_mode != 0);
 
     s_win = purr_win_create("Settings");
 
@@ -527,6 +561,15 @@ static int settings_init(void) {
     purr_win_button(s_win, "SD Status", on_sd_refresh, NULL);
     purr_win_layout_end(sr);
 
+    // ── Developer section ──────────────────────────────────────────────────
+    purr_win_label(s_win, "Developer");
+    char dev_str[32];
+    snprintf(dev_str, sizeof(dev_str), "Developer Mode: %s", s_dev_mode ? "ON" : "OFF");
+    s_dev_mode_lbl = purr_win_label(s_win, dev_str);
+    purr_wid_t devr = purr_win_row(s_win, 4);
+    purr_win_button(s_win, "Toggle", on_dev_mode_toggle, NULL);
+    purr_win_layout_end(devr);
+
     // ── System section ─────────────────────────────────────────────────────
     purr_win_label(s_win, "System");
     purr_wid_t sys = purr_win_row(s_win, 4);
@@ -563,7 +606,7 @@ PURR_MODULE_REGISTER(settings) = {
     .load_priority     = PURR_PRIORITY_OPTIONAL,
     .name              = "settings",
     .version           = "1.0.0",
-    .kernel_min        = "0.9.0",
+    .kernel_min        = "0.11.1",
     .provided_catcalls = 0,
     .required_catcalls = 0,
     .init              = settings_init,

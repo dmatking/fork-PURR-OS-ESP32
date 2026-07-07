@@ -23,6 +23,13 @@ int      cupcake_hal_init(void);
 uint16_t cupcake_hal_width(void);
 uint16_t cupcake_hal_height(void);
 
+// The lv_group_t physical-keyboard keypresses are dispatched through (see
+// cupcake_hal.c's keypad_read_cb) — NULL if no input catcall was registered
+// at HAL-init time. cupcake_win.c adds every textarea to this group and
+// focuses one on purr_win_textarea_focus() so BBQ20 keystrokes land on the
+// right widget.
+lv_group_t *cupcake_hal_keypad_group(void);
+
 // Builds the home screen, dock, and (hidden) app drawer. Safe to call once,
 // after the HAL and app_manager are both up.
 void cupcake_ui_init(void);

@@ -68,28 +68,74 @@ CONFIG_LV_CONF_SKIP=n
 # CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 # CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
-# Bluetooth — Bluedroid host stack, BLE only. ESP32-S3 has NO classic
+# Bluetooth — NimBLE host stack, BLE only. ESP32-S3 has NO classic
 # Bluetooth (BR/EDR) hardware at all — SOC_BT_CLASSIC_SUPPORTED isn't even
-# defined for this chip in ESP-IDF's soc_caps.h (only SOC_BLE_SUPPORTED is),
-# so CONFIG_BT_CLASSIC_ENABLED can't be turned on regardless of what's set
-# here. Bluedroid (vs. NimBLE) was still the right host-stack choice since
-# it's the more full-featured/dual-mode-capable stack in general, but on
-# this specific board it only ever runs in BLE mode.
+# defined for this chip in ESP-IDF's soc_caps.h (only SOC_BLE_SUPPORTED is).
+# Bluedroid was tried first (its dual-mode capability was the original
+# reasoning) but that's moot on hardware that can never use the Classic-BT
+# half of it anyway — and its real cost showed up on real hardware: its
+# startup couldn't allocate its internal work queue on this board's tight
+# internal DRAM budget ("BTU_StartUp Unable to allocate resources for
+# bt_workqueue" -> assert failed: list_begin, confirmed live, bt_mgr had
+# literally never run on real hardware before that). NimBLE is BLE-only by
+# design (a match, not a compromise, for this chip) and uses roughly half
+# Bluedroid's RAM. See bt_mgr.c/mesh_ble.c for the corresponding API port.
 CONFIG_BT_ENABLED=y
-CONFIG_BT_BLUEDROID_ENABLED=y
-CONFIG_BT_BLE_ENABLED=y
-CONFIG_BT_GATTS_ENABLE=y
-CONFIG_BT_GATTC_ENABLE=y
+CONFIG_BT_NIMBLE_ENABLED=y
 
-# BLE 4.2 legacy GAP API (esp_ble_gap_start_advertising/set_scan_params/
-# start_scanning — what bt_mgr.c/mesh_ble.c actually call) vs. BLE 5.0
-# extended-advertising API are mutually exclusive in this IDF version
-# (component's own Kconfig help: "BLE 4.2 and BLE 5.0 cannot be used
-# simultaneously") — this build defaulted to 5.0-only, which compiles the
-# legacy functions out entirely (link-time "undefined reference", not a
-# compile error, since only the .c bodies are excluded, not the header
-# prototypes). Simple accessory pairing + basic advertising doesn't need
-# 5.0's extended/coded-PHY features, so take 4.2 instead of rewriting to
-# the ext_adv/ext_scan API surface.
-CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
-CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+# NimBLE's BLE 5.0 feature menu (2M-PHY, coded-PHY, extended advertising)
+# defaults to on (CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT default y) and pulls
+# in its own controller-level memory pools for those features — confirmed
+# live as a second, distinct crash from the Bluedroid one above, at the
+# controller layer this time, still on this board's tight internal-DRAM
+# budget: "BLE_INIT: Malloc failed" / "BLE assert emi.c 164" while the
+# controller reported "BLE_50:1" enabled, escalating into an interrupt
+# watchdog panic on CPU0 (the malloc failure path doesn't return cleanly).
+# Scanning/connecting/basic GATT (everything bt_mgr.c/mesh_ble.c actually
+# do) doesn't need any BLE 5.0 feature — same reasoning that kept the old
+# Bluedroid config on 4.2-only.
+CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
+
+# Even with BLE 5.0 features off, esp_nimble_hci_init() still failed live
+# ("BLE_INIT: hci inits failed" -> "nimble host init failed" -> bt_mgr's own
+# nimble_port_init() returning ESP_FAIL, gracefully this time — no crash at
+# that point, see bt_mgr.c/mesh_ble.c for how the rest of boot now degrades
+# gracefully if this ever happens again). Root-caused by reading NimBLE's
+# actual allocation path: esp_nimble_hci_init() -> ble_buf_alloc() ->
+# nimble_platform_mem_calloc() for its msys/event/command/ACL host buffer
+# pools (roughly 15-20KB combined: MSYS_1 + MSYS_2 mbuf pools, HCI event
+# pools, the ACL buffer pool) — all NimBLE host allocations default to
+# CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL, i.e. forced into internal DRAM,
+# regardless of size. On this board internal DRAM is already down to a
+# ~1-2KB flatline by this point in boot (documented above), so an 8-20KB
+# internal-only allocation request can never succeed here no matter how far
+# other NimBLE feature knobs get trimmed. PSRAM sits at a constant ~8MB
+# free the entire time. Same fix shape as CONFIG_LV_MEM_CUSTOM /
+# CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY above: route this stack's own
+# allocations to PSRAM instead of fighting for scarce internal DRAM.
+# CONFIG_SPIRAM_USE_MALLOC=y (already on, see this file's LV_MEM_CUSTOM
+# comment) satisfies this option's own Kconfig dependency.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+
+# wifi_mgr/bt_mgr/lua_runtime were declared in device.pcat's [flash] section
+# (staging priority) but never in [modules] — purrstrap's _generate_glue()
+# only reads [drivers]/[modules]/[apps] for what to statically register, so
+# none of these three modules' purr_module_header_t was ever *referenced*
+# anywhere in the link graph. The linker's --gc-sections correctly garbage-
+# collected all three translation units whole, .bss included — meaning
+# their real static memory cost was silently absent from every DRAM budget
+# calculation in this file's own history above. Fixed by adding them to
+# device.pcat's [modules] section (where they belonged all along); the
+# moment they're actually linked in, DRAM overflows by 15072 bytes — this
+# is that memory becoming honest, not a new regression from this session.
+#
+# Distinct from the CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL/
+# CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP attempt (reverted above) — that
+# changed *runtime* malloc() placement preference and broke task creation.
+# This instead moves .bss (zero-initialized statics) into PSRAM at *link*
+# time, before anything runs — doesn't touch malloc() behavior, so it
+# shouldn't interact with whatever WIFI_LWIP early-boot issue broke that
+# attempt. Standard ESP-IDF answer to "DRAM segment ... will not fit" on a
+# PSRAM-equipped board.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+

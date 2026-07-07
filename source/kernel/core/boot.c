@@ -72,7 +72,7 @@ static void ensure_sd_dirs(void)
     if (!purr_kernel_sd_available()) return;
 
     const char *dirs[] = {
-        "/sdcard/apps",           // user apps (.meow, .paws, .claw)
+        "/sdcard/apps",           // user apps (.meow, .hiss, .paws, .claw)
         "/sdcard/modules",        // kernel module fallbacks (.purr)
         "/sdcard/drivers",        // driver fallbacks (.purr, flat or typed)
         "/sdcard/drivers/display",

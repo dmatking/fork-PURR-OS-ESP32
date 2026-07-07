@@ -6,6 +6,34 @@
 
 ---
 
+## v1.0.0-dp2 — 2026-07-07
+
+### Summary
+New `.hiss` app tier: a privileged Lua script, launched through the exact same VM/task path as `.meow` (`lua_runtime` + `app_manager.c`'s `launch_meow()`), with three extra Lua namespaces — `kitt.*`, `radio.*`, `gps.*` — registered only for that tier. Trust is extension-only, same as every other tier. An `unsigned` `.hiss` script (no `-- purr-sig:` tag, or an explicitly `unsigned` one) is refused at launch unless Developer Mode is enabled in Settings — a new off-by-default, NVS-persisted toggle; signed scripts always run regardless. Also fixes a three-way documented inconsistency (`README.md`, `app_manager.h`'s tier comment, `catstrap.py`'s `SDK_API`) that incorrectly claimed `.meow` itself had `kitt.*` access — it never did (confirmed by `docs/06_Apps.md` and the real `lua_runtime.c`); `.hiss` is where that access actually lives now. Alongside the new tier: two crash fixes (Terminal/MeshChat/Settings/Fileman not accepting keypresses, `.meow` apps crashing on launch) that were root-caused earlier this session but hadn't been changelogged yet.
+
+### Added
+- **`.hiss` app tier** — `APP_TIER_HISS` in `app_manager.h`/`app_manager.c`, dispatched through the same `launch_meow()` path as `.meow`.
+- **`radio.*` Lua API** (`.hiss` only) — `send`/`receive`/`available`/`rssi`/`snr`, thin wrappers over `catcall_radio_t`.
+- **`gps.*` Lua API** (`.hiss` only) — `fix()`, wraps `catcall_gps_t::get_fix()`.
+- **`kitt.*` Lua API** (`.hiss` only) — `modules()`, lists loaded kernel modules (same data `terminal.c`'s `modules` command surfaces).
+- **`-- purr-sig:` signature tag** (`.hiss` only) — self-declared, honor-system provenance marker (`unsigned`/`dev-signed`/`trusted-signed`/`dev-approved`). `catstrap validate`/`build` read and print it (build-time, informational). `catstrap/catstrap.py`.
+- **Developer Mode toggle** (`settings.c`, new "Developer" section) — off by default, persisted to NVS under `purr_settings`/`dev_mode`, synced to a new kernel-level flag (`purr_kernel_dev_mode_enabled()`/`purr_kernel_set_dev_mode()` in `purr_kernel.h`/`.c`, same getter/setter shape as `sd_available`/`lora_available`). `app_manager.c`'s `launch_meow()` now scans a `.hiss` script's own source for the `purr-sig` tag at launch time (`scan_purr_sig()`) and rejects it (`APP_STATE_ERROR`) when `unsigned` and Developer Mode is off — the only place this tag actually gates anything; `kitt.*`/`radio.*`/`gps.*` registration still depends solely on the `.hiss` extension, unchanged.
+- **`sdcard_apps/hisstest.hiss`** — demo script exercising `kitt.modules()`, `radio.*`, `gps.*`.
+- Full toolchain support for the new tier: `catstrap.py` (discovery, build, clean, validate, SDK API surface), `catstrap_ui.py` (interactive menu), `purrstrap.py` (SPIFFS staging via `_find_purr_blob()`, and the `pkg app install/remove/upgrade` hot-load subsystem, generalized from `.meow`-only to `.meow`/`.hiss`).
+
+### Fixed
+- **Physical keyboard input on Cupcake** — `cupcake_hal.c` never registered an `LV_INDEV_TYPE_KEYPAD` LVGL input device, so BBQ20 keystrokes never reached any widget under the Cupcake UI backend at all. Added a keypad indev + `lv_group_t` bridge (`cupcake_hal.c`/`cupcake_win.c`) polling every registered `catcall_input_t` for `KEY_DOWN` events.
+- **On-screen keyboard hidden behind its own window** — `purr_win_keyboard_show()` was called before `purr_win_show()` in `terminal.c`, `settings.c`, `fileman.c`, and `meshchat.c` (×2); `win_show()` raises the window to the foreground, so it painted over the keyboard it had just shown. Reordered at all five call sites.
+- **`.meow` apps crash on launch** — `app_manager.c`'s `launch_meow()` ran the script's task on a PSRAM-backed stack, but loading the script (`fopen`/`fread`) briefly disables the flash cache — the same crash class (`esp_task_stack_is_sane_cache_disabled()`) already documented and fixed for `settings`/`fileman`. Fixed by having `launch_meow()` preload the script into a PSRAM *buffer* (not stack) on its own caller's already-safe stack, before `meow_task` exists; `meow_task` itself never touches flash now and runs on an ordinary PSRAM stack.
+
+### Verified this session
+- `catstrap list` / `sdk info` / `validate sdcard_apps/hisstest.hiss` (correctly prints `signature: dev-approved`) / a direct `build_app()` exercise of the `.hiss` packaging branch — all correct, no regressions against existing `.meow` apps.
+- `purrstrap build tdeck_plus` — full clean firmware build (fresh `CoreOS/build_tdeck_plus/`, ~2679 objects) via a locally-installed ESP-IDF v5.3.5, ending in a merged flashable `cattobaked/tdeck_plus/PURR_OS_tdeck_plus.bin`. Zero compile errors; `app_manager.c`, `lua_runtime.c` (incl. the new `radio.*`/`gps.*`/`kitt.*` bindings), `cupcake_hal.c`, and `cupcake_win.c` all compiled and linked cleanly. One pre-existing, unrelated `CoreOS/build_tdeck_plus/` cache from a prior cross-machine (Linux) session had to be deleted first — not a regression from this change.
+- A second incremental `purrstrap build tdeck_plus` after adding the Developer Mode toggle/gate (`purr_kernel.c`/`.h`, `settings.c`, `app_manager.c`'s `scan_purr_sig()`) — 77-step incremental build, zero errors, `purr_os.elf` relinked and remerged cleanly.
+- Not verified: on-device flash/run of a `.hiss` script (signed or unsigned, with Developer Mode on/off), or the keypad/meow-crash/MeshChat fixes against real hardware — a clean build proves the code is correct, not that it behaves correctly at runtime on a physical T-Deck Plus.
+
+---
+
 ## v1.0.0-dp — 2026-07-03
 
 ### Summary

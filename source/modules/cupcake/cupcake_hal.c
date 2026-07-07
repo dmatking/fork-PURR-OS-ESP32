@@ -27,6 +27,8 @@ static lv_color_t s_buf2[CUPCAKE_BUF_WIDTH * CUPCAKE_BUF_LINES];
 static lv_disp_draw_buf_t s_draw_buf;
 static lv_disp_drv_t      s_disp_drv;
 static lv_indev_drv_t     s_touch_drv;
+static lv_indev_drv_t     s_keypad_drv;
+static lv_group_t        *s_kb_group = NULL;
 
 static uint16_t s_disp_w = 320;
 static uint16_t s_disp_h = 240;
@@ -56,13 +58,58 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
     }
 }
 
-static void lv_tick_task(void *arg)
+// Physical keyboard bridge — no LV_INDEV_TYPE_KEYPAD was ever registered
+// here before, so BBQ20 keystrokes never reached LVGL at all under Cupcake
+// (only the touch pointer indev existed); the on-screen keyboard was the
+// only way to type, and even that was separately broken (see
+// cupcake_win.c's ck_win_show()/ck_kb_show() ordering note). purr_kernel_
+// input() can't be used directly — it returns "first registered (legacy)",
+// which on tdeck_plus is the trackball (registered before bbq20 in
+// kernel_tdp_boot.c), not the keyboard — so this scans every registered
+// input catcall and reacts only to KEY_DOWN events, ignoring POINTER
+// (trackball) ones.
+//
+// bbq20.c only ever emits KEY_DOWN (the RP2040 bridge chip has no key-up
+// event), so a single press is reported as one PR cycle followed by one REL
+// cycle on the next read — LVGL's keypad indev fires the object's
+// LV_EVENT_KEY on the PR edge, so this one-shot pattern is sufficient; it
+// doesn't need a real "held" state to drive lv_textarea's normal
+// backspace/char-insert handling.
+static void keypad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 {
-    (void)arg;
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5));
-        lv_tick_inc(5);
+    (void)drv;
+    static bool     s_pending_release = false;
+    static uint32_t s_pending_key     = 0;
+
+    if (s_pending_release) {
+        data->key   = s_pending_key;
+        data->state = LV_INDEV_STATE_REL;
+        s_pending_release = false;
+        return;
     }
+
+    int n = purr_kernel_input_count();
+    for (int i = 0; i < n; i++) {
+        const catcall_input_t *in = purr_kernel_input_at(i);
+        if (!in || !in->poll_event) continue;
+        input_event_t ev;
+        while (in->poll_event(&ev)) {
+            if (ev.type != INPUT_EVENT_KEY_DOWN) continue;
+            uint32_t key;
+            switch (ev.keycode) {
+                case 0x08: case 0x7F: key = LV_KEY_BACKSPACE; break;
+                case 0x0D: case 0x0A: key = LV_KEY_ENTER;     break;
+                case 0x1B:            key = LV_KEY_ESC;       break;
+                default:              key = ev.keycode;       break;
+            }
+            s_pending_key     = key;
+            s_pending_release = true;
+            data->key   = key;
+            data->state = LV_INDEV_STATE_PR;
+            return;
+        }
+    }
+    data->state = LV_INDEV_STATE_REL;
 }
 
 int cupcake_hal_init(void)
@@ -104,19 +151,36 @@ int cupcake_hal_init(void)
         ESP_LOGW(TAG, "no touch catcall — cupcake will run touchless");
     }
 
-    // No storage access anywhere in this task (just lv_tick_inc + sleep) —
-    // safe on a PSRAM-backed stack, unlike cupcake_task itself (see
-    // cupcake_module.c's comment on why that one stays internal).
-    static TaskHandle_t s_tick_task = NULL;
-    BaseType_t tr = xTaskCreateWithCaps(lv_tick_task, "cupcake_tick", 4096, NULL, 1, &s_tick_task, MALLOC_CAP_SPIRAM);
-    if (tr != pdPASS) {
-        ESP_LOGE(TAG, "failed to create tick task");
-        return -1;
+    if (purr_kernel_input_count() > 0) {
+        s_kb_group = lv_group_create();
+        lv_indev_drv_init(&s_keypad_drv);
+        s_keypad_drv.type    = LV_INDEV_TYPE_KEYPAD;
+        s_keypad_drv.read_cb = keypad_read_cb;
+        lv_indev_t *kp_indev = lv_indev_drv_register(&s_keypad_drv);
+        lv_indev_set_group(kp_indev, s_kb_group);
+        ESP_LOGI(TAG, "keypad input registered (%d input driver(s))", purr_kernel_input_count());
+    } else {
+        ESP_LOGW(TAG, "no input catcall — physical keyboard unavailable");
     }
 
+    // lv_tick_inc(5) is driven entirely by cupcake_task's own render loop
+    // (cupcake_module.c) now, under purr_kernel_ui_lock() — this HAL used
+    // to spawn a second, separate task ("cupcake_tick") calling
+    // lv_tick_inc(5) on the same 5ms cadence with no lock at all, which
+    // both double-counted LVGL's tick rate (running its animation/timer
+    // clock at ~2x the intended speed the entire time) and raced
+    // cupcake_task's own lv_tick_inc()/lv_timer_handler() calls — a real,
+    // unsynchronized concurrent access to shared LVGL state, confirmed via
+    // investigation into a live LoadProhibited crash (a looping .meow
+    // script's Lua VM state got corrupted, most likely as a downstream
+    // effect of this race). Removed rather than locked — cupcake_task
+    // already does this correctly, so there is nothing left for a second
+    // task to contribute.
     ESP_LOGI(TAG, "HAL init complete");
     return 0;
 }
 
 uint16_t cupcake_hal_width(void)  { return s_disp_w; }
 uint16_t cupcake_hal_height(void) { return s_disp_h; }
+
+lv_group_t *cupcake_hal_keypad_group(void) { return s_kb_group; }

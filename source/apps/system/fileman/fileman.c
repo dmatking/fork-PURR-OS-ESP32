@@ -295,8 +295,10 @@ static void open_text_dialog(dlg_mode_t mode, const char *title) {
     purr_win_layout_end(row);
 
     purr_win_textarea_focus(s_dlg_input);
-    purr_win_keyboard_show(s_dlg_win, s_dlg_input);
+    // win_show() first — see terminal.c's terminal_init() for why (Cupcake's
+    // win_show() raises the window above whatever kb_show() just showed).
     purr_win_show(s_dlg_win);
+    purr_win_keyboard_show(s_dlg_win, s_dlg_input);
 }
 
 static void on_new_folder(purr_wid_t w, purr_event_t e, void *u) {
@@ -382,7 +384,7 @@ PURR_MODULE_REGISTER(fileman) = {
     .load_priority     = PURR_PRIORITY_OPTIONAL,
     .name              = "fileman",
     .version           = "1.0.0",
-    .kernel_min        = "0.9.0",
+    .kernel_min        = "0.11.1",
     .provided_catcalls = 0,
     .required_catcalls = 0,
     .init              = fileman_init,

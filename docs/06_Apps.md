@@ -2,15 +2,16 @@
 
 ## App Tiers
 
-PURR OS has three app tiers, each with a distinct file extension and capability level.
+PURR OS has four app tiers, each with a distinct file extension and capability level.
 
 | Extension | Name | API access | Typical use |
 |-----------|------|-----------|-------------|
-| `.meow` | Lua script | `win.*`, `sd.*`, `system.*` | Scripted tools, dashboards, simple games |
+| `.meow` | Lua script, sandboxed | `win.*`, `sd.*`, `system.*` | Scripted tools, dashboards, simple games |
+| `.hiss` | Lua script, privileged | `win.*`, `sd.*`, `system.*`, `kitt.*`, `radio.*`, `gps.*` | Scripted hardware tools (LoRa, GPS) without a full compile |
 | `.paws` | Compiled userland | `win.*`, `sd.*` | Native apps with no direct kernel calls |
 | `.claw` | Compiled kernel-access | Full `purr_kernel_*` + `win.*` + `sd.*` | System tools, emulators, advanced shells |
 
-All three tiers access UI through the same `purr_win.h` dispatch layer (or `win.*` Lua bindings) — apps are not tied to a specific UI framework.
+All four tiers access UI through the same `purr_win.h` dispatch layer (or `win.*` Lua bindings) — apps are not tied to a specific UI framework.
 
 `.meow` scripts are executed by the `lua_runtime` module (`source/modules/lua_runtime/`), which vendors a real Lua 5.4 VM (`source/lib/lib_lua/`) — previously dead code (`app_manager.c` looked up a `"lua_runtime"` module that never existed), now a working system module.
 
@@ -118,7 +119,7 @@ On KittenUI: shows LVGL's built-in keyboard. On MiniWin: no-op — physical keyb
 
 `.meow` files are Lua 5.4 scripts run by `lua_runtime` (`source/modules/lua_runtime/`), a `PURR_MOD_SYSTEM` module that vendors the real Lua 5.4 VM (`source/lib/lib_lua/`, ported from the PURR-OS-0.11 archive) and binds it to the current codebase's plain-C `purr_win.h`/SD APIs — not KITT's old C++ singleton. One global Lua state runs at a time, matching the single-.meow-VM assumption `app_manager.c` already makes elsewhere.
 
-The VM exposes three namespaces: `system.*`, `sd.*`, `win.*` — no `kitt.*` (that was the 0.11-era C++ API this doesn't use).
+The VM exposes three namespaces: `system.*`, `sd.*`, `win.*` — no `kitt.*` (that was the 0.11-era C++ API this doesn't use). A `.hiss` script (see below) runs through this exact same VM and launch path, with three additional namespaces registered — `kitt.*`, `radio.*`, `gps.*` — for scripted access to hardware. Trust is extension-only: a `.hiss` file gets those extra namespaces whether it's on flash or SD, same as every other tier here.
 
 ### `win.*` — Window API
 
@@ -187,6 +188,79 @@ win.button(win_h, "Tap me!", function()
 end)
 
 win.show(win_h)
+```
+
+---
+
+## .hiss — Privileged Lua Scripts
+
+`.hiss` files run through the exact same Lua VM and launch path as `.meow` (same `lua_runtime` module, same `app_manager.c` `launch_meow()`) — it is not a separate interpreter or a separate launch mechanism. The only difference: three extra namespaces are registered into the script's Lua state before it runs.
+
+Trust is **extension-only** — a `.hiss` script gets `kitt.*`/`radio.*`/`gps.*` whether it's baked into `/flash/apps` or dropped on `/sdcard/apps`, same as `.meow`/`.paws`/`.claw` are all trusted by extension alone today. This is a deliberate simplicity choice, not an oversight — see the signature tag below for the lightweight, non-gating provenance marker that exists alongside it.
+
+### `radio.*` — LoRa Radio API
+
+Thin wrappers over `catcall_radio_t` (`source/kernel/catcalls/catcall_radio.h`):
+
+```lua
+if radio.available() then
+    local data = radio.receive(256)
+    if data then
+        system.print("got " .. #data .. " bytes, rssi=" .. radio.rssi())
+    end
+end
+
+local ok = radio.send("hello mesh")
+```
+
+- `radio.send(data) -> ok` — `data` is a Lua string, sent byte-for-byte (binary-safe).
+- `radio.receive(max_len) -> data_or_nil` — `max_len` defaults to 256, capped at 1024.
+- `radio.available() -> bool`
+- `radio.rssi() -> int`, `radio.snr() -> number`
+
+All five degrade gracefully (return `false`/`nil`/`0`, never error or crash) when no radio catcall is registered on the current device.
+
+### `gps.*` — GPS API
+
+```lua
+local fix = gps.fix()
+if fix and fix.valid then
+    system.print(string.format("%.5f, %.5f (%d sats)", fix.latitude, fix.longitude, fix.satellites))
+end
+```
+
+`gps.fix() -> table_or_nil` wraps `catcall_gps_t::get_fix()` — returns `nil` if no GPS catcall is registered, otherwise a table with `latitude`, `longitude`, `altitude_m`, `speed_mps`, `hdop`, `satellites`, `valid`.
+
+### `kitt.*` — Kernel Introspection
+
+```lua
+for _, m in ipairs(kitt.modules()) do
+    system.print(m.name .. " [" .. m.type .. "] v" .. m.version)
+end
+```
+
+`kitt.modules() -> array of {name, type, version}` — the same loaded-module registry `terminal.c`'s `modules` command surfaces, via `purr_kernel_module_count()`/`purr_kernel_module_at()`.
+
+### Signature tag + Developer Mode
+
+A `.hiss` file may carry a one-line comment near the top marking its provenance:
+
+```lua
+-- purr-sig: dev-signed
+```
+
+One of `unsigned` (the default — no tag present reads as this), `dev-signed`, `trusted-signed`, `dev-approved`. This is a **self-declared, honor-system tag, not a cryptographic signature** — anyone editing the file can change it, the same trust level as the extension-only decision above. `kitt.*`/`radio.*`/`gps.*` availability is still decided by the `.hiss` extension alone, not this tag — that split hasn't changed.
+
+What the tag *does* gate is whether the script is allowed to run at all when it's `unsigned`: Settings has a **Developer Mode** toggle (off by default, persisted to NVS), and `app_manager.c`'s `launch_meow()` rejects launching an `unsigned` `.hiss` script — `APP_STATE_ERROR`, "unsigned .hiss — enable Developer Mode in Settings" — unless Developer Mode is on. A `dev-signed`/`trusted-signed`/`dev-approved` script always launches regardless of the toggle; only the `unsigned` (or no-tag) case is affected. This check happens on-device, at launch time, against the script's own source — it's independent of `catstrap validate`/`build`'s build-time print of the same tag (still informational, still dev-machine-side).
+
+### Building
+
+Same as `.meow` — no compilation, just packaged and copied:
+
+```bash
+catstrap build my_tool
+catstrap validate my_tool.hiss
+# Output: cattobaked/apps/my_tool.hiss
 ```
 
 ---

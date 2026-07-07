@@ -5,7 +5,8 @@ catstrap — PURR OS user app builder + SDK
 Compiles and packages user apps for PURR OS:
   .paws  — compiled userland apps (win.*, sd.* API only)
   .claw  — compiled kernel-access apps (full kernel API: MagicMac, MagiDOS)
-  .meow  — Lua scripts (validate + package, no compilation)
+  .meow  — Lua scripts, sandboxed (validate + package, no compilation)
+  .hiss  — Lua scripts, privileged (same as .meow + kitt./radio./gps.)
 
 Also manages the catstrap SDK — the headers and stubs that app developers
 build against. Apps never link against the kernel directly; they link against
@@ -17,7 +18,7 @@ Usage:
   catstrap build magicmac           build MagicMac (.claw) from magicmac/
   catstrap build magidos             build MagiDOS (.claw) from magidos/
   catstrap package <app_dir>        package a built app for distribution
-  catstrap validate <file.meow>     syntax-check a Lua script
+  catstrap validate <file.meow|.hiss>  syntax-check a Lua script
   catstrap sdk install              install SDK headers to catstrap/sdk/include/
   catstrap sdk info                 show SDK version and API surface
   catstrap list                     list all buildable apps
@@ -64,6 +65,7 @@ MAGIDOS_DIR  = os.path.join(SOURCE_DIR, "apps", "exclusive", "magidos")
 
 TIER_COLORS = {
     "meow": C_GRN,
+    "hiss": C_RED,
     "paws": C_CYN,
     "claw": C_MGN,
 }
@@ -71,8 +73,13 @@ TIER_COLORS = {
 SDK_VERSION = "0.1.0"
 
 # Catstrap SDK API surface — what each tier gets
+# .meow never had kitt.* — that was a long-standing doc bug (three separate
+# places claimed it: this dict, README.md, and app_manager.h's tier comment)
+# contradicted by docs/06_Apps.md and the real lua_runtime.c. .hiss is the
+# tier that actually adds kitt./radio./gps. on top of the same win./sd. VM.
 SDK_API = {
-    "meow": ["win.*", "sd.*", "kitt.*", "purr.info()"],
+    "meow": ["win.*", "sd.*", "purr.info()"],
+    "hiss": ["win.*", "sd.*", "kitt.*", "radio.*", "gps.*", "purr.info()"],
     "paws": ["win.*", "sd.*"],
     "claw": ["win.*", "sd.*", "kitt.*", "purr.*", "purr_kernel_*"],
 }
@@ -116,10 +123,12 @@ def find_apps():
                 cfg  = parse_pcat(pcat)
                 tier = cfg.get("tier", "paws")
                 apps.append((name, app_dir, pcat, tier))
-            # Also pick up bare .meow scripts
+            # Also pick up bare .meow / .hiss scripts
             for f in os.listdir(app_dir):
                 if f.endswith(".meow"):
                     apps.append((f[:-5], app_dir, os.path.join(app_dir, f), "meow"))
+                elif f.endswith(".hiss"):
+                    apps.append((f[:-5], app_dir, os.path.join(app_dir, f), "hiss"))
     return apps
 
 def cmd_list(args):
@@ -258,33 +267,65 @@ def _sdk_install():
     info(f"  + catcall headers + purr_module.h + purr_kernel.h")
     info(f"SDK version: {SDK_VERSION}")
 
-# ── Validate .meow ────────────────────────────────────────────────────────────
+# ── Validate .meow / .hiss ───────────────────────────────────────────────────
+
+# Self-declared "purr-sig" tag — .hiss only. Honor-system, not cryptographic:
+# anyone editing the file can change it, same trust level as the
+# extension-only decision for .hiss itself. Purely informational — never
+# gates kitt./radio./gps. availability, which is decided by the extension
+# alone. See docs/06_Apps.md's .hiss section.
+PURR_SIG_VALUES = ("unsigned", "dev-signed", "trusted-signed", "dev-approved")
+
+def _read_purr_sig(path):
+    """Scan a .hiss file for a '-- purr-sig: <value>' comment line. Returns
+    the tagged value, or "unsigned" if no tag (or an unrecognized value) is found."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("--") and "purr-sig:" in line:
+                    value = line.split("purr-sig:", 1)[1].strip()
+                    if value in PURR_SIG_VALUES:
+                        return value
+                    warn(f"    unrecognized purr-sig value '{value}' — treated as unsigned")
+                    return "unsigned"
+    except OSError:
+        pass
+    return "unsigned"
 
 def cmd_validate(args):
     path = args.file
     if not os.path.isfile(path):
         die(f"file not found: {path}")
-    if not path.endswith(".meow"):
-        warn(f"expected a .meow file, got: {path}")
+    is_hiss = path.endswith(".hiss")
+    if not (path.endswith(".meow") or is_hiss):
+        warn(f"expected a .meow or .hiss file, got: {path}")
 
     lua = shutil.which("lua") or shutil.which("lua5.4") or shutil.which("lua5.3")
     if not lua:
         warn("lua interpreter not found — skipping syntax check")
-        return
-
-    result = subprocess.run([lua, "-", path], input=f'loadfile("{path}")()',
-                            capture_output=True, text=True)
-    if result.returncode == 0:
-        info(f"{C_GRN}[OK]{C_RST}  {path}")
     else:
-        print(f"{C_RED}[FAIL]{C_RST} {path}")
-        print(result.stderr)
-        sys.exit(1)
+        result = subprocess.run([lua, "-", path], input=f'loadfile("{path}")()',
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            info(f"{C_GRN}[OK]{C_RST}  {path}")
+        else:
+            print(f"{C_RED}[FAIL]{C_RST} {path}")
+            print(result.stderr)
+            sys.exit(1)
+
+    if is_hiss:
+        sig = _read_purr_sig(path)
+        if sig == "unsigned":
+            warn(f"    no purr-sig tag found — treated as unsigned")
+        else:
+            info(f"    signature: {sig}")
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 def build_app(name, app_dir, pcat_path, tier):
-    cfg = parse_pcat(pcat_path) if not pcat_path.endswith(".meow") else {}
+    is_script = pcat_path.endswith(".meow") or pcat_path.endswith(".hiss")
+    cfg = parse_pcat(pcat_path) if not is_script else {}
     version = cfg.get("version", "0.1.0")
     color   = TIER_COLORS.get(tier, C_WHT)
 
@@ -294,14 +335,18 @@ def build_app(name, app_dir, pcat_path, tier):
 
     info(f"  {color}{name}{C_RST}  [{tier}]  v{version}  →  {os.path.relpath(out_path, REPO_DIR)}")
 
-    if tier == "meow":
+    if tier in ("meow", "hiss"):
         # Package the Lua script directly — no compilation
-        src = pcat_path if pcat_path.endswith(".meow") else os.path.join(app_dir, f"{name}.meow")
+        src = pcat_path if is_script else os.path.join(app_dir, f"{name}.{tier}")
         if os.path.isfile(src):
             shutil.copy2(src, out_path)
             info(f"    packaged Lua script → {out_name}")
+            if tier == "hiss":
+                sig = _read_purr_sig(src)
+                info(f"    signature: {sig}" if sig != "unsigned"
+                     else "    no purr-sig tag found — treated as unsigned")
         else:
-            warn(f"    no .meow script found at {src}")
+            warn(f"    no .{tier} script found at {src}")
         return True
 
     # .paws / .claw — compiled apps are IDF components, same as modules.
@@ -413,7 +458,7 @@ def cmd_clean(args):
             info(f"removed {OUT_APPS}")
     else:
         # Remove specific app output
-        for ext in ["meow", "paws", "claw"]:
+        for ext in ["meow", "hiss", "paws", "claw"]:
             p = os.path.join(OUT_APPS, f"{target}.{ext}")
             if os.path.isfile(p):
                 os.remove(p)
@@ -434,7 +479,7 @@ def main():
     p_pkg = sub.add_parser("package", help="Package a built app for distribution")
     p_pkg.add_argument("app_dir")
 
-    p_val = sub.add_parser("validate", help="Syntax-check a .meow Lua script")
+    p_val = sub.add_parser("validate", help="Syntax-check a .meow/.hiss Lua script")
     p_val.add_argument("file")
 
     p_sdk = sub.add_parser("sdk", help="SDK management")

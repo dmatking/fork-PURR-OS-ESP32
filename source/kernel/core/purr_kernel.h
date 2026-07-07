@@ -18,7 +18,7 @@ extern "C" {
 // ── Version ───────────────────────────────────────────────────────────────────
 
 #define PURR_KERNEL_VERSION  "1.0.0-dp2"
-#define KITT_VERSION         "0.11.0"
+#define KITT_VERSION         "0.11.1"
 
 // ── Module loader ─────────────────────────────────────────────────────────────
 
@@ -107,6 +107,15 @@ void     purr_kernel_set_sd_available(bool v);
 void     purr_kernel_set_wifi_connected(bool v);
 void     purr_kernel_set_battery_percent(int v);
 void     purr_kernel_set_lora_available(bool v);
+
+// Developer Mode — off by default, toggled from Settings (persisted under
+// the "purr_settings" NVS namespace, synced here on settings' own init()).
+// app_manager.c's launch_meow() checks this before running an unsigned
+// .hiss script (a "-- purr-sig: unsigned" tag, or no tag at all) — signed
+// .hiss scripts (dev-signed/trusted-signed/dev-approved) always run
+// regardless of this flag; only "unsigned" is gated by it.
+bool     purr_kernel_dev_mode_enabled(void);
+void     purr_kernel_set_dev_mode(bool v);
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 // In-memory ring buffer, open to any module/driver/app. Not persisted across

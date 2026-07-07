@@ -313,13 +313,13 @@ def _find_purr_blob(slug):
       "miniwin"         → cattobaked/modules/miniwin.purr
       "app_manager"     → cattobaked/modules/app_manager.purr
       "display/st7789"  → cattobaked/drivers/display/st7789.purr
-      "apps/terminal"   → cattobaked/apps/terminal.claw (or .paws or .meow)
+      "apps/terminal"   → cattobaked/apps/terminal.claw (or .paws, .meow, .hiss)
     """
     parts = slug.split("/")
     if len(parts) == 2 and parts[0] == "apps":
         name = parts[1]
         app_dir = os.path.join(OUTPUT_DIR, "apps")
-        for ext in ("claw", "paws", "meow"):
+        for ext in ("claw", "paws", "meow", "hiss"):
             p = os.path.join(app_dir, f"{name}.{ext}")
             if os.path.isfile(p):
                 return p
@@ -353,7 +353,7 @@ def build_flash_image(device, pcat_cfg, out_dir, spiffs_size_kb=512):
     SPIFFS. Only entries under apps/* in [flash] are staged here.
 
     Steps:
-      1. Run catstrap to build any .meow / .paws / .claw app files.
+      1. Run catstrap to build any .meow / .hiss / .paws / .claw app files.
       2. Stage apps/* entries from [flash] into spiffs_staging/apps/.
       3. Run spiffsgen.py to produce flash.bin.
 
@@ -1176,11 +1176,12 @@ def cmd_bake(args):
 #   editing device.pcat and rebuilding. `purrstrap pkg <list|add|remove|
 #   upgrade|verify>` operates on this model.
 #
-#   "app" packages — only `.meow` Lua scripts today — are real files that
-#   app_manager's boot-time scan picks up from /flash/apps or /sdcard/apps
-#   without any firmware rebuild. `.claw`/`.paws` apps are NOT real files;
-#   like drivers/modules they are statically linked, so `purrstrap pkg app`
-#   refuses to "install" one and points at the static path instead.
+#   "app" packages — `.meow` and `.hiss` Lua scripts today — are real files
+#   that app_manager's boot-time scan picks up from /flash/apps or
+#   /sdcard/apps without any firmware rebuild. `.claw`/`.paws` apps are NOT
+#   real files; like drivers/modules they are statically linked, so
+#   `purrstrap pkg app` refuses to "install" one and points at the static
+#   path instead.
 #   `purrstrap pkg app <list|install|remove|upgrade>` operates on this model.
 
 APPS_BASES = ("system", "exclusive", "user")
@@ -1551,21 +1552,24 @@ def cmd_pkg_verify(args):
     else:
         warn(f"{device}: {problems} issue(s) found")
 
-# ── pkg app: runtime file hot-load (.meow only — see module docstring) ──────
+# ── pkg app: runtime file hot-load (.meow/.hiss — see module docstring) ─────
 
-def _find_meow(device, name):
-    """Look for a .meow script the user already has staged for this device's
-    SPIFFS image, or under any apps/ source dir, by bare name."""
-    candidates = [
-        os.path.join(OUTPUT_DIR, device, "spiffs_staging", "apps", f"{name}.meow"),
-    ]
-    for base in APPS_BASES:
-        candidates.append(os.path.join(SOURCE_DIR, "apps", base, name, f"{name}.meow"))
-        candidates.append(os.path.join(SOURCE_DIR, "apps", base, f"{name}.meow"))
-    for c in candidates:
-        if os.path.isfile(c):
-            return c
-    return None
+def _find_meow_or_hiss(device, name):
+    """Look for a .meow or .hiss script the user already has staged for this
+    device's SPIFFS image, or under any apps/ source dir, by bare name.
+    Returns (path, tier) — tier is "meow" or "hiss" matching whichever
+    extension was actually found — or (None, None)."""
+    for ext in ("meow", "hiss"):
+        candidates = [
+            os.path.join(OUTPUT_DIR, device, "spiffs_staging", "apps", f"{name}.{ext}"),
+        ]
+        for base in APPS_BASES:
+            candidates.append(os.path.join(SOURCE_DIR, "apps", base, name, f"{name}.{ext}"))
+            candidates.append(os.path.join(SOURCE_DIR, "apps", base, f"{name}.{ext}"))
+        for c in candidates:
+            if os.path.isfile(c):
+                return c, ext
+    return None, None
 
 def _app_target_dir(device, to):
     if to == "sd":
@@ -1589,31 +1593,31 @@ def cmd_pkg_app_install(args):
         die(f"'{name}' is a .{pkg_cfg.get('tier')} app — those are statically compiled into "
             f"firmware, not installable as a file. Use 'purrstrap pkg add {device} {name}' instead.")
 
-    src = _find_meow(device, name)
+    src, tier = _find_meow_or_hiss(device, name)
     if not src:
-        die(f"no .meow script found for '{name}' — only .meow (Lua) apps are real, "
-            f"installable files today; place one at source/apps/user/{name}/{name}.meow "
+        die(f"no .meow or .hiss script found for '{name}' — only Lua (.meow/.hiss) apps "
+            f"are real, installable files today; place one at "
+            f"source/apps/user/{name}/{name}.meow (or .hiss) "
             f"or build it onto {device}'s staging area first")
 
     dst_dir = _app_target_dir(device, args.to)
     os.makedirs(dst_dir, exist_ok=True)
-    dst = os.path.join(dst_dir, f"{name}.meow")
+    dst = os.path.join(dst_dir, f"{name}.{tier}")
     if os.path.exists(dst) and os.path.samefile(src, dst):
-        info(f"{name}.meow is already at {os.path.relpath(dst, REPO_DIR)} — registering as-is")
+        info(f"{name}.{tier} is already at {os.path.relpath(dst, REPO_DIR)} — registering as-is")
     else:
         shutil.copy2(src, dst)
-        info(f"installed {name}.meow → {os.path.relpath(dst, REPO_DIR)}")
+        info(f"installed {name}.{tier} → {os.path.relpath(dst, REPO_DIR)}")
 
     installed = _load_installed(device)
     installed["apps"] = [e for e in installed.get("apps", []) if e["name"] != name]
     installed["apps"].append({
-        "name": name, "tier": "meow", "version": _pkg_version(pkg_cfg) if pkg_cfg else "0.0.0",
+        "name": name, "tier": tier, "version": _pkg_version(pkg_cfg) if pkg_cfg else "0.0.0",
         "location": args.to, "path": os.path.relpath(dst, OUTPUT_DIR),
     })
     _save_installed(device, installed)
-    info("Lua VM app launching is not wired up yet (see docs/03_Modules.md) — "
-         "the file is staged and will be discovered by app_manager's scan, "
-         "but won't run until the engine module lands.")
+    info("staged and will be picked up by app_manager's boot-time scan — "
+         "the Lua VM (lua_runtime module) runs it on launch.")
 
 def cmd_pkg_app_remove(args):
     device, name = args.device, args.name
@@ -1632,9 +1636,9 @@ def cmd_pkg_app_upgrade(args):
     device = args.device
     names = [args.name] if args.name else [e["name"] for e in _load_installed(device).get("apps", [])]
     for name in names:
-        src = _find_meow(device, name)
+        src, _tier = _find_meow_or_hiss(device, name)
         if not src:
-            warn(f"  {name}: no source .meow found — skipping")
+            warn(f"  {name}: no source .meow/.hiss found — skipping")
             continue
         cmd_pkg_app_install(argparse.Namespace(device=device, name=name, to="flash"))
 
@@ -1688,7 +1692,7 @@ def main():
     sub.add_parser("doctor", help="Check environment health")
 
     # ── pkg — local package manager (v1, no network) ─────────────────────────
-    p_pkg = sub.add_parser("pkg", help="Local package manager (static selection + .meow hot-load)")
+    p_pkg = sub.add_parser("pkg", help="Local package manager (static selection + .meow/.hiss hot-load)")
     pkg_sub = p_pkg.add_subparsers(dest="pkg_cmd")
 
     p_pkg_list = pkg_sub.add_parser("list", help="Show what's selected for a device")
@@ -1710,22 +1714,22 @@ def main():
     p_pkg_verify = pkg_sub.add_parser("verify", help="Check installed.json against device.pcat + source/ for drift")
     p_pkg_verify.add_argument("device")
 
-    p_pkg_app = pkg_sub.add_parser("app", help="Runtime .meow hot-load (the one real file-drop path)")
+    p_pkg_app = pkg_sub.add_parser("app", help="Runtime .meow/.hiss hot-load (the one real file-drop path)")
     app_sub = p_pkg_app.add_subparsers(dest="app_cmd")
 
     p_app_list = app_sub.add_parser("list", help="List apps installed via pkg app")
     p_app_list.add_argument("device")
 
-    p_app_install = app_sub.add_parser("install", help="Stage a .meow script onto a device's flash image")
+    p_app_install = app_sub.add_parser("install", help="Stage a .meow/.hiss script onto a device's flash image")
     p_app_install.add_argument("device")
     p_app_install.add_argument("name")
     p_app_install.add_argument("--to", choices=["flash", "sd"], default="flash")
 
-    p_app_remove = app_sub.add_parser("remove", help="Remove a staged .meow script")
+    p_app_remove = app_sub.add_parser("remove", help="Remove a staged .meow/.hiss script")
     p_app_remove.add_argument("device")
     p_app_remove.add_argument("name")
 
-    p_app_upgrade = app_sub.add_parser("upgrade", help="Re-stage one (or all) installed .meow scripts")
+    p_app_upgrade = app_sub.add_parser("upgrade", help="Re-stage one (or all) installed .meow/.hiss scripts")
     p_app_upgrade.add_argument("device")
     p_app_upgrade.add_argument("name", nargs="?", default=None)
 

@@ -21,9 +21,15 @@
 extern "C" {
 #endif
 
-// Called once after bt_mgr_init() — registers the GATTS application and
-// builds the service's attribute table. Advertising is a separate step
-// (mesh_ble_set_advertising), gated on the user enabling Bluetooth.
+// Registers this module's rx callback and hands bt_mgr a callback
+// (bt_mgr_register_gatt_provider()) to queue this service's GATT table —
+// NimBLE's controller/host don't come up at boot anymore (see bt_mgr.h),
+// so unlike the old "called once after bt_mgr_init()" design, the actual
+// ble_gatts_add_svcs() call happens much later, whenever bt_mgr_ensure_
+// active() first runs. Advertising is a separate step
+// (mesh_ble_set_advertising), gated on the user enabling Bluetooth — and
+// is also what triggers that first activation if Settings' Bluetooth
+// toggle was never touched.
 int  mesh_ble_init(void);
 void mesh_ble_deinit(void);
 

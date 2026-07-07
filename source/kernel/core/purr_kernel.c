@@ -560,16 +560,19 @@ static bool s_sd_available    = false;
 static bool s_wifi_connected  = false;
 static int  s_battery_percent = -1;   // -1 = unknown (no PMIC/fuel gauge found)
 static bool s_lora_available  = false;
+static bool s_dev_mode        = false;   // off by default — see purr_kernel.h's doc comment
 
 void purr_kernel_set_sd_available(bool v)    { s_sd_available    = v; }
 void purr_kernel_set_wifi_connected(bool v)  { s_wifi_connected  = v; }
 void purr_kernel_set_battery_percent(int v)  { s_battery_percent = v; }
 void purr_kernel_set_lora_available(bool v)  { s_lora_available  = v; }
+void purr_kernel_set_dev_mode(bool v)        { s_dev_mode        = v; }
 
 bool purr_kernel_sd_available(void)    { return s_sd_available; }
 bool purr_kernel_wifi_connected(void)  { return s_wifi_connected; }
 int  purr_kernel_battery_percent(void) { return s_battery_percent; }
 bool purr_kernel_lora_available(void)  { return s_lora_available; }
+bool purr_kernel_dev_mode_enabled(void) { return s_dev_mode; }
 
 void purr_kernel_reboot(void) {
     ESP_LOGW(TAG, "kernel reboot requested");
@@ -645,9 +648,31 @@ static void health_watchdog_task(void *arg)
         // Logs every 2s regardless of app activity so a continuous background
         // leak (vs. a one-time boot-time consumption) shows up as a steady
         // downward slope even with nothing else touched. Remove once found.
-        ESP_LOGW(TAG, "heapwatch: internal_free=%u largest_internal=%u psram_free=%u uptime_ms=%llu",
+        //
+        // dma_free/largest_dma added while chasing a follow-on symptom:
+        // live boot captures show "dma_utils: esp_dma_capable_malloc(172):
+        // Not enough heap memory" -> "diskio_sdmmc: sdmmc_read_blocks
+        // failed" during phase-2 SD scanning, right after bt_mgr/wifi_mgr/
+        // meshtastic have all loaded — and the same SD-read path
+        // (fopen()/fread()) is what launch_meow() and lua_sd_read()/
+        // lua_sd_write() use, so this is the likely cause of "loaded
+        // scripts are broken". esp_dma_capable_malloc() requests
+        // MALLOC_CAP_DMA specifically, which is internal-RAM-only on this
+        // chip (esp_dma_utils.c explicitly can't combine MALLOC_CAP_DMA
+        // with MALLOC_CAP_SPIRAM) — so unlike the BLE/LVGL fixes, this
+        // can't just be routed to PSRAM. CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL
+        // already carves out a dedicated 32KB DMA-capable pool at boot
+        // (esp_psram_extram_reserve_dma_pool(), confirmed live: "esp_psram:
+        // Reserving pool of 32K of internal memory for DMA/internal
+        // allocations"). MALLOC_CAP_INTERNAL alone (already logged above)
+        // doesn't tell us whether that specific 32KB reserve is what's
+        // collapsing, or whether it's healthy and something else is going
+        // on — these two extra fields answer that question directly.
+        ESP_LOGW(TAG, "heapwatch: internal_free=%u largest_internal=%u dma_free=%u largest_dma=%u psram_free=%u uptime_ms=%llu",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned long long)purr_kernel_uptime_ms());
 

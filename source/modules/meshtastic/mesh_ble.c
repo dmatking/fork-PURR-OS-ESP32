@@ -1,8 +1,30 @@
 // mesh_ble.c — Meshtastic BLE phone-API companion service (see mesh_ble.h
 // for the UUID-verification caveat before relying on this for real interop).
 //
-// Standard ESP-IDF Bluedroid GATTS attribute-table pattern (same shape as
-// IDF's own gatt_server_service_table example): one service, three
+// NimBLE host stack — migrated from Bluedroid along with bt_mgr.c (see that
+// file's header comment and CoreOS/sdkconfig_tdeck_plus.overrides for why).
+//
+// IMPORTANT ordering constraint: NimBLE's ble_gatts_add_svcs() only *queues*
+// a service — it gets registered once, automatically, the moment the NimBLE
+// host actually starts running (internally, on the host's first pass through
+// ble_hs_start()). Queue too late and the service silently never exists.
+//
+// The NimBLE controller/host don't come up at boot at all anymore (see
+// bt_mgr.h's header comment — confirmed live that bringing the BT
+// controller up unconditionally at boot permanently starved this board's
+// small internal DMA-capable memory pool, breaking SD card reads for the
+// rest of boot). Bring-up is now lazy: bt_mgr_ensure_active() runs the
+// first time the user actually asks for Bluetooth (Settings' toggle or
+// mesh_ble_set_advertising(true) below), and only THEN is there a host to
+// queue a service into. So instead of calling ble_gatts_add_svcs()
+// directly from mesh_ble_init() (P3, boot time — long before that first
+// activation), this file registers mesh_ble_queue_gatt_service() with
+// bt_mgr via bt_mgr_register_gatt_provider(); bt_mgr_ensure_active() calls
+// it back at exactly the right moment — after ble_svc_gap_init()/
+// ble_svc_gatt_init(), before the host's first start.
+//
+// Standard NimBLE ble_gatt_svc_def attribute-table pattern (same shape as
+// IDF's own bleprph/main/gatt_svr.c example): one service, three
 // characteristics (toradio write, fromradio app-handled read, fromnum
 // notify), advertised only when mesh_ble_set_advertising(true) is called
 // (Settings' Bluetooth toggle, via bt_mgr).
@@ -16,10 +38,9 @@
 #include "mesh_ble.h"
 #include "meshtastic.h"
 #include "mesh_radio.h"
-#include "esp_gap_ble_api.h"
-#include "esp_gatts_api.h"
-#include "esp_bt_defs.h"
-#include "esp_bt_main.h"
+#include "bt_mgr.h"
+#include "host/ble_hs.h"
+#include "host/ble_uuid.h"
 #include "esp_log.h"
 #include <pb_encode.h>
 #include <pb_decode.h>
@@ -29,85 +50,30 @@
 
 static const char *TAG = "mesh_ble";
 
-#define MESH_BLE_APP_ID     1   // distinct from bt_mgr's GATTC app_id (0)
 #define MESH_BLE_FRAME_MAX  256
 #define MESH_BLE_QUEUE_LEN  8
 
-enum {
-    IDX_SVC = 0,
-    IDX_CHAR_TORADIO_DECL, IDX_CHAR_TORADIO_VAL,
-    IDX_CHAR_FROMRADIO_DECL, IDX_CHAR_FROMRADIO_VAL,
-    IDX_CHAR_FROMNUM_DECL, IDX_CHAR_FROMNUM_VAL, IDX_CHAR_FROMNUM_CFG,
-    MESH_BLE_IDX_NB,
-};
-
-static uint16_t      s_handles[MESH_BLE_IDX_NB];
-static esp_gatt_if_t s_gatts_if = ESP_GATT_IF_NONE;
-static uint16_t      s_conn_id  = 0;
-static bool          s_connected = false;
-static bool          s_want_advertising = false;
-
 // See mesh_ble.h — reproduced from memory of Meshtastic's public BLE spec,
-// byte-reversed (little-endian) from the human-readable UUID strings.
-static const uint8_t SVC_UUID[16]       = {0xfd,0xea,0x73,0xe2,0xca,0x5d,0xa8,0x9f,0x1f,0x46,0xa8,0x15,0x18,0xb2,0xa1,0x6b};
-static const uint8_t TORADIO_UUID[16]   = {0xe7,0x01,0x44,0x12,0x66,0x78,0xdd,0xa1,0xad,0x4d,0x9e,0x12,0xd2,0x76,0x5c,0xf7};
-static const uint8_t FROMRADIO_UUID[16] = {0x02,0x00,0x12,0xac,0x42,0x02,0x78,0xb8,0xed,0x11,0x93,0x49,0x9e,0xe6,0x55,0x2c};
-static const uint8_t FROMNUM_UUID[16]   = {0x53,0x44,0xe3,0x47,0x75,0xaa,0x70,0xa6,0x66,0x4f,0x00,0xa8,0x8c,0xa1,0x9d,0xed};
+// byte-reversed (little-endian) from the human-readable UUID strings. Same
+// byte order NimBLE's ble_uuid128_t/BLE_UUID128_INIT expects (over-the-air
+// LSB-first, same convention Bluedroid used) — carried over unchanged.
+static const ble_uuid128_t s_svc_uuid = BLE_UUID128_INIT(
+    0xfd,0xea,0x73,0xe2,0xca,0x5d,0xa8,0x9f,0x1f,0x46,0xa8,0x15,0x18,0xb2,0xa1,0x6b);
+static const ble_uuid128_t s_toradio_uuid = BLE_UUID128_INIT(
+    0xe7,0x01,0x44,0x12,0x66,0x78,0xdd,0xa1,0xad,0x4d,0x9e,0x12,0xd2,0x76,0x5c,0xf7);
+static const ble_uuid128_t s_fromradio_uuid = BLE_UUID128_INIT(
+    0x02,0x00,0x12,0xac,0x42,0x02,0x78,0xb8,0xed,0x11,0x93,0x49,0x9e,0xe6,0x55,0x2c);
+static const ble_uuid128_t s_fromnum_uuid = BLE_UUID128_INIT(
+    0x53,0x44,0xe3,0x47,0x75,0xaa,0x70,0xa6,0x66,0x4f,0x00,0xa8,0x8c,0xa1,0x9d,0xed);
 
-static const uint16_t s_pri_svc_uuid   = ESP_GATT_UUID_PRI_SERVICE;
-static const uint16_t s_char_decl_uuid = ESP_GATT_UUID_CHAR_DECLARE;
-static const uint16_t s_char_cfg_uuid  = ESP_GATT_UUID_CHAR_CLIENT_CONFIG;
-static const uint8_t  s_prop_write  = ESP_GATT_CHAR_PROP_BIT_WRITE;
-static const uint8_t  s_prop_read   = ESP_GATT_CHAR_PROP_BIT_READ;
-static const uint8_t  s_prop_notify = ESP_GATT_CHAR_PROP_BIT_NOTIFY;
+static uint16_t s_toradio_val_handle;
+static uint16_t s_fromradio_val_handle;
+static uint16_t s_fromnum_val_handle;
 
-static uint8_t s_fromnum_val[4]  = {0, 0, 0, 0};
-static uint8_t s_fromnum_cccd[2] = {0, 0};
+static uint8_t s_own_addr_type;
+static bool    s_want_advertising = false;
 
-static const esp_gatts_attr_db_t s_attr_db[MESH_BLE_IDX_NB] = {
-    [IDX_SVC] = {
-        {ESP_GATT_AUTO_RSP},
-        {ESP_UUID_LEN_16, (uint8_t *)&s_pri_svc_uuid, ESP_GATT_PERM_READ,
-         sizeof(SVC_UUID), sizeof(SVC_UUID), (uint8_t *)SVC_UUID}
-    },
-    [IDX_CHAR_TORADIO_DECL] = {
-        {ESP_GATT_AUTO_RSP},
-        {ESP_UUID_LEN_16, (uint8_t *)&s_char_decl_uuid, ESP_GATT_PERM_READ,
-         sizeof(uint8_t), sizeof(uint8_t), (uint8_t *)&s_prop_write}
-    },
-    [IDX_CHAR_TORADIO_VAL] = {
-        {ESP_GATT_AUTO_RSP},
-        {ESP_UUID_LEN_128, (uint8_t *)TORADIO_UUID, ESP_GATT_PERM_WRITE,
-         MESH_BLE_FRAME_MAX, 0, NULL}
-    },
-    [IDX_CHAR_FROMRADIO_DECL] = {
-        {ESP_GATT_AUTO_RSP},
-        {ESP_UUID_LEN_16, (uint8_t *)&s_char_decl_uuid, ESP_GATT_PERM_READ,
-         sizeof(uint8_t), sizeof(uint8_t), (uint8_t *)&s_prop_read}
-    },
-    // App-handled reads: each read drains one queued FromRadio frame (or
-    // 0 bytes if the queue is empty), matching Meshtastic's real protocol.
-    [IDX_CHAR_FROMRADIO_VAL] = {
-        {ESP_GATT_RSP_BY_APP},
-        {ESP_UUID_LEN_128, (uint8_t *)FROMRADIO_UUID, ESP_GATT_PERM_READ,
-         MESH_BLE_FRAME_MAX, 0, NULL}
-    },
-    [IDX_CHAR_FROMNUM_DECL] = {
-        {ESP_GATT_AUTO_RSP},
-        {ESP_UUID_LEN_16, (uint8_t *)&s_char_decl_uuid, ESP_GATT_PERM_READ,
-         sizeof(uint8_t), sizeof(uint8_t), (uint8_t *)&s_prop_notify}
-    },
-    [IDX_CHAR_FROMNUM_VAL] = {
-        {ESP_GATT_AUTO_RSP},
-        {ESP_UUID_LEN_128, (uint8_t *)FROMNUM_UUID, ESP_GATT_PERM_READ,
-         sizeof(s_fromnum_val), sizeof(s_fromnum_val), s_fromnum_val}
-    },
-    [IDX_CHAR_FROMNUM_CFG] = {
-        {ESP_GATT_AUTO_RSP},
-        {ESP_UUID_LEN_16, (uint8_t *)&s_char_cfg_uuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-         sizeof(s_fromnum_cccd), sizeof(s_fromnum_cccd), s_fromnum_cccd}
-    },
-};
+static uint8_t s_fromnum_val[4] = {0, 0, 0, 0};
 
 // ── Outgoing frame queue (mesh RX → phone) ───────────────────────────────────
 
@@ -130,10 +96,12 @@ static void enqueue_frame(const uint8_t *data, size_t len) {
 
     s_fromnum++;
     memcpy(s_fromnum_val, &s_fromnum, sizeof(s_fromnum));
-    if (s_connected && s_gatts_if != ESP_GATT_IF_NONE) {
-        esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_handles[IDX_CHAR_FROMNUM_VAL],
-                                     sizeof(s_fromnum_val), s_fromnum_val, false);
-    }
+    // Notifies every currently-subscribed peer (tracked internally by the
+    // stack via CCCD writes) — a no-op if nobody's subscribed. Replaces
+    // Bluedroid's manual esp_ble_gatts_send_indicate(gatts_if, conn_id, ...)
+    // call, which needed s_connected/s_conn_id/s_gatts_if bookkeeping this
+    // version no longer needs at all.
+    ble_gatts_chr_updated(s_fromnum_val_handle);
 }
 
 static bool dequeue_frame(uint8_t *out, size_t *out_len) {
@@ -188,105 +156,185 @@ static void handle_toradio_write(const uint8_t *data, size_t len) {
     mesh_manager_send_text(to, text);
 }
 
-// ── GATTS callback ────────────────────────────────────────────────────────────
+// ── GATT access callbacks (one per characteristic) ───────────────────────────
+// NimBLE's access model is synchronous per-characteristic, unlike
+// Bluedroid's one big event-switch callback keyed by handle — no deferred
+// "app response" dance needed for the app-handled fromradio read; just
+// compute and append to ctxt->om directly.
 
-static void gatts_cb(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param) {
-    switch (event) {
-    case ESP_GATTS_REG_EVT:
-        s_gatts_if = gatts_if;
-        esp_ble_gap_set_device_name("PURR-Mesh");
-        esp_ble_gatts_create_attr_tab(s_attr_db, gatts_if, MESH_BLE_IDX_NB, 0);
-        break;
+static int toradio_access_cb(uint16_t conn_handle, uint16_t attr_handle,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn_handle; (void)attr_handle; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
 
-    case ESP_GATTS_CREAT_ATTR_TAB_EVT:
-        if (param->add_attr_tab.status != ESP_GATT_OK || param->add_attr_tab.num_handle != MESH_BLE_IDX_NB) {
-            ESP_LOGE(TAG, "attr table creation failed, status=%d num=%d",
-                      param->add_attr_tab.status, param->add_attr_tab.num_handle);
-            break;
-        }
-        memcpy(s_handles, param->add_attr_tab.handles, sizeof(s_handles));
-        esp_ble_gatts_start_service(s_handles[IDX_SVC]);
-        break;
-
-    case ESP_GATTS_CONNECT_EVT:
-        s_conn_id   = param->connect.conn_id;
-        s_connected = true;
-        break;
-
-    case ESP_GATTS_DISCONNECT_EVT:
-        s_connected = false;
-        if (s_want_advertising) {
-            static esp_ble_adv_params_t adv_params = {
-                .adv_int_min = 0x20, .adv_int_max = 0x40,
-                .adv_type = ADV_TYPE_IND, .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
-                .channel_map = ADV_CHNL_ALL, .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
-            };
-            esp_ble_gap_start_advertising(&adv_params);
-        }
-        break;
-
-    case ESP_GATTS_READ_EVT: {
-        if (param->read.handle != s_handles[IDX_CHAR_FROMRADIO_VAL]) break;
-        esp_gatt_rsp_t rsp = { 0 };
-        rsp.attr_value.handle = param->read.handle;
-        size_t out_len = 0;
-        dequeue_frame(rsp.attr_value.value, &out_len);
-        rsp.attr_value.len = (uint16_t)out_len;
-        esp_ble_gatts_send_response(gatts_if, param->read.conn_id, param->read.trans_id, ESP_GATT_OK, &rsp);
-        break;
+    uint8_t buf[MESH_BLE_FRAME_MAX];
+    uint16_t len = 0;
+    if (ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf), &len) != 0) {
+        return BLE_ATT_ERR_UNLIKELY;
     }
+    handle_toradio_write(buf, len);
+    return 0;
+}
 
-    case ESP_GATTS_WRITE_EVT:
-        if (param->write.handle == s_handles[IDX_CHAR_TORADIO_VAL]) {
-            handle_toradio_write(param->write.value, param->write.len);
-        }
+static int fromradio_access_cb(uint16_t conn_handle, uint16_t attr_handle,
+                                struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn_handle; (void)attr_handle; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_UNLIKELY;
+
+    // Each read drains one queued FromRadio frame (or 0 bytes if the queue
+    // is empty), matching Meshtastic's real protocol.
+    uint8_t frame[MESH_BLE_FRAME_MAX];
+    size_t  frame_len = 0;
+    dequeue_frame(frame, &frame_len);
+    int rc = os_mbuf_append(ctxt->om, frame, frame_len);
+    return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+static int fromnum_access_cb(uint16_t conn_handle, uint16_t attr_handle,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    (void)conn_handle; (void)attr_handle; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_UNLIKELY;
+
+    int rc = os_mbuf_append(ctxt->om, s_fromnum_val, sizeof(s_fromnum_val));
+    return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+// ── GATT service table ────────────────────────────────────────────────────────
+
+static const struct ble_gatt_svc_def s_gatt_svcs[] = {
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &s_svc_uuid.u,
+        .characteristics = (struct ble_gatt_chr_def[]) {
+            {
+                .uuid       = &s_toradio_uuid.u,
+                .access_cb  = toradio_access_cb,
+                .flags      = BLE_GATT_CHR_F_WRITE,
+                .val_handle = &s_toradio_val_handle,
+            }, {
+                .uuid       = &s_fromradio_uuid.u,
+                .access_cb  = fromradio_access_cb,
+                .flags      = BLE_GATT_CHR_F_READ,
+                .val_handle = &s_fromradio_val_handle,
+            }, {
+                .uuid       = &s_fromnum_uuid.u,
+                .access_cb  = fromnum_access_cb,
+                .flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &s_fromnum_val_handle,
+            }, {
+                0,   // no more characteristics in this service
+            }
+        },
+    },
+    {
+        0,   // no more services
+    },
+};
+
+// Invoked by bt_mgr_ensure_active() (via bt_mgr_register_gatt_provider())
+// right before it starts the NimBLE host for the first time — see this
+// file's header comment for why this can't just happen inside
+// mesh_ble_init() anymore.
+static void mesh_ble_queue_gatt_service(void) {
+    int rc = ble_gatts_count_cfg(s_gatt_svcs);
+    if (rc != 0) { ESP_LOGE(TAG, "count_cfg failed: %d", rc); return; }
+    rc = ble_gatts_add_svcs(s_gatt_svcs);
+    if (rc != 0) { ESP_LOGE(TAG, "add_svcs failed: %d", rc); return; }
+    ESP_LOGI(TAG, "GATT service queued");
+}
+
+// ── GAP (connection lifecycle) callback ──────────────────────────────────────
+
+static void start_advertising(void);
+
+static int gap_event_cb(struct ble_gap_event *event, void *arg) {
+    (void)arg;
+    switch (event->type) {
+    case BLE_GAP_EVENT_CONNECT:
+        ESP_LOGI(TAG, "peer connected, status=%d", event->connect.status);
         break;
-
+    case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(TAG, "peer disconnected, reason=0x%x", event->disconnect.reason);
+        if (s_want_advertising) start_advertising();
+        break;
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        ESP_LOGI(TAG, "peer subscribe: attr_handle=%d notify=%d indicate=%d",
+                 event->subscribe.attr_handle, event->subscribe.cur_notify,
+                 event->subscribe.cur_indicate);
+        break;
     default:
         break;
     }
+    return 0;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+static void start_advertising(void) {
+    // Deliberately queried here, not in mesh_ble_init() — at init() time
+    // (during static-module load, P3) the NimBLE host doesn't even exist
+    // yet (see this file's header comment), so ble_hs_id_infer_auto()
+    // would fail. By the time mesh_ble_set_advertising(true) calls this,
+    // bt_mgr_ensure_active() has already run and synced with the
+    // controller.
+    int rc = ble_hs_id_infer_auto(0, &s_own_addr_type);
+    if (rc != 0) { ESP_LOGE(TAG, "infer_auto failed: %d", rc); return; }
+
+    struct ble_hs_adv_fields fields = {0};
+    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+
+    static const char *dev_name = "PURR-Mesh";
+    fields.name           = (const uint8_t *)dev_name;
+    fields.name_len        = strlen(dev_name);
+    fields.name_is_complete = 1;
+
+    fields.uuids128           = (ble_uuid128_t[]) { s_svc_uuid };
+    fields.num_uuids128        = 1;
+    fields.uuids128_is_complete = 1;
+
+    rc = ble_gap_adv_set_fields(&fields);
+    if (rc != 0) { ESP_LOGE(TAG, "adv_set_fields failed: %d", rc); return; }
+
+    struct ble_gap_adv_params adv_params = {0};
+    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &adv_params, gap_event_cb, NULL);
+    if (rc != 0) ESP_LOGE(TAG, "adv_start failed: %d", rc);
+}
+
 void mesh_ble_set_advertising(bool on) {
-    s_want_advertising = on;
     if (on) {
-        static esp_ble_adv_data_t adv_data = {
-            .set_scan_rsp = false, .include_name = true, .include_txpower = false,
-            .min_interval = 0x20, .max_interval = 0x40, .appearance = 0,
-            .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
-        };
-        adv_data.service_uuid_len = sizeof(SVC_UUID);
-        adv_data.p_service_uuid   = (uint8_t *)SVC_UUID;
-        // Not waiting for ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT before
-        // starting advertising (the stricter/more correct pattern) — bt_mgr.c
-        // already owns the one GAP callback registration Bluedroid allows,
-        // so this file doesn't have its own event hook to wait on. Both
-        // calls are serialized through the same HCI command queue in
-        // practice, which is why this simplification is common in simpler
-        // BLE example code, but it is a known race vs. the fully-correct flow.
-        esp_ble_gap_config_adv_data(&adv_data);
-        static esp_ble_adv_params_t adv_params = {
-            .adv_int_min = 0x20, .adv_int_max = 0x40,
-            .adv_type = ADV_TYPE_IND, .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
-            .channel_map = ADV_CHNL_ALL, .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
-        };
-        esp_ble_gap_start_advertising(&adv_params);
-    } else {
-        esp_ble_gap_stop_advertising();
+        // Brings the controller/host up on demand if nothing has yet —
+        // covers the case where a user enables the Meshtastic phone-
+        // companion feature directly, without ever visiting Settings'
+        // Bluetooth toggle. Idempotent/cheap if already active.
+        if (bt_mgr_ensure_active() != ESP_OK) {
+            ESP_LOGW(TAG, "cannot advertise — BLE host activation failed");
+            return;
+        }
     }
+    // Live check, not a cached flag from init() time — the host may come
+    // up long after mesh_ble_init() ran (or never, if activation fails).
+    if (!bt_mgr_host_ready()) return;
+
+    s_want_advertising = on;
+    if (on) start_advertising();
+    else    ble_gap_adv_stop();
 }
 
 int mesh_ble_init(void) {
-    esp_ble_gatts_register_callback(gatts_cb);
-    esp_ble_gatts_app_register(MESH_BLE_APP_ID);
+    // No NimBLE calls here anymore — the host doesn't exist yet at P3
+    // boot time (see this file's header comment). Just register this
+    // module's rx callback and hand bt_mgr the callback that queues our
+    // GATT service whenever the host actually comes up later.
     mesh_manager_add_rx_callback(on_mesh_rx);
-    ESP_LOGI(TAG, "init complete");
+    bt_mgr_register_gatt_provider(mesh_ble_queue_gatt_service);
+    ESP_LOGI(TAG, "init complete (BLE companion service pending activation)");
     return 0;
 }
 
 void mesh_ble_deinit(void) {
     mesh_manager_remove_rx_callback(on_mesh_rx);
+    if (!bt_mgr_host_ready()) return;
     mesh_ble_set_advertising(false);
 }

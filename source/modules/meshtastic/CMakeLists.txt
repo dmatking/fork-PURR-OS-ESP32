@@ -28,5 +28,5 @@ idf_component_register(
         ../../kernel/catcalls
         ../../lib/lib_nanopb
         ../../lib/lib_mesh_pb
-    REQUIRES esp_common driver freertos nvs_flash esp_timer mbedtls bt
+    REQUIRES esp_common driver freertos nvs_flash esp_timer mbedtls bt bt_mgr
 )

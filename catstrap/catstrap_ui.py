@@ -33,7 +33,7 @@ SYSTEM_APPS = {
     "magidos":  ("catt", "DOS 6.22 emulator — in-house exclusive"),
 }
 
-TIER_COLORS = {"meow": C_GRN, "paws": C_CYN, "claw": C_MGN, "catt": C_YLW}
+TIER_COLORS = {"meow": C_GRN, "hiss": C_RED, "paws": C_CYN, "claw": C_MGN, "catt": C_YLW}
 
 def div(label=""):
     line = "─" * 52
@@ -86,6 +86,8 @@ def _collect_user_apps():
             for f in os.listdir(app_dir) if os.path.isdir(app_dir) else []:
                 if f.endswith(".meow"):
                     apps.append((f[:-5], "meow"))
+                elif f.endswith(".hiss"):
+                    apps.append((f[:-5], "hiss"))
     return apps
 
 # ── Actions ───────────────────────────────────────────────────────────────────
@@ -94,7 +96,7 @@ ACTIONS = [
     ("build_all",    "Build all user apps"),
     ("build_one",    "Build a specific app"),
     ("build_system", "Build a system exclusive (magicmac / magidos)"),
-    ("validate",     "Validate a .meow Lua script"),
+    ("validate",     "Validate a .meow/.hiss Lua script"),
     ("sdk_info",     "Show SDK version + API surface"),
     ("sdk_install",  "Install SDK headers to catstrap/sdk/include/"),
     ("list",         "List all apps"),
@@ -147,7 +149,7 @@ def pick_system_app():
     return raw if raw in keys else None
 
 def pick_meow_file():
-    path = input("  Path to .meow file: ").strip()
+    path = input("  Path to .meow/.hiss file: ").strip()
     return path or None
 
 # ── Main ──────────────────────────────────────────────────────────────────────

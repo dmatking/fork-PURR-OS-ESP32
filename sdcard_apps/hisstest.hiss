@@ -1,0 +1,65 @@
+-- hisstest.hiss — PURR OS demo app: exercises the .hiss tier's extra API
+-- (kitt.*, radio.*, gps.*) that plain .meow scripts never get registered.
+--
+-- Deploy: copy this file to /sdcard/apps/hisstest.hiss on the device's SD
+-- card, or /flash/apps/hisstest.hiss to bake it into the image — trust is
+-- extension-only, so either location gets the same privileged API.
+--
+-- All three buttons below degrade gracefully on hardware that doesn't have
+-- the relevant catcall registered (no radio, no GPS) — they never error or
+-- crash, they just report "unavailable", same as the underlying radio.*/
+-- gps.* bindings themselves do.
+
+-- purr-sig: dev-approved
+
+local win_h = win.create("Hiss Test")
+local out   = win.textarea(win_h, 100, 80)
+
+local function show(text)
+    win.textarea_set(out, text)
+end
+
+local function on_modules()
+    local lines = {"Loaded modules:"}
+    for _, m in ipairs(kitt.modules()) do
+        lines[#lines + 1] = string.format("  %-16s %-8s v%s", m.name, m.type, m.version)
+    end
+    show(table.concat(lines, "\n"))
+end
+
+local function on_radio()
+    local lines = {"Radio:"}
+    if radio.available() then
+        local data = radio.receive(256)
+        lines[#lines + 1] = "  available: yes"
+        lines[#lines + 1] = "  rssi: " .. radio.rssi() .. " dBm"
+        lines[#lines + 1] = "  snr: " .. string.format("%.1f", radio.snr()) .. " dB"
+        lines[#lines + 1] = data and ("  rx: " .. #data .. " bytes") or "  rx: (none pending)"
+    else
+        lines[#lines + 1] = "  available: no (no data pending, or no radio catcall on this device)"
+    end
+    show(table.concat(lines, "\n"))
+end
+
+local function on_gps()
+    local fix = gps.fix()
+    if not fix then
+        show("GPS:\n  no GPS catcall on this device")
+        return
+    end
+    local lines = {"GPS:"}
+    lines[#lines + 1] = "  valid: " .. tostring(fix.valid)
+    lines[#lines + 1] = string.format("  lat/lon: %.5f, %.5f", fix.latitude, fix.longitude)
+    lines[#lines + 1] = string.format("  altitude: %.1f m   speed: %.1f m/s", fix.altitude_m, fix.speed_mps)
+    lines[#lines + 1] = string.format("  satellites: %d   hdop: %.1f", fix.satellites, fix.hdop)
+    show(table.concat(lines, "\n"))
+end
+
+local row = win.row(win_h, 4)
+win.button(win_h, "Modules", on_modules)
+win.button(win_h, "Radio",   on_radio)
+win.button(win_h, "GPS",     on_gps)
+win.layout_end(row)
+
+show("Tap a button to query kitt.*/radio.*/gps.*")
+win.show(win_h)

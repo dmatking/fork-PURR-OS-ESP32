@@ -195,8 +195,10 @@ static void open_chat(int idx) {
 
     purr_win_textarea_set(s_chat_out[idx], s_chat_logs[idx]);
     purr_win_textarea_focus(s_chat_in[idx]);
-    purr_win_keyboard_show(s_chat_win[idx], s_chat_in[idx]);
+    // win_show() first — see terminal.c's terminal_init() for why (Cupcake's
+    // win_show() raises the window above whatever kb_show() just showed).
     purr_win_show(s_chat_win[idx]);
+    purr_win_keyboard_show(s_chat_win[idx], s_chat_in[idx]);
 }
 
 static void on_buddy_list_event(purr_wid_t w, purr_event_t e, void *user) {
@@ -234,8 +236,10 @@ static void open_broadcast(void) {
 
     purr_win_textarea_set(s_broadcast_out, s_broadcast_log ? s_broadcast_log : "");
     purr_win_textarea_focus(s_broadcast_in);
-    purr_win_keyboard_show(s_broadcast_win, s_broadcast_in);
+    // win_show() first — see terminal.c's terminal_init() for why (Cupcake's
+    // win_show() raises the window above whatever kb_show() just showed).
     purr_win_show(s_broadcast_win);
+    purr_win_keyboard_show(s_broadcast_win, s_broadcast_in);
 }
 
 static void on_broadcast_click(purr_wid_t w, purr_event_t e, void *user) {
@@ -332,7 +336,7 @@ PURR_MODULE_REGISTER(meshchat) = {
     .load_priority     = PURR_PRIORITY_OPTIONAL,
     .name              = "meshchat",
     .version           = "1.0.0",
-    .kernel_min        = "0.9.0",
+    .kernel_min        = "0.11.1",
     .provided_catcalls = 0,
     .required_catcalls = 0,
     .init              = meshchat_init,

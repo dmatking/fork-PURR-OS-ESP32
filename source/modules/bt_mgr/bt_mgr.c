@@ -1,56 +1,73 @@
 // bt_mgr.c — PURR OS Bluetooth manager (BLE only, see bt_mgr.h)
 //
-// Bluedroid BLE-only bring-up: controller + host init, a GAP scan
-// (blocking, semaphore-gated like wifi_mgr_scan()), and pairing via a GATTC
-// client connection with bonding requested ("Just Works" — IO capability
+// NimBLE host stack — migrated from Bluedroid (see
+// CoreOS/sdkconfig_tdeck_plus.overrides' Bluetooth section for the full
+// story: Bluedroid's own startup couldn't allocate its internal work queue
+// on this board's tight internal-DRAM budget, confirmed live via a real
+// crash the very first time this module ever ran on real hardware).
+// NimBLE funnels scan results, connection lifecycle, and security events
+// through one GAP event callback per operation, rather than Bluedroid's
+// separate GAP+GATTC callbacks — bt_mgr_scan()/bt_mgr_pair() both hand
+// gap_event_cb() to the NimBLE calls that need one.
+//
+// GAP scan (blocking, semaphore-gated like wifi_mgr_scan()), and pairing via
+// a GAP connection with security initiated ("Just Works" — IO capability
 // NoInputNoOutput, no PIN entry UI exists yet).
 
 #include "bt_mgr.h"
-#include "esp_bt.h"
-#include "esp_bt_main.h"
-#include "esp_gap_ble_api.h"
-#include "esp_gattc_api.h"
-#include "esp_gatt_common_api.h"
 #include "esp_log.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "host/ble_hs.h"
+#include "host/util/util.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <string.h>
+#include <stdio.h>
+
+// Declared, not defined, by NimBLE's store/config component (part of the
+// same "bt" component this file already REQUIRES) — bonding-key storage.
+// bleprph's own reference example forward-declares this the same way
+// rather than including its deeply-nested header path.
+void ble_store_config_init(void);
 
 static const char *TAG = "bt_mgr";
 #define MAX_SCAN_RESULTS 24
-#define GATTC_APP_ID 0
 
 static bool s_enabled = false;
+static bool s_host_ok = false;
 static bt_scan_result_t s_scan[MAX_SCAN_RESULTS];
 static int  s_scan_count = 0;
 static SemaphoreHandle_t s_scan_done_sem = NULL;
 
-static esp_gatt_if_t s_gattc_if = ESP_GATT_IF_NONE;
-static uint8_t       s_pair_addr[6];
+static uint8_t s_own_addr_type;
 
-// ── GAP callback ──────────────────────────────────────────────────────────────
+// See bt_mgr_register_gatt_provider()'s header comment — single slot,
+// invoked once from bt_mgr_ensure_active() right before the host starts.
+static void (*s_gatt_provider)(void) = NULL;
 
-static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
-    switch (event) {
-    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
-        break;   // handled synchronously by bt_mgr_scan() below (set then start)
-    case ESP_GAP_BLE_SCAN_RESULT_EVT: {
-        struct ble_scan_result_evt_param *r = &param->scan_rst;
-        if (r->search_evt != ESP_GAP_SEARCH_INQ_RES_EVT) break;
+// ── GAP event callback ───────────────────────────────────────────────────────
+
+static int gap_event_cb(struct ble_gap_event *event, void *arg) {
+    (void)arg;
+    switch (event->type) {
+    case BLE_GAP_EVENT_DISC: {
+        struct ble_hs_adv_fields fields;
+        if (ble_hs_adv_parse_fields(&fields, event->disc.data, event->disc.length_data) != 0) break;
         if (s_scan_count >= MAX_SCAN_RESULTS) break;
 
         bt_scan_result_t *out = &s_scan[s_scan_count];
-        memcpy(out->addr, r->bda, 6);
-        out->rssi = (int8_t)r->rssi;
+        memcpy(out->addr, event->disc.addr.val, 6);
+        out->rssi = (int8_t)event->disc.rssi;
 
-        uint8_t name_len = 0;
-        uint8_t *name = esp_ble_resolve_adv_data_by_type(
-            r->ble_adv, r->adv_data_len + r->scan_rsp_len, ESP_BLE_AD_TYPE_NAME_CMPL, &name_len);
-        if (name && name_len) {
-            if (name_len > sizeof(out->name) - 1) name_len = sizeof(out->name) - 1;
-            memcpy(out->name, name, name_len);
-            out->name[name_len] = '\0';
+        if (fields.name && fields.name_len) {
+            uint8_t n = fields.name_len;
+            if (n > sizeof(out->name) - 1) n = sizeof(out->name) - 1;
+            memcpy(out->name, fields.name, n);
+            out->name[n] = '\0';
         } else {
             snprintf(out->name, sizeof(out->name), "%02X:%02X:%02X:%02X:%02X:%02X",
                      out->addr[0], out->addr[1], out->addr[2], out->addr[3], out->addr[4], out->addr[5]);
@@ -58,68 +75,69 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) 
         s_scan_count++;
         break;
     }
-    case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
+    case BLE_GAP_EVENT_DISC_COMPLETE:
         if (s_scan_done_sem) xSemaphoreGive(s_scan_done_sem);
         break;
-    case ESP_GAP_BLE_SEC_REQ_EVT:
-        // Peer is requesting security (they're connecting to us) — accept.
-        esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
+    case BLE_GAP_EVENT_CONNECT:
+        if (event->connect.status == 0) {
+            ESP_LOGI(TAG, "connected — requesting encryption/bonding");
+            int rc = ble_gap_security_initiate(event->connect.conn_handle);
+            if (rc != 0) ESP_LOGW(TAG, "security_initiate failed: %d", rc);
+        } else {
+            ESP_LOGW(TAG, "connect failed, status=%d", event->connect.status);
+        }
         break;
-    case ESP_GAP_BLE_AUTH_CMPL_EVT:
-        ESP_LOGI(TAG, "auth complete, success=%d", param->ble_security.auth_cmpl.success);
+    case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(TAG, "disconnected, reason=0x%x", event->disconnect.reason);
         break;
-    default:
-        break;
-    }
-}
-
-// ── GATTC callback (used only to open a connection + trigger bonding) ───────
-
-static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param) {
-    switch (event) {
-    case ESP_GATTC_REG_EVT:
-        s_gattc_if = gattc_if;
-        break;
-    case ESP_GATTC_CONNECT_EVT:
-        ESP_LOGI(TAG, "gattc connected — requesting encryption/bonding");
-        esp_ble_set_encryption(param->connect.remote_bda, ESP_BLE_SEC_ENCRYPT_MITM);
-        break;
-    case ESP_GATTC_DISCONNECT_EVT:
-        ESP_LOGI(TAG, "gattc disconnected, reason=0x%x", param->disconnect.reason);
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        ESP_LOGI(TAG, "encryption change, status=%d", event->enc_change.status);
         break;
     default:
         break;
     }
+    return 0;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-// The Bluedroid host itself stays initialized+enabled for the module's
-// whole lifetime (matching wifi_mgr's "driver always started" approach —
-// cycling esp_bluedroid_enable()/disable() repeatedly at runtime is fragile
-// and not how either stack is normally used). This flag just gates whether
-// Settings/the Meshtastic companion service are allowed to actually scan or
-// advertise — disabling stops any in-progress scan immediately.
-void bt_mgr_set_enabled(bool on) {
-    s_enabled = on;
-    if (!on) esp_ble_gap_stop_scanning();
+void bt_mgr_register_gatt_provider(void (*queue_fn)(void)) {
+    s_gatt_provider = queue_fn;
+}
+
+// Once the host actually comes up, it stays up for the rest of the
+// module's lifetime (matching wifi_mgr's "driver always started"
+// approach) — s_enabled just gates whether Settings/the Meshtastic
+// companion service are allowed to actually scan or advertise; disabling
+// cancels any in-progress scan immediately. Enabling is what triggers the
+// lazy bring-up in the first place.
+bool bt_mgr_set_enabled(bool on) {
+    if (on) {
+        if (bt_mgr_ensure_active() != ESP_OK) {
+            ESP_LOGW(TAG, "cannot enable — host activation failed");
+            return false;
+        }
+        s_enabled = true;
+        return true;
+    }
+    s_enabled = false;
+    if (s_host_ok) ble_gap_disc_cancel();
+    return true;
 }
 
 bool bt_mgr_is_enabled(void) { return s_enabled; }
+
+bool bt_mgr_host_ready(void) { return s_host_ok; }
 
 int bt_mgr_scan(uint32_t duration_sec) {
     if (!s_enabled) return -1;
     s_scan_count = 0;
 
-    static esp_ble_scan_params_t scan_params = {
-        .scan_type          = BLE_SCAN_TYPE_ACTIVE,
-        .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
-        .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
-        .scan_interval      = 0x50,
-        .scan_window        = 0x30,
-        .scan_duplicate     = BLE_SCAN_DUPLICATE_ENABLE,
-    };
-    esp_ble_gap_set_scan_params(&scan_params);
+    struct ble_gap_disc_params disc_params = {0};
+    disc_params.passive           = 0;      // active scan — request scan-response (name) data
+    disc_params.filter_duplicates = 1;
+    disc_params.itvl              = 0x50;
+    disc_params.window            = 0x30;
 
     if (!s_scan_done_sem) s_scan_done_sem = xSemaphoreCreateBinary();
     if (!s_scan_done_sem) {
@@ -128,11 +146,17 @@ int bt_mgr_scan(uint32_t duration_sec) {
         // NULL handle hits FreeRTOS's own configASSERT(pxQueue) and aborts
         // the whole device. Confirmed live via a real crash (assert failed:
         // xQueueSemaphoreTake ... ( pxQueue )) triggered from Settings'
-        // Bluetooth "Scan" button.
+        // Bluetooth "Scan" button — same fix carried over from the
+        // Bluedroid version of this file.
         ESP_LOGE(TAG, "xSemaphoreCreateBinary failed — out of memory?");
         return -1;
     }
-    esp_ble_gap_start_scanning(duration_sec);
+
+    int rc = ble_gap_disc(s_own_addr_type, (int32_t)(duration_sec * 1000), &disc_params, gap_event_cb, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_disc failed: %d", rc);
+        return -1;
+    }
 
     xSemaphoreTake(s_scan_done_sem, pdMS_TO_TICKS((duration_sec + 2) * 1000));
     return s_scan_count;
@@ -147,52 +171,104 @@ bool bt_mgr_scan_at(int idx, bt_scan_result_t *out) {
 }
 
 esp_err_t bt_mgr_pair(const uint8_t addr[6]) {
-    if (!s_enabled || s_gattc_if == ESP_GATT_IF_NONE) return ESP_ERR_INVALID_STATE;
-    memcpy(s_pair_addr, addr, 6);
-    return esp_ble_gattc_open(s_gattc_if, (uint8_t *)s_pair_addr, BLE_ADDR_TYPE_PUBLIC, true);
+    if (!s_enabled) return ESP_ERR_INVALID_STATE;
+
+    ble_addr_t peer_addr;
+    peer_addr.type = BLE_ADDR_PUBLIC;
+    memcpy(peer_addr.val, addr, 6);
+
+    // Security (encryption/bonding) is requested from gap_event_cb() once
+    // BLE_GAP_EVENT_CONNECT reports success — same "connect, then encrypt"
+    // shape the previous Bluedroid version used across its GATTC connect
+    // callback.
+    int rc = ble_gap_connect(s_own_addr_type, &peer_addr, 30000, NULL, gap_event_cb, NULL);
+    return rc == 0 ? ESP_OK : ESP_FAIL;
 }
 
 // ── Module lifecycle ──────────────────────────────────────────────────────────
 
+static void on_reset(int reason) {
+    ESP_LOGW(TAG, "nimble host reset, reason=%d", reason);
+}
+
+static void on_sync(void) {
+    int rc = ble_hs_util_ensure_addr(0);
+    if (rc != 0) { ESP_LOGE(TAG, "ensure_addr failed: %d", rc); return; }
+    rc = ble_hs_id_infer_auto(0, &s_own_addr_type);
+    if (rc != 0) { ESP_LOGE(TAG, "infer_auto failed: %d", rc); return; }
+    ESP_LOGI(TAG, "nimble host synced, addr_type=%d", s_own_addr_type);
+}
+
+static void host_task(void *param) {
+    (void)param;
+    // Returns only once nimble_port_stop() (bt_mgr_deinit()) runs.
+    nimble_port_run();
+    nimble_port_freertos_deinit();
+}
+
 int bt_mgr_init(void) {
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    esp_err_t ret = esp_bt_controller_init(&bt_cfg);
-    if (ret != ESP_OK) { ESP_LOGE(TAG, "controller init failed: %s", esp_err_to_name(ret)); return -1; }
+    // Deliberately does nothing but reset state — the NimBLE controller
+    // used to come up unconditionally right here, at boot, before it's
+    // even known whether the user wants Bluetooth this session. Confirmed
+    // live: the controller's own MALLOC_CAP_DMA allocations permanently
+    // exhaust this board's small reserved DMA-capable memory pool within
+    // seconds, which then breaks every SD card read (and therefore every
+    // .meow/.hiss script load) for the rest of boot. See bt_mgr.h's header
+    // comment and bt_mgr_ensure_active() for where bring-up actually
+    // happens now.
+    s_enabled = false;
+    s_host_ok = false;
+    return 0;
+}
 
-    ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
-    if (ret != ESP_OK) { ESP_LOGE(TAG, "controller enable failed: %s", esp_err_to_name(ret)); return -1; }
+esp_err_t bt_mgr_ensure_active(void) {
+    if (s_host_ok) return ESP_OK;
 
-    ret = esp_bluedroid_init();
-    if (ret != ESP_OK) { ESP_LOGE(TAG, "bluedroid init failed: %s", esp_err_to_name(ret)); return -1; }
+    esp_err_t ret = nimble_port_init();
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "nimble_port_init failed: %s", esp_err_to_name(ret)); return ret; }
 
-    ret = esp_bluedroid_enable();
-    if (ret != ESP_OK) { ESP_LOGE(TAG, "bluedroid enable failed: %s", esp_err_to_name(ret)); return -1; }
-    // s_enabled starts false — Bluedroid itself is up (see bt_mgr_set_enabled's
-    // comment), but scanning/advertising stay off until the user opts in.
-
-    esp_ble_gap_register_callback(gap_cb);
-    esp_ble_gattc_register_callback(gattc_cb);
-    esp_ble_gattc_app_register(GATTC_APP_ID);
+    ble_hs_cfg.reset_cb        = on_reset;
+    ble_hs_cfg.sync_cb         = on_sync;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
     // "Just Works" bonding: no PIN entry UI exists yet, so IO capability is
     // fixed at NoInputNoOutput. Good enough for simple accessories; devices
-    // that require a displayed/typed passkey aren't supported.
-    esp_ble_io_cap_t iocap = ESP_IO_CAP_NONE;
-    uint8_t auth_req  = ESP_LE_AUTH_REQ_SC_BOND;
-    uint8_t key_size  = 16;
-    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(iocap));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth_req, sizeof(auth_req));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(key_size));
+    // that require a displayed/typed passkey aren't supported. Direct
+    // equivalent of the Bluedroid version's ESP_IO_CAP_NONE +
+    // ESP_LE_AUTH_REQ_SC_BOND + 16-byte max key size.
+    ble_hs_cfg.sm_io_cap        = BLE_SM_IO_CAP_NO_IO;
+    ble_hs_cfg.sm_bonding       = 1;
+    ble_hs_cfg.sm_mitm          = 1;
+    ble_hs_cfg.sm_sc            = 1;
+    ble_hs_cfg.sm_our_key_dist   = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
-    ESP_LOGI(TAG, "init complete (BLE only)");
-    return 0;
+    // Base GAP/GATT services — like any other queued service, these must be
+    // registered before the host starts (see the loop below and
+    // mesh_ble.c's header comment for the full ordering story).
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+    int name_rc = ble_svc_gap_device_name_set("PURR-Mesh");
+    if (name_rc != 0) ESP_LOGW(TAG, "gap_device_name_set failed: %d", name_rc);
+
+    ble_store_config_init();
+    s_host_ok = true;
+
+    // One chance for the registered GATT provider (mesh_ble.c) to queue
+    // its service — must happen after ble_svc_gap_init()/ble_svc_gatt_init()
+    // above and before nimble_port_freertos_init() below actually starts
+    // the host, since NimBLE only registers services queued before the
+    // host's first start.
+    if (s_gatt_provider) s_gatt_provider();
+
+    nimble_port_freertos_init(host_task);
+    ESP_LOGI(TAG, "activated (BLE only, NimBLE)");
+    return ESP_OK;
 }
 
 void bt_mgr_deinit(void) {
     bt_mgr_set_enabled(false);
-    esp_bluedroid_deinit();
-    esp_bt_controller_disable();
-    esp_bt_controller_deinit();
+    if (s_host_ok) nimble_port_stop();
     if (s_scan_done_sem) { vSemaphoreDelete(s_scan_done_sem); s_scan_done_sem = NULL; }
 }
 
@@ -203,9 +279,10 @@ PURR_MODULE_REGISTER(bt_mgr) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_SYSTEM,
+    .load_priority     = PURR_PRIORITY_IMPORTANT,
     .name              = "bt_mgr",
     .version           = "0.1.0",
-    .kernel_min        = "0.9.0",
+    .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = 0,
     .required_catcalls = 0,

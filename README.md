@@ -33,7 +33,8 @@ For devices where the standard IDF driver stack has issues, a **specialized kern
 | Extension | What it is |
 |-----------|-----------|
 | `.purr` | Precompiled kernel module (driver, system service, UI framework) |
-| `.meow` | Lua 5.4 script — sandboxed VM, `win.*` / `sd.*` / `kitt.*` API |
+| `.meow` | Lua 5.4 script — sandboxed VM, `win.*` / `sd.*` / `system.*` API |
+| `.hiss` | Lua 5.4 script — same VM as `.meow`, plus `kitt.*` / `radio.*` / `gps.*` |
 | `.paws` | Compiled userland app — `purr_win.h` + `sd.*` only |
 | `.claw` | Compiled kernel-access app — full `purr_kernel_*` + `purr_win.h` |
 | `.catt` | In-house exclusive (MagicMac, MagiDOS) — same as `.claw`, team-built |
@@ -84,7 +85,7 @@ source/
   drivers/              display/, touch/, input/, radio/, gps/
   modules/
     driver_manager/     loads .purr driver blobs
-    app_manager/        launches .meow/.paws/.claw apps
+    app_manager/        launches .meow/.hiss/.paws/.claw apps
     kittenui/           LVGL 8 UI module
     miniwin/            MiniWin WM module
     oled_ui/            Text-mode OLED UI
@@ -183,7 +184,7 @@ Bundled on all medium and large-screen devices:
 
 | App | Tier | Description |
 |-----|------|-------------|
-| `settings` | `.claw` | Theme, brightness, SD status, reboot |
+| `settings` | `.claw` | Theme, brightness, SD status, reboot, Developer Mode |
 | `about` | `.claw` | OS/KITT version, chip info, free RAM, uptime, active drivers |
 | `terminal` | `.claw` | Shell: ls, cat, echo, modules, mem, uptime, reboot |
 | `fileman` | `.claw` | Browse SPIFFS + SD card; text file preview |
@@ -212,7 +213,7 @@ Bundled on all medium and large-screen devices:
 | [docs/03_Modules.md](docs/03_Modules.md) | driver_manager, app_manager, kittenui, miniwin, oled_ui |
 | [docs/04_Devices.md](docs/04_Devices.md) | device.pcat format, all devices, T-Deck Plus detail, pin reference |
 | [docs/05_Drivers.md](docs/05_Drivers.md) | driver.pcat format, all drivers, GT911/IDF 5.3 known issue, writing a driver |
-| [docs/06_Apps.md](docs/06_Apps.md) | Tiers, purr_win.h API reference, .meow/.paws/.claw guide |
+| [docs/06_Apps.md](docs/06_Apps.md) | Tiers, purr_win.h API reference, .meow/.hiss/.paws/.claw guide |
 | [docs/07_Build_Tools.md](docs/07_Build_Tools.md) | purrstrap, modulestrap, catstrap — full pipeline and commands |
 | [docs/08_Exclusives.md](docs/08_Exclusives.md) | MagicMac and MagiDOS — architecture, build, current status |
 | [docs/10_ModuleLoading.md](docs/10_ModuleLoading.md) | Module priority system, SD fallback, panic screen |

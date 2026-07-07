@@ -30,6 +30,9 @@ lora        = "sx1262"
 ui          = "cupcake"
 app_manager = "app_manager"
 mesh        = "meshtastic"
+lua         = "lua_runtime"
+wifi        = "wifi_mgr"
+bt          = "bt_mgr"
 
 [ui]
 theme       = "wce"

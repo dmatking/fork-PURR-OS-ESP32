@@ -1,4 +1,4 @@
-// lua_runtime.c — Lua 5.4 scripting runtime for PURR OS (.meow apps)
+// lua_runtime.c — Lua 5.4 scripting runtime for PURR OS (.meow/.hiss apps)
 //
 // One global Lua state, matching PURR-OS-0.11's design (only one Lua VM
 // runs at a time on these boards) — adapted from that version's
@@ -105,6 +105,114 @@ static void register_sd_module(lua_State *L) {
     lua_pushcfunction(L, lua_sd_read);  lua_setfield(L, -2, "read");
     lua_pushcfunction(L, lua_sd_write); lua_setfield(L, -2, "write");
     lua_setglobal(L, "sd");
+}
+
+// ── radio.* / gps.* / kitt.* — .hiss tier only ────────────────────────────────
+// Registered by register_kitt_module() below, called from lua_runtime_init()
+// only when app_manager_get_pending_meow_privileged() is true. A plain
+// .meow script never sees these globals at all — not hidden, just never
+// added to its Lua state.
+
+static int lua_radio_send(lua_State *L) {
+    size_t len;
+    const char *data = luaL_checklstring(L, 1, &len);
+    const catcall_radio_t *radio = purr_kernel_radio();
+    if (!radio || !radio->send) { lua_pushboolean(L, 0); lua_pushstring(L, "no radio"); return 2; }
+    esp_err_t ret = radio->send((const uint8_t *)data, len);
+    lua_pushboolean(L, ret == ESP_OK);
+    return 1;
+}
+
+static int lua_radio_receive(lua_State *L) {
+    lua_Integer max_len = luaL_optinteger(L, 1, 256);
+    if (max_len <= 0 || max_len > 1024) max_len = 256;
+    const catcall_radio_t *radio = purr_kernel_radio();
+    if (!radio || !radio->receive) { lua_pushnil(L); return 1; }
+    uint8_t buf[1024];
+    int n = radio->receive(buf, (size_t)max_len);
+    if (n <= 0) { lua_pushnil(L); return 1; }
+    lua_pushlstring(L, (const char *)buf, (size_t)n);
+    return 1;
+}
+
+static int lua_radio_available(lua_State *L) {
+    const catcall_radio_t *radio = purr_kernel_radio();
+    lua_pushboolean(L, radio && radio->data_available && radio->data_available());
+    return 1;
+}
+
+static int lua_radio_rssi(lua_State *L) {
+    const catcall_radio_t *radio = purr_kernel_radio();
+    lua_pushinteger(L, (radio && radio->rssi) ? radio->rssi() : 0);
+    return 1;
+}
+
+static int lua_radio_snr(lua_State *L) {
+    const catcall_radio_t *radio = purr_kernel_radio();
+    lua_pushnumber(L, (radio && radio->snr) ? (lua_Number)radio->snr() : 0.0);
+    return 1;
+}
+
+static int lua_gps_fix(lua_State *L) {
+    const catcall_gps_t *gps = purr_kernel_gps();
+    if (!gps || !gps->get_fix) { lua_pushnil(L); return 1; }
+    gps_fix_t fix = {0};
+    bool has_fix = gps->get_fix(&fix);
+    lua_newtable(L);
+    lua_pushnumber(L,  fix.latitude);           lua_setfield(L, -2, "latitude");
+    lua_pushnumber(L,  fix.longitude);          lua_setfield(L, -2, "longitude");
+    lua_pushnumber(L,  fix.altitude_m);         lua_setfield(L, -2, "altitude_m");
+    lua_pushnumber(L,  fix.speed_mps);          lua_setfield(L, -2, "speed_mps");
+    lua_pushnumber(L,  fix.hdop);                lua_setfield(L, -2, "hdop");
+    lua_pushinteger(L, fix.satellites);          lua_setfield(L, -2, "satellites");
+    lua_pushboolean(L, has_fix && fix.valid);    lua_setfield(L, -2, "valid");
+    return 1;
+}
+
+// Mirrors terminal.c's module_type_name() — small enough not to be worth
+// sharing a header over.
+static const char *lua_module_type_name(uint8_t type) {
+    switch (type) {
+        case PURR_MOD_DRIVER: return "driver";
+        case PURR_MOD_SYSTEM: return "system";
+        case PURR_MOD_UI:     return "ui";
+        case PURR_MOD_APP:    return "app";
+        default:              return "unknown";
+    }
+}
+
+static int lua_kitt_modules(lua_State *L) {
+    int n = purr_kernel_module_count();
+    lua_newtable(L);
+    int out_idx = 1;
+    for (int i = 0; i < n; i++) {
+        const purr_module_header_t *hdr = purr_kernel_module_at(i);
+        if (!hdr) continue;
+        lua_newtable(L);
+        lua_pushstring(L, hdr->name);                          lua_setfield(L, -2, "name");
+        lua_pushstring(L, lua_module_type_name(hdr->module_type)); lua_setfield(L, -2, "type");
+        lua_pushstring(L, hdr->version);                       lua_setfield(L, -2, "version");
+        lua_rawseti(L, -2, out_idx++);
+    }
+    return 1;
+}
+
+static void register_kitt_module(lua_State *L) {
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_radio_send);      lua_setfield(L, -2, "send");
+    lua_pushcfunction(L, lua_radio_receive);   lua_setfield(L, -2, "receive");
+    lua_pushcfunction(L, lua_radio_available); lua_setfield(L, -2, "available");
+    lua_pushcfunction(L, lua_radio_rssi);      lua_setfield(L, -2, "rssi");
+    lua_pushcfunction(L, lua_radio_snr);       lua_setfield(L, -2, "snr");
+    lua_setglobal(L, "radio");
+
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_gps_fix); lua_setfield(L, -2, "fix");
+    lua_setglobal(L, "gps");
+
+    lua_newtable(L);
+    lua_pushcfunction(L, lua_kitt_modules); lua_setfield(L, -2, "modules");
+    lua_setglobal(L, "kitt");
 }
 
 // ── win.* ─────────────────────────────────────────────────────────────────────
@@ -288,10 +396,11 @@ int lua_runtime_init(void) {
     // This init() runs twice in practice: once at boot, like every other
     // PURR_MOD_SYSTEM module (harmless no-op — no .meow launch is pending
     // yet), and again each time app_manager's launch_meow() actually
-    // launches a .meow script. Check for a pending path before allocating
-    // a Lua state at all, so the boot-time call doesn't leak one.
+    // launches a .meow script. Check for pending work before allocating a
+    // Lua state at all, so the boot-time call doesn't leak one.
+    const char *code = app_manager_get_pending_meow_code(NULL);
     const char *path = app_manager_get_pending_meow_path();
-    if (!path || !path[0]) {
+    if (!code && (!path || !path[0])) {
         return 0;   // nothing pending — not an error, just not our turn yet
     }
 
@@ -304,8 +413,22 @@ int lua_runtime_init(void) {
     register_system_module(s_L);
     register_sd_module(s_L);
     register_win_module(s_L);
+    // .hiss only — see app_manager.h's app_tier_t doc and this file's
+    // register_kitt_module() comment. A .meow script never gets these
+    // globals registered into its Lua state at all.
+    if (app_manager_get_pending_meow_privileged()) {
+        register_kitt_module(s_L);
+    }
 
-    bool ok = lua_run_file(path);
+    // Preferred path: app_manager already read the script into a PSRAM
+    // buffer (see launch_meow()'s comment) so this never has to fopen()
+    // anything itself, which is what let meow_task() move back onto a
+    // PSRAM-backed stack. lua_run_file() stays as a fallback/general-purpose
+    // entry point (e.g. a future terminal/REPL caller) — this file's own
+    // luaL_loadfile() path, not something app_manager's launch flow uses
+    // anymore.
+    bool ok = code ? lua_run_code(code, (path && path[0]) ? path : "meow")
+                    : lua_run_file(path);
     return ok ? 0 : -1;
 }
 
@@ -322,9 +445,10 @@ PURR_MODULE_REGISTER(lua_runtime) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_SYSTEM,
+    .load_priority     = PURR_PRIORITY_IMPORTANT,
     .name              = "lua_runtime",
     .version           = "0.1.0",
-    .kernel_min        = "0.9.0",
+    .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = 0,
     .required_catcalls = 0,

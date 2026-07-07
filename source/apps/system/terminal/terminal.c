@@ -202,8 +202,12 @@ static int terminal_init(void) {
     s_send = purr_win_button(s_win, "Send", on_send, NULL);
 
     purr_win_textarea_focus(s_in);
-    purr_win_keyboard_show(s_win, s_in);
+    // win_show() must come first — Cupcake's win_show() raises the app
+    // window to the front (lv_obj_move_foreground()), so calling it after
+    // kb_show() would paint the window over the on-screen keyboard we just
+    // asked for, hiding it behind the app.
     purr_win_show(s_win);
+    purr_win_keyboard_show(s_win, s_in);
 
     term_println("PURR OS Terminal v1.0");
     term_println("Type 'help' for commands.");
@@ -228,7 +232,7 @@ PURR_MODULE_REGISTER(terminal) = {
     .load_priority     = PURR_PRIORITY_OPTIONAL,
     .name              = "terminal",
     .version           = "1.0.0",
-    .kernel_min        = "0.9.0",
+    .kernel_min        = "0.11.1",
     .provided_catcalls = 0,
     .required_catcalls = 0,
     .init              = terminal_init,

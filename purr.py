@@ -52,7 +52,7 @@ TOOLS = {
     "catstrap": {
         "ui":   os.path.join(REPO_DIR, "catstrap",     "catstrap_ui.py"),
         "cli":  os.path.join(REPO_DIR, "catstrap",     "catstrap.py"),
-        "desc": "App builder + SDK — compiles .paws/.claw/.catt apps",
+        "desc": "App builder + SDK — compiles .paws/.claw/.catt apps, packages .meow/.hiss scripts",
         "color": C_MGN,
     },
 }
