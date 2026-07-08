@@ -92,6 +92,13 @@ esp_err_t purr_kernel_keyboard_set_backlight(uint8_t brightness);
 void purr_kernel_ui_lock(void);
 void purr_kernel_ui_unlock(void);
 
+// Call once per iteration from the active UI backend's own render/pump
+// loop (right by its purr_kernel_ui_lock()/unlock() pair) — lets the
+// kernel's health watchdog detect a fully hung UI task (one that's stopped
+// pumping entirely, e.g. deadlocked on a lock it'll never release) and
+// trigger purr_crash_guard's hang path. See purr_crash_guard.h.
+void purr_kernel_ui_heartbeat(void);
+
 // ── System info ───────────────────────────────────────────────────────────────
 
 uint32_t purr_kernel_free_ram(void);
@@ -197,9 +204,20 @@ void purr_kernel_set_boot_ready(bool v);
 
 // ── Panic ─────────────────────────────────────────────────────────────────────
 
-// Kernel panic — logs reason to serial, draws panic screen if display is up,
-// then halts. Never returns.
+// Kernel panic — logs reason to serial, draws a red panic screen if display
+// is up, holds 10s, then reboots. Thin wrapper over purr_kernel_panic_ex()
+// with recoverable=false — this is the fatal path, used for Layer-0/P1
+// REQUIRED failures. Never returns.
 void __attribute__((noreturn)) purr_kernel_panic(const char *reason);
+
+// Full panic screen. recoverable=false is identical to purr_kernel_panic()
+// above (entity_name ignored). recoverable=true draws a blue "SUBSYSTEM
+// DISABLED" screen instead — no auto-reboot, no dismiss, stays up until the
+// user holds the on-screen reset target — used by purr_crash_guard.c once a
+// P2/P3 entity (module or app) hits its strike threshold, or hangs outright.
+// entity_name is shown on screen and included in the log-dump; may be NULL.
+// Never returns.
+void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool recoverable, const char *entity_name);
 
 #ifdef __cplusplus
 }

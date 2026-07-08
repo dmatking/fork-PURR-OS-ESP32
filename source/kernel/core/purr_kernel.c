@@ -11,6 +11,7 @@
 //      any additional optional modules not present on flash
 
 #include "purr_kernel.h"
+#include "purr_crash_guard.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
@@ -160,49 +161,267 @@ static int find_module_slot_by_name(const char *name) {
 }
 
 // ── Panic ─────────────────────────────────────────────────────────────────────
+//
+// Two variants, sharing one text-rendering core built ONLY on
+// catcall_display_t::fill_rect() and catcall_touch_t (the only primitives
+// those catcalls expose) — deliberately no LVGL/MiniWin/app_manager
+// dependency, since the whole point of both screens is that they must
+// still work when the thing that's broken is a P2/P3 module, including the
+// active UI backend itself. See purr_crash_guard.h for the guard that
+// decides when the recoverable (blue) variant fires.
+//
+// Font: a compact 3x5 dot-matrix, uppercase + digits + a minimal
+// punctuation set only (not the full mixed-case ASCII range) — hand-
+// authoring bitmap glyph data carries real risk of unnoticed bit errors
+// with no way to visually proof each one before flashing, so the character
+// set is deliberately kept small and every string is force-uppercased
+// before rendering. Unsupported characters fall back to a blank glyph.
 
+typedef struct { char c; uint8_t rows[5]; } panic_glyph_t;
 
-void __attribute__((noreturn)) purr_kernel_panic(const char *reason)
+// Each row's 3 bits = left,mid,right column (bit2=left). Every entry below
+// was authored from an explicit 3x5 on/off grid, not transcribed from
+// memory of an existing font table.
+static const panic_glyph_t PANIC_FONT[] = {
+    {' ', {0x0,0x0,0x0,0x0,0x0}},
+    {'!', {0x2,0x2,0x2,0x0,0x2}},
+    {'(', {0x3,0x4,0x4,0x4,0x3}},
+    {')', {0x6,0x1,0x1,0x1,0x6}},
+    {',', {0x0,0x0,0x0,0x2,0x4}},
+    {'-', {0x0,0x0,0x7,0x0,0x0}},
+    {'.', {0x0,0x0,0x0,0x0,0x2}},
+    {'/', {0x1,0x1,0x2,0x4,0x4}},
+    {':', {0x0,0x2,0x0,0x2,0x0}},
+    {'_', {0x0,0x0,0x0,0x0,0x7}},
+    {'0', {0x7,0x5,0x5,0x5,0x7}},
+    {'1', {0x2,0x6,0x2,0x2,0x7}},
+    {'2', {0x7,0x1,0x7,0x4,0x7}},
+    {'3', {0x7,0x1,0x7,0x1,0x7}},
+    {'4', {0x5,0x5,0x7,0x1,0x1}},
+    {'5', {0x7,0x4,0x7,0x1,0x7}},
+    {'6', {0x7,0x4,0x7,0x5,0x7}},
+    {'7', {0x7,0x1,0x2,0x2,0x2}},
+    {'8', {0x7,0x5,0x7,0x5,0x7}},
+    {'9', {0x7,0x5,0x7,0x1,0x7}},
+    {'A', {0x2,0x5,0x7,0x5,0x5}},
+    {'B', {0x6,0x5,0x6,0x5,0x6}},
+    {'C', {0x3,0x4,0x4,0x4,0x3}},
+    {'D', {0x6,0x5,0x5,0x5,0x6}},
+    {'E', {0x7,0x4,0x7,0x4,0x7}},
+    {'F', {0x7,0x4,0x7,0x4,0x4}},
+    {'G', {0x3,0x4,0x5,0x5,0x3}},
+    {'H', {0x5,0x5,0x7,0x5,0x5}},
+    {'I', {0x7,0x2,0x2,0x2,0x7}},
+    {'J', {0x1,0x1,0x1,0x5,0x2}},
+    {'K', {0x5,0x5,0x6,0x5,0x5}},
+    {'L', {0x4,0x4,0x4,0x4,0x7}},
+    {'M', {0x5,0x7,0x5,0x5,0x5}},
+    {'N', {0x5,0x7,0x7,0x7,0x5}},
+    {'O', {0x7,0x5,0x5,0x5,0x7}},
+    {'P', {0x7,0x5,0x7,0x4,0x4}},
+    {'Q', {0x7,0x5,0x5,0x7,0x1}},
+    {'R', {0x7,0x5,0x6,0x5,0x5}},
+    {'S', {0x3,0x4,0x7,0x1,0x6}},
+    {'T', {0x7,0x2,0x2,0x2,0x2}},
+    {'U', {0x5,0x5,0x5,0x5,0x7}},
+    {'V', {0x5,0x5,0x5,0x5,0x2}},
+    {'W', {0x5,0x5,0x7,0x7,0x5}},
+    {'X', {0x5,0x5,0x2,0x5,0x5}},
+    {'Y', {0x5,0x5,0x2,0x2,0x2}},
+    {'Z', {0x7,0x1,0x2,0x4,0x7}},
+};
+#define PANIC_FONT_COUNT (sizeof(PANIC_FONT) / sizeof(PANIC_FONT[0]))
+
+#define PANIC_SCALE   4
+#define PANIC_CHAR_W  (3 * PANIC_SCALE + PANIC_SCALE)   // glyph + 1-cell gap
+#define PANIC_CHAR_H  (5 * PANIC_SCALE + PANIC_SCALE)   // glyph + 1-line gap
+
+static const panic_glyph_t *panic_glyph_for(char c)
 {
-    // Always log to serial first — display may not be up
-    ESP_LOGE(TAG, "=== KERNEL PANIC ===");
-    ESP_LOGE(TAG, "%s", reason);
+    for (size_t i = 0; i < PANIC_FONT_COUNT; i++)
+        if (PANIC_FONT[i].c == c) return &PANIC_FONT[i];
+    return &PANIC_FONT[0];   // blank/unsupported
+}
+
+static void panic_draw_char(const catcall_display_t *disp, int x, int y, char c, uint16_t color)
+{
+    char up = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+    const panic_glyph_t *g = panic_glyph_for(up);
+    for (int row = 0; row < 5; row++) {
+        uint8_t bits = g->rows[row];
+        for (int col = 0; col < 3; col++) {
+            if (bits & (0x4u >> col)) {
+                disp->fill_rect(x + col * PANIC_SCALE, y + row * PANIC_SCALE,
+                                 PANIC_SCALE, PANIC_SCALE, color);
+            }
+        }
+    }
+}
+
+// Left-aligned at (x,y), hard-wraps every max_chars_per_line characters
+// (character-count wrap, not word-aware — fine for short diagnostic
+// strings) and on '\n'. Returns the y just below the last line, so callers
+// can stack further text underneath.
+static int panic_draw_string(const catcall_display_t *disp, int x, int y,
+                              const char *s, uint16_t color, int max_chars_per_line)
+{
+    if (max_chars_per_line < 1) max_chars_per_line = 1;
+    int col = 0, cx = x, cy = y;
+    for (const char *p = s; s && *p; p++) {
+        if (*p == '\n' || col >= max_chars_per_line) {
+            cx = x; cy += PANIC_CHAR_H; col = 0;
+            if (*p == '\n') continue;
+        }
+        panic_draw_char(disp, cx, cy, *p, color);
+        cx += PANIC_CHAR_W;
+        col++;
+    }
+    return cy + PANIC_CHAR_H;
+}
+
+static void panic_dump_logs(const char *entity_name, const char *reason)
+{
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+        "PURR OS crash dump\n"
+        "entity: %s\n"
+        "reason: %s\n"
+        "uptime_ms: %llu\n"
+        "free_internal: %u\n"
+        "free_psram: %u\n"
+        "reset_reason: %d\n",
+        entity_name ? entity_name : "(unknown)",
+        reason ? reason : "(unknown)",
+        (unsigned long long)purr_kernel_uptime_ms(),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        (int)esp_reset_reason());
+
+    ESP_LOGE(TAG, "%s", buf);
+
+    // SD if present (matches "both, and serial only if no SD card"), always
+    // also to serial above regardless.
+    if (purr_kernel_sd_available()) {
+        char path[64];
+        snprintf(path, sizeof(path), "/sdcard/crashlog_%llu.txt",
+                 (unsigned long long)purr_kernel_uptime_ms());
+        FILE *f = fopen(path, "w");
+        if (f) {
+            fwrite(buf, 1, strlen(buf), f);
+            fclose(f);
+            ESP_LOGI(TAG, "crash dump written to %s", path);
+        } else {
+            ESP_LOGW(TAG, "crash dump: failed to open %s for write", path);
+        }
+    }
+}
+
+void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool recoverable, const char *entity_name)
+{
+    // Always log to serial first — display may not be up.
+    ESP_LOGE(TAG, "=== KERNEL PANIC%s ===", recoverable ? " (recoverable)" : "");
+    if (entity_name && entity_name[0]) ESP_LOGE(TAG, "entity: %s", entity_name);
+    ESP_LOGE(TAG, "%s", reason ? reason : "(no reason given)");
     ESP_LOGE(TAG, "System halted.");
 
-    // Best-effort panic screen if display catcall is registered
     const catcall_display_t *disp = s_display;
+    uint16_t w = 320, h = 240;
     if (disp) {
         display_info_t info = {0};
         if (disp->get_info) disp->get_info(&info);
-        uint16_t w = info.width  ? info.width  : 320;
-        uint16_t h = info.height ? info.height : 240;
+        w = info.width  ? info.width  : 320;
+        h = info.height ? info.height : 240;
 
-        // Fill red background
-        if (disp->fill_rect) {
-            disp->fill_rect(0, 0, w, h, 0xD800u); // red
+        uint16_t bg = recoverable ? 0x001Fu /* blue */ : 0xD800u /* red */;
+        disp->fill_rect(0, 0, w, h, bg);
+        disp->fill_rect(0, 0, w, 24, 0xFFFFu);   // white header bar
 
-            // White header bar
-            disp->fill_rect(0, 0, w, 24, 0xFFFFu);
+        int max_cols = (int)((w - 8) / PANIC_CHAR_W);
+        int y = 4;
+        y = panic_draw_string(disp, 4, y,
+                               recoverable ? "SUBSYSTEM DISABLED" : "PURR OS - KERNEL PANIC",
+                               0x0000u, max_cols);
+        y += PANIC_SCALE;
+        if (entity_name && entity_name[0]) {
+            y = panic_draw_string(disp, 4, y, entity_name, 0xFFFFu, max_cols);
+        }
+        y = panic_draw_string(disp, 4, y, reason ? reason : "UNKNOWN REASON", 0xFFFFu, max_cols);
+    }
 
-            // Draw "PURR OS — KERNEL PANIC" text is best-effort; without a
-            // fully populated font table we rely on the serial log above.
-            // A production build would have the full font here.
-            //
-            // For now: draw a distinctive striped pattern so the user knows
-            // the device has halted and it isn't just a blank screen.
-            for (int y = 32; y < h - 8; y += 16) {
-                disp->fill_rect(0, y, w, 8, 0xFFFFu); // white stripe
+    if (!recoverable) {
+        // Fatal — same shape the historic KITT 0.6.0 panic screen used:
+        // hold long enough to actually read, then reboot. purr_kernel_reboot()
+        // (below) already exists and is reused, not reimplemented.
+        for (int s = 10; s > 0; s--) {
+            if (disp) {
+                char line[24];
+                snprintf(line, sizeof(line), "RESTARTING IN %d...", s);
+                disp->fill_rect(4, h - 28, w - 8, 24, 0xD800u);
+                panic_draw_string(disp, 4, h - 28, line, 0xFFFFu, (int)((w - 8) / PANIC_CHAR_W));
             }
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        purr_kernel_reboot();
+    }
 
-            // Bottom bar with reason truncated to ~40 chars
-            disp->fill_rect(0, h - 20, w, 20, 0x0000u);
+    // Recoverable (blue): no auto-reboot, no dismiss — sits here until the
+    // user forces a reset, per design. Raw touch polling only (no
+    // LVGL/MiniWin dependency — must work even when the disabled entity IS
+    // the active UI backend).
+    int btn_h   = 48;
+    int btn_y   = h - btn_h - 8;
+    int dump_x  = 4;
+    int dump_w  = (w - 12) / 2;
+    int reset_x = dump_x + dump_w + 4;
+    int reset_w = dump_w;
+
+    if (disp) {
+        disp->fill_rect(dump_x, btn_y, dump_w, btn_h, 0x0000u);
+        panic_draw_string(disp, dump_x + 4, btn_y + 6, "TAP:DUMP LOGS", 0xFFFFu,
+                           (int)((dump_w - 8) / PANIC_CHAR_W));
+        disp->fill_rect(reset_x, btn_y, reset_w, btn_h, 0x0000u);
+        panic_draw_string(disp, reset_x + 4, btn_y + 6, "HOLD:RESET", 0xFFFFu,
+                           (int)((reset_w - 8) / PANIC_CHAR_W));
+    }
+
+    const catcall_touch_t *touch = s_touch;
+    uint32_t hold_start_ms = 0;
+    bool holding_reset = false;
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        if (!touch || !touch->is_pressed || !touch->is_pressed()) {
+            holding_reset = false;
+            continue;
+        }
+        uint16_t tx = 0, ty = 0;
+        if (touch->read_point) touch->read_point(&tx, &ty);
+
+        bool in_reset = (int)tx >= reset_x && (int)tx < reset_x + reset_w &&
+                         (int)ty >= btn_y  && (int)ty < btn_y + btn_h;
+        bool in_dump  = (int)tx >= dump_x  && (int)tx < dump_x + dump_w &&
+                         (int)ty >= btn_y  && (int)ty < btn_y + btn_h;
+
+        if (in_reset) {
+            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (!holding_reset) { holding_reset = true; hold_start_ms = now_ms; }
+            else if (now_ms - hold_start_ms >= 2000) {
+                purr_kernel_reboot();
+            }
+        } else {
+            holding_reset = false;
+            if (in_dump) {
+                panic_dump_logs(entity_name, reason);
+                // Debounce: wait for release so one tap doesn't dump repeatedly.
+                while (touch->is_pressed && touch->is_pressed()) vTaskDelay(pdMS_TO_TICKS(50));
+            }
         }
     }
+}
 
-    // Halt
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(10000));
-    }
+void __attribute__((noreturn)) purr_kernel_panic(const char *reason)
+{
+    purr_kernel_panic_ex(reason, /*recoverable=*/false, NULL);
 }
 
 // ── Module header peek (no init, no registration) ─────────────────────────────
@@ -255,8 +474,20 @@ static int load_one_static(const purr_module_header_t *hdr)
     // but their init() is NOT called at boot — the app_manager launches them.
     bool call_init = (hdr->module_type != PURR_MOD_APP);
 
+    // Crash-loop guard applies to P2/P3 only — P1 REQUIRED already panics
+    // immediately on the very first failure (below, in the caller), so
+    // there's no "loop" to catch there; a P1 module that keeps failing
+    // stops the boot outright every time regardless of this guard.
+    bool guarded = call_init && hdr->load_priority != PURR_PRIORITY_REQUIRED;
+    if (guarded && purr_crash_guard_is_disabled(hdr->name)) {
+        ESP_LOGW(TAG, "static module '%s' disabled after repeated failures — skipping", hdr->name);
+        return -1;
+    }
+
     if (call_init && hdr->init) {
+        if (guarded) purr_crash_guard_mark_start(hdr->name);
         int rc = hdr->init();
+        if (guarded) purr_crash_guard_mark_stop(hdr->name, rc == 0, "init() failed");
         if (rc != 0) {
             ESP_LOGE(TAG, "static module '%s' init() returned %d", hdr->name, rc);
             return -1;
@@ -635,13 +866,63 @@ static health_entry_t   s_health[PURR_HEALTH_MAX];
 static int               s_health_count = 0;
 static TaskHandle_t      s_health_watchdog_task = NULL;
 
+// Last uptime_ms() a UI backend's own pump loop called purr_kernel_ui_heartbeat()
+// — 0 until the first call ever happens. See the staleness check in
+// health_watchdog_task() below and purr_crash_guard.h for the full design.
+static uint64_t s_ui_last_heartbeat_ms = 0;
+
 #define HEALTH_WATCHDOG_POLL_MS 2000UL
+#define UI_HANG_THRESHOLD_MS    6000UL   // ~3 missed polls
+
+static void health_watchdog_task(void *arg);
+
+static void ensure_health_watchdog_started(void)
+{
+    // PSRAM-backed: this task only calls is_alive()/heartbeat-staleness
+    // checks + notify()/panic, never touches NVS/flash directly, so it's
+    // exempt from the cache-disable-crash constraint documented at
+    // app_manager.c's static-stack exception. Lazily started (by whichever
+    // of purr_kernel_health_register()/purr_kernel_ui_heartbeat() runs
+    // first) rather than unconditionally at kernel boot — some
+    // builds/configs never need either.
+    if (!s_health_watchdog_task) {
+        xTaskCreateWithCaps(health_watchdog_task, "health_wd", 3072, NULL, 2,
+                             &s_health_watchdog_task, MALLOC_CAP_SPIRAM);
+    }
+}
+
+void purr_kernel_ui_heartbeat(void)
+{
+    s_ui_last_heartbeat_ms = purr_kernel_uptime_ms();
+    ensure_health_watchdog_started();
+}
 
 static void health_watchdog_task(void *arg)
 {
     (void)arg;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(HEALTH_WATCHDOG_POLL_MS));
+
+        // UI-hang detection — feeds purr_crash_guard's hang path. The
+        // render/pump loops (cupcake_task, MiniWin's pump task) have no
+        // natural per-iteration timeout wrapper the way app tasks get
+        // from app_manager_stop()'s semaphore-wait — they're designed to
+        // loop forever, so a genuine deadlock (confirmed live: MiniWin's
+        // own close-icon handling could freeze the whole UI this way
+        // before Part A's fix) has nothing else to catch it. Only checked
+        // once a UI backend is registered AND has heartbeated at least
+        // once — a headless/serial-only build, or the brief window before
+        // the UI task's very first loop iteration, must not trip this.
+        const catcall_ui_t *ui = purr_kernel_ui();
+        if (ui && s_ui_last_heartbeat_ms != 0) {
+            uint64_t now = purr_kernel_uptime_ms();
+            if (now - s_ui_last_heartbeat_ms > UI_HANG_THRESHOLD_MS) {
+                purr_crash_guard_mark_hang(ui->name, "UI TASK UNRESPONSIVE");
+                // Loops forever inside purr_kernel_panic_ex() (blue,
+                // recoverable) — nothing after this point runs again
+                // this boot.
+            }
+        }
 
         // TEMPORARY diagnostic — tracking a reported fast internal-DRAM
         // drain ("23 bytes free... high memory pressure out of the gate").
@@ -702,16 +983,7 @@ void purr_kernel_health_register(const char *name, purr_health_check_fn is_alive
     h->is_alive  = is_alive;
     h->was_alive = is_alive();
 
-    // Lazily started on first registration rather than unconditionally at
-    // kernel boot — most builds/tests never register anything, and this
-    // avoids spending a task+stack on devices/configs with nothing to watch.
-    // PSRAM-backed: this task only calls is_alive() callbacks + notify(),
-    // never touches NVS/flash, so it's exempt from the cache-disable-crash
-    // constraint documented at app_manager.c's static-stack exception.
-    if (!s_health_watchdog_task) {
-        xTaskCreateWithCaps(health_watchdog_task, "health_wd", 3072, NULL, 2,
-                             &s_health_watchdog_task, MALLOC_CAP_SPIRAM);
-    }
+    ensure_health_watchdog_started();
 }
 
 int purr_kernel_health_count(void) { return s_health_count; }

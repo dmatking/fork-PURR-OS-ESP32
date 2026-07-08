@@ -24,6 +24,7 @@
 #include <stdio.h>
 
 extern void miniwin_win_register(void);
+extern void miniwin_win_process_pending_closes(void);
 
 #include "miniwin_cursor.h"
 #include "miniwin_keyboard.h"
@@ -238,6 +239,12 @@ static void miniwin_task(void *arg)
         // didn't.
         purr_kernel_ui_lock();
         mw_process_message();
+        // Runs any close-icon teardowns queued by MW_WINDOW_REMOVED_MESSAGE
+        // this iteration — deliberately from here, not from inside
+        // mw_process_message()'s own callback dispatch. See
+        // miniwin_win.c's win_message_func()/miniwin_win_process_pending_
+        // closes() comments for why (MiniWin's own reentrancy guard).
+        miniwin_win_process_pending_closes();
         miniwin_keyboard_poll();  // drain all inputs: cursor gets pointer/click, keys → focused win
         miniwin_cursor_poll();    // redraw cursor on top of frame if position changed
 
@@ -253,6 +260,7 @@ static void miniwin_task(void *arg)
 #endif
         }
         purr_kernel_ui_unlock();
+        purr_kernel_ui_heartbeat();
 
         // taskYIELD() only hands off to an equal/higher-priority READY task —
         // with nothing else ready it just spins straight back here, taking

@@ -3,6 +3,7 @@
 #include "app_manager.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "../../kernel/core/purr_module.h"
+#include "../../kernel/core/purr_crash_guard.h"
 #include "../../kernel/catcalls/purr_win.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -265,6 +266,13 @@ static const char *scan_purr_sig(const char *code) {
 
 static int launch_meow(app_entry_t *app, int idx)
 {
+    if (purr_crash_guard_is_disabled(app->name)) {
+        app->state = APP_STATE_ERROR;
+        snprintf(app->error, sizeof(app->error), "disabled after repeated crashes");
+        ESP_LOGW(TAG, "app '%s' disabled after repeated crashes — not launching", app->name);
+        return -1;
+    }
+
     const purr_module_header_t *lua_rt = purr_kernel_get_module("lua_runtime");
     if (!lua_rt) {
         app->state = APP_STATE_ERROR;
@@ -413,6 +421,7 @@ static int launch_meow(app_entry_t *app, int idx)
         s_meow_pending_len  = 0;
         return -1;
     }
+    purr_crash_guard_mark_start(app->name);
     app->state = APP_STATE_RUNNING;
     return 0;
 }
@@ -455,6 +464,13 @@ static void native_task(void *arg) {
 
 static int launch_native(app_entry_t *app, int idx)
 {
+    if (purr_crash_guard_is_disabled(app->name)) {
+        app->state = APP_STATE_ERROR;
+        snprintf(app->error, sizeof(app->error), "disabled after repeated crashes");
+        ESP_LOGW(TAG, "app '%s' disabled after repeated crashes — not launching", app->name);
+        return -1;
+    }
+
     const purr_module_header_t *mod = purr_kernel_get_module(app->name);
     if (!mod) {
         // App not pre-linked — report clearly so the user knows what to do
@@ -553,6 +569,7 @@ static int launch_native(app_entry_t *app, int idx)
             return -1;
         }
     }
+    purr_crash_guard_mark_start(app->name);
     app->state = APP_STATE_RUNNING;
     return 0;
 }
@@ -616,16 +633,25 @@ void app_manager_stop(int idx)
 
     app_task_ctx_t *ctx = &s_ctxs[idx];
 
-    // Signal the module to clean up (deinit) then wait for task to finish
-    if (ctx->mod && ctx->mod->deinit) {
-        ctx->mod->deinit();
-    }
-
-    // A successful semaphore take proves native_task()/meow_task() already
-    // ran to completion and self-deleted (vTaskDelete(NULL)) — ctx->task is
-    // then a stale handle whose TCB may already be reclaimed/reused by an
-    // unrelated task, so it must not be touched. Only a genuine timeout means
-    // the task is still alive and actually needs force-deleting.
+    // Wait for the task to finish (or force-kill it) BEFORE calling
+    // deinit() — deinit() (e.g. lua_runtime_deinit()'s lua_close()) must
+    // never run while this app's own task might still be executing, or it
+    // frees/invalidates state (the Lua interpreter, in lua_runtime's case)
+    // out from under a task still actively using it. Confirmed live: this
+    // ordering (deinit() first, wait/kill second) is what let a looping
+    // .meow script's close button free a still-running lua_State, and —
+    // under MiniWin specifically — corrupt state badly enough to eventually
+    // trip an unrecoverable internal assert while nested inside the UI
+    // lock, freezing the whole UI. Same underlying bug is the likely cause
+    // of an earlier, previously-unexplained clock.meow crash under Cupcake
+    // too. A successful semaphore take proves native_task()/meow_task()
+    // already ran to completion and self-deleted (vTaskDelete(NULL)) —
+    // ctx->task is then a stale handle whose TCB may already be
+    // reclaimed/reused by an unrelated task, so it must not be touched.
+    // Only a genuine timeout means the task is still alive and actually
+    // needs force-deleting — and only once it's confirmed to be truly gone
+    // (self-completed or force-deleted) is it ever safe to call deinit().
+    bool hung = false;
     if (ctx->done) {
         if (xSemaphoreTake(ctx->done, pdMS_TO_TICKS(2000)) == pdTRUE) {
             ctx->task = NULL;
@@ -639,10 +665,19 @@ void app_manager_stop(int idx)
             if (ctx->static_stack) vTaskDelete(ctx->task);
             else                   vTaskDeleteWithCaps(ctx->task);
             ctx->task = NULL;
+            hung = true;
         }
         vSemaphoreDelete(ctx->done);
         ctx->done = NULL;
     }
+
+    // Now safe: the task is guaranteed to no longer be running.
+    if (ctx->mod && ctx->mod->deinit) {
+        ctx->mod->deinit();
+    }
+
+    if (hung) purr_crash_guard_mark_hang(app->name, "TASK UNRESPONSIVE");
+    else      purr_crash_guard_mark_stop(app->name, /*ok=*/true, NULL);
 
     app->state = APP_STATE_STOPPED;
     ESP_LOGI(TAG, "stopped: %s", app->name);

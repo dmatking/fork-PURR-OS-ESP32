@@ -58,6 +58,7 @@ static void cupcake_task(void *arg)
         lv_timer_handler();
         if (++tick % 40 == 0) cupcake_ui_tick();  // ~200ms
         purr_kernel_ui_unlock();
+        purr_kernel_ui_heartbeat();
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }

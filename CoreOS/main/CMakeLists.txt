@@ -57,6 +57,7 @@ idf_component_register(
     SRCS
         ${BOOT_SRCS}
         ${KERNEL_DIR}/purr_kernel.c
+        ${KERNEL_DIR}/purr_crash_guard.c
         ${GLUE_DIR}/purr_device_glue.c
     INCLUDE_DIRS
         ${KERNEL_DIR}

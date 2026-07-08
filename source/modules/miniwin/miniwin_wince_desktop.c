@@ -115,6 +115,8 @@ static bool s_smenu_pressed = false;
 
 mw_handle_t wce_desktop_handle(void) { return s_desktop_handle; }
 
+int16_t wce_taskbar_height(void) { return TASKBAR_H; }
+
 static int programs_count(void) {
     int n = app_manager_count();
     if (n > SMENU_MAX_PROGRAMS) n = SMENU_MAX_PROGRAMS;

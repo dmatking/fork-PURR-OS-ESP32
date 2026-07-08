@@ -27,7 +27,7 @@ bt          = true
 lora        = "sx1262"
 
 [modules]
-ui          = "cupcake"
+ui          = "miniwin"
 app_manager = "app_manager"
 mesh        = "meshtastic"
 lua         = "lua_runtime"

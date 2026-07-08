@@ -14,6 +14,7 @@
 //   MiniWin, app_manager, SX1276 LoRa, generic_nmea GPS
 
 #include "purr_kernel.h"
+#include "purr_crash_guard.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
 #include "esp_heap_caps.h"
@@ -457,6 +458,14 @@ void app_main(void)
 #endif
 
     ESP_LOGI(TAG, "baked-in drivers ready");
+
+    // Checked here — after display/touch (Layer 0) are up, so the blue
+    // recoverable panic screen can actually render/accept touch if this
+    // trips, but before any P2/P3 module (including the UI backend
+    // itself) gets a chance to load. See purr_crash_guard.h for the full
+    // design: this correlates an unclean reset (a real hard crash) against
+    // a breadcrumb left over from the previous boot.
+    purr_crash_guard_check_reset_reason();
 
     // ── Phase 1: plug-and-play modules ───────────────────────────────────────
     //

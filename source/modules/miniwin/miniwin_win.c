@@ -72,6 +72,17 @@ static int16_t        s_cursor_y[MAX_WINS];
 static layout_state_t s_layout[MAX_WINS];
 static purr_wid_t     s_ta_focused[MAX_WINS];   // wid of focused textarea per window, 0 = none
 
+// Windows whose close-icon was tapped this pump iteration, awaiting their
+// close callback + mw_win_destroy() from a call site that ISN'T nested
+// inside MiniWin's own mw_remove_window()/`reentered` re-entrancy guard —
+// see win_message_func()'s MW_WINDOW_REMOVED_MESSAGE handler and
+// miniwin_win_process_pending_closes()'s own comment for why. 4 slots is
+// generous — closes don't happen faster than the ~5ms pump loop can drain
+// this list.
+#define MAX_PENDING_CLOSES 4
+static purr_win_t s_pending_closes[MAX_PENDING_CLOSES];
+static int        s_pending_close_count = 0;
+
 static purr_win_t alloc_win(mw_handle_t h) {
     for (int i = 0; i < MAX_WINS; i++)
         if (!s_wins[i].used) {
@@ -213,11 +224,52 @@ static void win_message_func(const mw_message_t *msg)
         // this). Only the bottom-up case needs handling — the app never
         // asked to close, so nobody else is going to run its close callback
         // or free our per-window bookkeeping unless we do it here.
+        //
+        // Deliberately NOT running the close callback (and therefore
+        // app_manager_stop()'s whole teardown chain) synchronously right
+        // here: mw_remove_window() is holding its own file-static
+        // `reentered` re-entrancy guard for the duration of this dispatch
+        // (MiniWin/miniwin.c), and a multi-window app's deinit() (e.g.
+        // meshchat.c closing more than one window) would make a NESTED
+        // mw_remove_window() call for its other window(s) while that guard
+        // is still held — MiniWin silently no-ops the nested call, leaking
+        // that window's pool slot forever. Confirmed live: enough leaked
+        // slots eventually exhaust MiniWin's fixed-size window table and
+        // trip MW_ASSERT("Bad window handle"), which ends in a bare,
+        // unescapable while(true){} on the task holding
+        // purr_kernel_ui_lock() — freezing the entire UI. Deferring the
+        // actual teardown to run from miniwin_module.c's pump loop, AFTER
+        // this dispatch (and its reentered guard) has fully unwound, means
+        // any further purr_win_destroy() calls a close callback makes are
+        // fresh, top-level mw_remove_window() calls instead of nested ones.
         mw_handle_t wh  = msg->recipient_handle;
         purr_win_t  win = win_index_for_handle(wh);
         if (win == 0 || s_wins[win-1].torn_down) return;
 
         s_wins[win-1].torn_down = true;
+        if (s_pending_close_count < MAX_PENDING_CLOSES) {
+            s_pending_closes[s_pending_close_count++] = win;
+        }
+    }
+}
+
+// Drains windows queued by the MW_WINDOW_REMOVED_MESSAGE handler above —
+// must be called from a top-level context (miniwin_module.c's pump loop,
+// right after mw_process_message()), never from inside any MiniWin-internal
+// callback dispatch. Snapshot-and-clear before iterating: a close callback
+// can itself synchronously queue further closes (a multi-window app's
+// deinit()), which must not be processed by / interleaved with this same
+// drain pass.
+void miniwin_win_process_pending_closes(void) {
+    if (s_pending_close_count == 0) return;
+    purr_win_t local[MAX_PENDING_CLOSES];
+    int n = s_pending_close_count;
+    memcpy(local, s_pending_closes, sizeof(purr_win_t) * (size_t)n);
+    s_pending_close_count = 0;
+
+    for (int i = 0; i < n; i++) {
+        purr_win_t win = local[i];
+        if (win < 1 || win > MAX_WINS || !s_wins[win-1].used) continue;
         purr_win_cb_t cb   = s_wins[win-1].close_cb;
         void         *user = s_wins[win-1].close_user;
         if (cb) cb((purr_wid_t)win, PURR_EVENT_CLICKED, user);
@@ -226,7 +278,10 @@ static void win_message_func(const mw_message_t *msg)
         // no-op by then — mw_win_destroy() guards on the pool slot's `used`
         // flag. If no callback was registered at all (a dialog with no
         // purr_win_on_close call), this is what actually frees the heap
-        // storage and pool slot instead of leaking them forever.
+        // storage and pool slot instead of leaking them forever. torn_down
+        // is already true (set synchronously above), so this correctly
+        // skips the redundant mw_remove_window() call — MiniWin's own
+        // close-icon handling already did that part, bottom-up.
         mw_win_destroy(win);
     }
 }
@@ -234,7 +289,17 @@ static void win_message_func(const mw_message_t *msg)
 // ── Window ────────────────────────────────────────────────────────────────────
 
 static purr_win_t mw_win_create(const char *title) {
-    mw_util_rect_t r = { 0, 0, mw_hal_lcd_get_display_width(), mw_hal_lcd_get_display_height() };
+    int16_t h_disp = (int16_t)mw_hal_lcd_get_display_height();
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+    // Leave the taskbar strip out of every app window's own rect — see
+    // wce_taskbar_height()'s comment for why this is what actually keeps
+    // the taskbar/Start button/wallpaper desktop visible (and multiple
+    // apps switchable via taskbar buttons) instead of a maximized app
+    // window's full-screen rect blotting out everything beneath it,
+    // desktop included, at the highest z-order.
+    h_disp -= wce_taskbar_height();
+#endif
+    mw_util_rect_t r = { 0, 0, mw_hal_lcd_get_display_width(), h_disp };
     mw_handle_t h = mw_add_window(&r, title,
         win_paint_func, win_message_func,
         NULL, 0,
