@@ -6,6 +6,9 @@
 #include "nvs_flash.h"
 #include "esp_system.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -117,10 +120,76 @@ void purr_crash_guard_mark_stop(const char *entity_name, bool ok, const char *re
     record_strike_and_maybe_panic(entity_name, reason, /*force_panic=*/false);
 }
 
+// ── Safe worker task for mark_hang() ────────────────────────────────────────
+//
+// mark_start()/mark_stop()/is_disabled() are only ever called from confirmed
+// internal-RAM-stack tasks (app_manager_stop(), the static module loader,
+// launch_native()/launch_meow() — all driven from the active UI backend's
+// own pump task, which uses a plain internal-stack xTaskCreate()), so they
+// touch NVS directly on the caller's own stack.
+//
+// mark_hang() is different: it's reachable from genuinely anywhere,
+// including MiniWin's own MW_ASSERT handler
+// (hal/purr_os/miniwin_debug_purr.c) — which can itself fire on a
+// PSRAM-backed stack (e.g. a looping .meow script's meow_task, calling
+// purr_win_*() into MiniWin's internals). Touching flash/NVS briefly
+// disables the cache; a PSRAM-stack task continuing to execute through
+// that window is a confirmed hard crash
+// (esp_task_stack_is_sane_cache_disabled()) on this codebase — live,
+// during exactly this scenario, before this fix existed. So mark_hang()
+// never touches NVS on the caller's own stack: it hands off to a
+// dedicated, statically-allocated (guaranteed internal-RAM) worker task
+// and parks the caller — whose own state is suspect by definition once
+// this is called anyway, so it must not continue running normally, but
+// must also never touch flash itself again.
+
+#define WORKER_STACK_WORDS 8192   // matches app_manager.c's STATIC_STACK_SIZE precedent for flash-touching static-stack tasks
+static StackType_t  s_worker_stack[WORKER_STACK_WORDS];
+static StaticTask_t s_worker_tcb;
+static QueueHandle_t s_worker_queue = NULL;
+
+typedef struct {
+    char entity_name[32];
+    char reason[48];
+} hang_msg_t;
+
+static void worker_task(void *arg)
+{
+    (void)arg;
+    hang_msg_t msg;
+    while (1) {
+        if (xQueueReceive(s_worker_queue, &msg, portMAX_DELAY) == pdTRUE) {
+            clear_breadcrumb();
+            record_strike_and_maybe_panic(msg.entity_name, msg.reason, /*force_panic=*/true);
+            // noreturn in practice — purr_kernel_panic_ex() loops until the
+            // user forces a reset. Nothing after this point ever runs.
+        }
+    }
+}
+
+static void ensure_worker_started(void)
+{
+    if (!s_worker_queue) s_worker_queue = xQueueCreate(4, sizeof(hang_msg_t));
+    static bool started = false;
+    if (!started && s_worker_queue) {
+        xTaskCreateStatic(worker_task, "crash_wd", WORKER_STACK_WORDS, NULL, 10,
+                           s_worker_stack, &s_worker_tcb);
+        started = true;
+    }
+}
+
 void purr_crash_guard_mark_hang(const char *entity_name, const char *reason)
 {
-    clear_breadcrumb();
-    record_strike_and_maybe_panic(entity_name, reason, /*force_panic=*/true);
+    ensure_worker_started();
+    hang_msg_t msg = {0};
+    strncpy(msg.entity_name, entity_name ? entity_name : "?", sizeof(msg.entity_name) - 1);
+    strncpy(msg.reason, reason ? reason : "", sizeof(msg.reason) - 1);
+    if (s_worker_queue) {
+        xQueueSend(s_worker_queue, &msg, portMAX_DELAY);
+    }
+    // Park here — see the header comment above for why this task must not
+    // continue running normally, nor touch flash itself.
+    while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
 }
 
 bool purr_crash_guard_is_disabled(const char *entity_name)
