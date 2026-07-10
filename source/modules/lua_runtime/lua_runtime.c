@@ -181,6 +181,35 @@ static const char *lua_module_type_name(uint8_t type) {
     }
 }
 
+// kitt.breadcrumb()/klog_tail() — kernel-extension surface for .kitten
+// scripts: read the kernel's log ring buffer and mark a custom diagnostic
+// breadcrumb, the same primitives this session's C-level debugging used
+// (purr_kernel_klog_tail(), purr_kernel_ui_breadcrumb()), now scriptable
+// instead of requiring a firmware rebuild to add one more instrumentation
+// point. See purr_kernel.h's doc comments for both.
+
+// purr_kernel_ui_breadcrumb() stores the pointer as-is, no copy taken (see
+// its header doc) — passing a Lua string's own pointer directly would leave
+// a dangling reference the moment Lua's GC reclaims it, since nothing else
+// keeps that string alive. Copied into a static C buffer instead, mirroring
+// the same pattern used for the paint/control breadcrumbs added earlier
+// this session (miniwin.c's z-order/control-index breadcrumbs).
+static char s_kitt_breadcrumb_buf[64];
+
+static int lua_kitt_breadcrumb(lua_State *L) {
+    const char *s = luaL_checkstring(L, 1);
+    snprintf(s_kitt_breadcrumb_buf, sizeof(s_kitt_breadcrumb_buf), "kitten: %s", s);
+    purr_kernel_ui_breadcrumb(s_kitt_breadcrumb_buf);
+    return 0;
+}
+
+static int lua_kitt_klog_tail(lua_State *L) {
+    char buf[1024];
+    size_t n = purr_kernel_klog_tail(buf, sizeof(buf));
+    lua_pushlstring(L, buf, n);
+    return 1;
+}
+
 static int lua_kitt_modules(lua_State *L) {
     int n = purr_kernel_module_count();
     lua_newtable(L);
@@ -211,7 +240,9 @@ static void register_kitt_module(lua_State *L) {
     lua_setglobal(L, "gps");
 
     lua_newtable(L);
-    lua_pushcfunction(L, lua_kitt_modules); lua_setfield(L, -2, "modules");
+    lua_pushcfunction(L, lua_kitt_modules);    lua_setfield(L, -2, "modules");
+    lua_pushcfunction(L, lua_kitt_breadcrumb); lua_setfield(L, -2, "breadcrumb");
+    lua_pushcfunction(L, lua_kitt_klog_tail);  lua_setfield(L, -2, "klog_tail");
     lua_setglobal(L, "kitt");
 }
 
@@ -232,6 +263,97 @@ static void lua_btn_trampoline(purr_wid_t wid, purr_event_t event, void *user) {
         ESP_LOGE(TAG, "button callback error: %s", lua_tostring(s_L, -1));
         lua_pop(s_L, 1);
     }
+}
+
+// canvas_on_paint()/_on_touch() callbacks — same registry-ref trampoline
+// pattern as lua_btn_trampoline() above. See purr_win_paint_cb_t's doc
+// comment (catcall_ui.h) for why a widget-dense UI (a calculator keypad,
+// say) should draw itself this way instead of one native win.button() per
+// key: closing a window with ~20 native button controls was confirmed live
+// to leave the UI task permanently stuck inside the backend's own
+// control-teardown code. A window using canvas_on_paint()/canvas_on_touch()
+// creates zero native controls, so it isn't exposed to that at all.
+static void lua_paint_trampoline(purr_win_t win, void *user) {
+    if (!s_L) return;
+    int ref = (int)(intptr_t)user;
+    lua_rawgeti(s_L, LUA_REGISTRYINDEX, ref);
+    lua_pushinteger(s_L, (lua_Integer)win);
+    if (lua_pcall(s_L, 1, 0, 0) != LUA_OK) {
+        ESP_LOGE(TAG, "canvas paint callback error: %s", lua_tostring(s_L, -1));
+        lua_pop(s_L, 1);
+    }
+}
+
+static void lua_touch_trampoline(purr_win_t win, int16_t x, int16_t y, bool pressed, void *user) {
+    if (!s_L) return;
+    int ref = (int)(intptr_t)user;
+    lua_rawgeti(s_L, LUA_REGISTRYINDEX, ref);
+    lua_pushinteger(s_L, (lua_Integer)win);
+    lua_pushinteger(s_L, (lua_Integer)x);
+    lua_pushinteger(s_L, (lua_Integer)y);
+    lua_pushboolean(s_L, pressed);
+    if (lua_pcall(s_L, 4, 0, 0) != LUA_OK) {
+        ESP_LOGE(TAG, "canvas touch callback error: %s", lua_tostring(s_L, -1));
+        lua_pop(s_L, 1);
+    }
+}
+
+static int lua_win_on_paint(lua_State *L) {
+    purr_win_t win = (purr_win_t)luaL_checkinteger(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_pushvalue(L, 2);
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    purr_win_canvas_on_paint(win, lua_paint_trampoline, (void *)(intptr_t)ref);
+    return 0;
+}
+
+static int lua_win_on_touch(lua_State *L) {
+    purr_win_t win = (purr_win_t)luaL_checkinteger(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_pushvalue(L, 2);
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    purr_win_canvas_on_touch(win, lua_touch_trampoline, (void *)(intptr_t)ref);
+    return 0;
+}
+
+static int lua_win_rect(lua_State *L) {
+    purr_win_t win = (purr_win_t)luaL_checkinteger(L, 1);
+    int16_t x = (int16_t)luaL_checkinteger(L, 2);
+    int16_t y = (int16_t)luaL_checkinteger(L, 3);
+    int16_t w = (int16_t)luaL_checkinteger(L, 4);
+    int16_t h = (int16_t)luaL_checkinteger(L, 5);
+    uint32_t color = (uint32_t)luaL_checkinteger(L, 6);
+    purr_win_canvas_rect(win, x, y, w, h, color);
+    return 0;
+}
+
+static int lua_win_text(lua_State *L) {
+    purr_win_t win = (purr_win_t)luaL_checkinteger(L, 1);
+    int16_t x = (int16_t)luaL_checkinteger(L, 2);
+    int16_t y = (int16_t)luaL_checkinteger(L, 3);
+    const char *text = luaL_checkstring(L, 4);
+    uint32_t color = (uint32_t)luaL_checkinteger(L, 5);
+    purr_win_canvas_text(win, x, y, text, color);
+    return 0;
+}
+
+static int lua_win_repaint(lua_State *L) {
+    purr_win_canvas_repaint((purr_win_t)luaL_checkinteger(L, 1));
+    return 0;
+}
+
+static int lua_win_width(lua_State *L) {
+    int16_t w = 0, h = 0;
+    purr_win_canvas_size((purr_win_t)luaL_checkinteger(L, 1), &w, &h);
+    lua_pushinteger(L, (lua_Integer)w);
+    return 1;
+}
+
+static int lua_win_height(lua_State *L) {
+    int16_t w = 0, h = 0;
+    purr_win_canvas_size((purr_win_t)luaL_checkinteger(L, 1), &w, &h);
+    lua_pushinteger(L, (lua_Integer)h);
+    return 1;
 }
 
 static int lua_win_create(lua_State *L) {
@@ -352,6 +474,13 @@ static void register_win_module(lua_State *L) {
     lua_pushcfunction(L, lua_win_row_grow);      lua_setfield(L, -2, "row_grow");
     lua_pushcfunction(L, lua_win_col_grow);      lua_setfield(L, -2, "col_grow");
     lua_pushcfunction(L, lua_win_layout_end);    lua_setfield(L, -2, "layout_end");
+    lua_pushcfunction(L, lua_win_on_paint);      lua_setfield(L, -2, "on_paint");
+    lua_pushcfunction(L, lua_win_on_touch);      lua_setfield(L, -2, "on_touch");
+    lua_pushcfunction(L, lua_win_rect);          lua_setfield(L, -2, "rect");
+    lua_pushcfunction(L, lua_win_text);          lua_setfield(L, -2, "text");
+    lua_pushcfunction(L, lua_win_repaint);       lua_setfield(L, -2, "repaint");
+    lua_pushcfunction(L, lua_win_width);         lua_setfield(L, -2, "width");
+    lua_pushcfunction(L, lua_win_height);        lua_setfield(L, -2, "height");
     lua_setglobal(L, "win");
 }
 

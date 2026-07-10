@@ -44,8 +44,8 @@ C_YLW  = "\033[93m"
 C_CYN  = "\033[96m"
 C_WHT  = "\033[97m"
 
-PURROS_VERSION = "1.0.0-dp"
-KITT_VERSION   = "0.10.0"
+PURROS_VERSION = "1.0.0-dp3"
+KITT_VERSION   = "1.0.0"
 
 def info(msg):        print(f"{C_GRN}[purrstrap]{C_RST} {msg}")
 def warn(msg):        print(f"{C_YLW}[warn]     {C_RST} {msg}")
@@ -313,13 +313,13 @@ def _find_purr_blob(slug):
       "miniwin"         → cattobaked/modules/miniwin.purr
       "app_manager"     → cattobaked/modules/app_manager.purr
       "display/st7789"  → cattobaked/drivers/display/st7789.purr
-      "apps/terminal"   → cattobaked/apps/terminal.claw (or .paws, .meow, .hiss)
+      "apps/terminal"   → cattobaked/apps/terminal.claw (or .paws, .meow, .hiss, .kitten)
     """
     parts = slug.split("/")
     if len(parts) == 2 and parts[0] == "apps":
         name = parts[1]
         app_dir = os.path.join(OUTPUT_DIR, "apps")
-        for ext in ("claw", "paws", "meow", "hiss"):
+        for ext in ("claw", "paws", "meow", "hiss", "kitten"):
             p = os.path.join(app_dir, f"{name}.{ext}")
             if os.path.isfile(p):
                 return p
@@ -604,6 +604,7 @@ UI_BACKEND_MAP = {
     "cardstack": "CARDSTACK",
     "cupcake":   "CUPCAKE",
     "lvgldebug": "LVGLDEBUG",
+    "pounce":    "POUNCE",
 }
 
 def _pcat_bool(cfg, key):
@@ -664,6 +665,22 @@ def _sdkconfig_lines(device, cfg):
         lines.append("")
         lines.append("# PURR OS UI Backend")
         lines.append(f"CONFIG_PURR_UI_BACKEND_{mapped}=y")
+
+    # [modules] bt/mesh presence -> the Kconfig gates that actually compile
+    # bt_mgr.c/meshtastic's mesh_router.c+mesh_radio.c in. Mirrors the ui
+    # mapping above; previously these were only ever hand-set in a device's
+    # .overrides file even though [modules] bt/mesh already existed in the
+    # schema — device.pcat is now the single source of truth for both.
+    if cfg.get("modules.bt", ""):
+        lines.append("")
+        lines.append("# Bluetooth (NimBLE)")
+        lines.append("CONFIG_BT_ENABLED=y")
+        lines.append("CONFIG_BT_NIMBLE_ENABLED=y")
+
+    if cfg.get("modules.mesh", ""):
+        lines.append("")
+        lines.append("# Meshtastic")
+        lines.append("CONFIG_PURR_FEATURE_MESHTASTIC=y")
 
     return lines
 
@@ -1555,11 +1572,11 @@ def cmd_pkg_verify(args):
 # ── pkg app: runtime file hot-load (.meow/.hiss — see module docstring) ─────
 
 def _find_meow_or_hiss(device, name):
-    """Look for a .meow or .hiss script the user already has staged for this
-    device's SPIFFS image, or under any apps/ source dir, by bare name.
-    Returns (path, tier) — tier is "meow" or "hiss" matching whichever
-    extension was actually found — or (None, None)."""
-    for ext in ("meow", "hiss"):
+    """Look for a .meow, .hiss, or .kitten script the user already has staged
+    for this device's SPIFFS image, or under any apps/ source dir, by bare
+    name. Returns (path, tier) — tier is "meow"/"hiss"/"kitten" matching
+    whichever extension was actually found — or (None, None)."""
+    for ext in ("meow", "hiss", "kitten"):
         candidates = [
             os.path.join(OUTPUT_DIR, device, "spiffs_staging", "apps", f"{name}.{ext}"),
         ]

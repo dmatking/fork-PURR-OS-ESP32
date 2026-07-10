@@ -169,3 +169,28 @@ static inline void purr_win_keyboard_show(purr_win_t win, purr_wid_t target) {
 static inline void purr_win_keyboard_hide(purr_win_t win) {
     _UI_VOID(kb_hide, win);
 }
+
+// ── Canvas (raw draw + touch) ────────────────────────────────────────────────
+// See purr_win_paint_cb_t's doc comment in catcall_ui.h for when to use this
+// instead of purr_win_button()/purr_win_label().
+
+static inline void purr_win_canvas_on_paint(purr_win_t win, purr_win_paint_cb_t cb, void *user) {
+    _UI_VOID(canvas_on_paint, win, cb, user);
+}
+static inline void purr_win_canvas_on_touch(purr_win_t win, purr_win_touch_cb_t cb, void *user) {
+    _UI_VOID(canvas_on_touch, win, cb, user);
+}
+static inline void purr_win_canvas_rect(purr_win_t win, int16_t x, int16_t y,
+                                         int16_t w, int16_t h, uint32_t color) {
+    _UI_VOID(canvas_rect, win, x, y, w, h, color);
+}
+static inline void purr_win_canvas_text(purr_win_t win, int16_t x, int16_t y,
+                                         const char *text, uint32_t color) {
+    _UI_VOID(canvas_text, win, x, y, text, color);
+}
+static inline void purr_win_canvas_repaint(purr_win_t win) {
+    _UI_VOID(canvas_repaint, win);
+}
+static inline void purr_win_canvas_size(purr_win_t win, int16_t *w, int16_t *h) {
+    _UI_VOID(canvas_size, win, w, h);
+}

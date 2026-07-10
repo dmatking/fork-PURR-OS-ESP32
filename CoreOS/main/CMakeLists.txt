@@ -53,6 +53,17 @@ else()
     set(DRIVER_REQUIRES st7789 gt911 trackball bbq20)
 endif()
 
+# USB MSC (composite CDC+MSC, share the SD card over USB on panic) — scoped
+# to tdeck_plus for now (see source/modules/usb_msc/usb_msc.h). Kept out of
+# every other device's REQUIRES rather than added unconditionally so their
+# builds don't pull in esp_tinyusb's Kconfig surface for a feature they
+# never call into.
+if(PURR_DEVICE STREQUAL "tdeck_plus")
+    set(USB_MSC_REQUIRES usb_msc)
+else()
+    set(USB_MSC_REQUIRES "")
+endif()
+
 idf_component_register(
     SRCS
         ${BOOT_SRCS}
@@ -78,5 +89,6 @@ idf_component_register(
         sdmmc
         ${DRIVER_REQUIRES}
         ${EXTRA_REQUIRES}
+        ${USB_MSC_REQUIRES}
         miniwin
 )

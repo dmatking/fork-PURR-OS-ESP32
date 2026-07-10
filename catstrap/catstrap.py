@@ -64,10 +64,11 @@ MAGICMAC_DIR = os.path.join(SOURCE_DIR, "apps", "exclusive", "magicmac")
 MAGIDOS_DIR  = os.path.join(SOURCE_DIR, "apps", "exclusive", "magidos")
 
 TIER_COLORS = {
-    "meow": C_GRN,
-    "hiss": C_RED,
-    "paws": C_CYN,
-    "claw": C_MGN,
+    "meow":   C_GRN,
+    "hiss":   C_RED,
+    "paws":   C_CYN,
+    "claw":   C_MGN,
+    "kitten": C_YLW,
 }
 
 SDK_VERSION = "0.1.0"
@@ -78,10 +79,11 @@ SDK_VERSION = "0.1.0"
 # contradicted by docs/06_Apps.md and the real lua_runtime.c. .hiss is the
 # tier that actually adds kitt./radio./gps. on top of the same win./sd. VM.
 SDK_API = {
-    "meow": ["win.*", "sd.*", "purr.info()"],
-    "hiss": ["win.*", "sd.*", "kitt.*", "radio.*", "gps.*", "purr.info()"],
-    "paws": ["win.*", "sd.*"],
-    "claw": ["win.*", "sd.*", "kitt.*", "purr.*", "purr_kernel_*"],
+    "meow":   ["win.*", "sd.*", "purr.info()"],
+    "hiss":   ["win.*", "sd.*", "kitt.*", "radio.*", "gps.*", "purr.info()"],
+    "paws":   ["win.*", "sd.*"],
+    "claw":   ["win.*", "sd.*", "kitt.*", "purr.*", "purr_kernel_*"],
+    "kitten": ["win.*", "sd.*", "kitt.*", "radio.*", "gps.*", "purr.info()"],
 }
 
 # ── .pcat parser ─────────────────────────────────────────────────────────────
@@ -123,12 +125,14 @@ def find_apps():
                 cfg  = parse_pcat(pcat)
                 tier = cfg.get("tier", "paws")
                 apps.append((name, app_dir, pcat, tier))
-            # Also pick up bare .meow / .hiss scripts
+            # Also pick up bare .meow / .hiss / .kitten scripts
             for f in os.listdir(app_dir):
                 if f.endswith(".meow"):
                     apps.append((f[:-5], app_dir, os.path.join(app_dir, f), "meow"))
                 elif f.endswith(".hiss"):
                     apps.append((f[:-5], app_dir, os.path.join(app_dir, f), "hiss"))
+                elif f.endswith(".kitten"):
+                    apps.append((f[:-7], app_dir, os.path.join(app_dir, f), "kitten"))
     return apps
 
 def cmd_list(args):
@@ -269,16 +273,18 @@ def _sdk_install():
 
 # ── Validate .meow / .hiss ───────────────────────────────────────────────────
 
-# Self-declared "purr-sig" tag — .hiss only. Honor-system, not cryptographic:
-# anyone editing the file can change it, same trust level as the
-# extension-only decision for .hiss itself. Purely informational — never
-# gates kitt./radio./gps. availability, which is decided by the extension
-# alone. See docs/06_Apps.md's .hiss section.
+# Self-declared "purr-sig" tag — .hiss and .kitten (both privileged tiers).
+# Honor-system, not cryptographic: anyone editing the file can change it,
+# same trust level as the extension-only decision for these tiers itself.
+# Doesn't gate kitt./radio./gps. *availability* — that's decided by the
+# extension alone — it gates whether an *unsigned* privileged script is
+# allowed to run at all without Developer Mode on (app_manager.c's
+# launch_meow()). See docs/06_Apps.md's .hiss section.
 PURR_SIG_VALUES = ("unsigned", "dev-signed", "trusted-signed", "dev-approved")
 
 def _read_purr_sig(path):
-    """Scan a .hiss file for a '-- purr-sig: <value>' comment line. Returns
-    the tagged value, or "unsigned" if no tag (or an unrecognized value) is found."""
+    """Scan a .hiss/.kitten file for a '-- purr-sig: <value>' comment line.
+    Returns the tagged value, or "unsigned" if no tag (or an unrecognized value) is found."""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -297,9 +303,9 @@ def cmd_validate(args):
     path = args.file
     if not os.path.isfile(path):
         die(f"file not found: {path}")
-    is_hiss = path.endswith(".hiss")
-    if not (path.endswith(".meow") or is_hiss):
-        warn(f"expected a .meow or .hiss file, got: {path}")
+    is_privileged = path.endswith(".hiss") or path.endswith(".kitten")
+    if not (path.endswith(".meow") or is_privileged):
+        warn(f"expected a .meow/.hiss/.kitten file, got: {path}")
 
     lua = shutil.which("lua") or shutil.which("lua5.4") or shutil.which("lua5.3")
     if not lua:
@@ -314,7 +320,7 @@ def cmd_validate(args):
             print(result.stderr)
             sys.exit(1)
 
-    if is_hiss:
+    if is_privileged:
         sig = _read_purr_sig(path)
         if sig == "unsigned":
             warn(f"    no purr-sig tag found — treated as unsigned")
@@ -324,7 +330,7 @@ def cmd_validate(args):
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 def build_app(name, app_dir, pcat_path, tier):
-    is_script = pcat_path.endswith(".meow") or pcat_path.endswith(".hiss")
+    is_script = pcat_path.endswith(".meow") or pcat_path.endswith(".hiss") or pcat_path.endswith(".kitten")
     cfg = parse_pcat(pcat_path) if not is_script else {}
     version = cfg.get("version", "0.1.0")
     color   = TIER_COLORS.get(tier, C_WHT)
@@ -335,13 +341,16 @@ def build_app(name, app_dir, pcat_path, tier):
 
     info(f"  {color}{name}{C_RST}  [{tier}]  v{version}  →  {os.path.relpath(out_path, REPO_DIR)}")
 
-    if tier in ("meow", "hiss"):
-        # Package the Lua script directly — no compilation
+    if tier in ("meow", "hiss", "kitten"):
+        # Package the Lua script directly — no compilation. .hiss and
+        # .kitten both gate unsigned scripts behind Developer Mode at
+        # runtime (app_manager.c's launch_meow()) — .kitten needs it even
+        # more than .hiss since it autoruns unconditionally at every boot.
         src = pcat_path if is_script else os.path.join(app_dir, f"{name}.{tier}")
         if os.path.isfile(src):
             shutil.copy2(src, out_path)
             info(f"    packaged Lua script → {out_name}")
-            if tier == "hiss":
+            if tier in ("hiss", "kitten"):
                 sig = _read_purr_sig(src)
                 info(f"    signature: {sig}" if sig != "unsigned"
                      else "    no purr-sig tag found — treated as unsigned")
@@ -458,7 +467,7 @@ def cmd_clean(args):
             info(f"removed {OUT_APPS}")
     else:
         # Remove specific app output
-        for ext in ["meow", "hiss", "paws", "claw"]:
+        for ext in ["meow", "hiss", "paws", "claw", "kitten"]:
             p = os.path.join(OUT_APPS, f"{target}.{ext}")
             if os.path.isfile(p):
                 os.remove(p)

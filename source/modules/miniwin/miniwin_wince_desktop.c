@@ -13,9 +13,11 @@
 #ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
 
 #include "miniwin_wince_desktop.h"
+#include "miniwin_wince_icons.h"
 #include "MiniWin/miniwin_utilities.h"
 #include "MiniWin/gl/gl.h"
 #include "MiniWin/hal/hal_lcd.h"
+#include "MiniWin/bitmaps/mw_bitmaps.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "../app_manager/app_manager.h"
 #include "esp_heap_caps.h"
@@ -157,6 +159,100 @@ static void draw_smenu_box(const mw_gl_draw_info_t *d, int16_t smy, int16_t smh)
     mw_gl_set_font(MW_GL_FONT_9);
 }
 
+// ── Desktop icons ────────────────────────────────────────────────────────────
+//
+// Sits on top of the wallpaper fill, drawn before the taskbar/Start Menu in
+// desktop_paint() so those still draw over icons correctly. MiniWin has no
+// real compositing layers (see miniwin_wince_desktop.h's comment on this) —
+// "a transparent icon layer over the wallpaper layer" is really just paint
+// order plus mw_gl_monochrome_bitmap()'s per-pixel MW_GL_BG_TRANSPARENT mode,
+// which only plots foreground-coloured pixels and never touches the
+// background, so the wallpaper shows through everywhere around each glyph.
+//
+// A curated subset of apps gets a desktop icon (not every registered app —
+// that's the *other*, mutually exclusive MiniWin desktop style's job, see
+// miniwin_module.c's icon-grid desktop). Keyed by the exact app_manager name
+// string each app registers with.
+
+#define DTICON_LEFT     8
+#define DTICON_TOP      8
+#define DTICON_CELL_W   64
+#define DTICON_CELL_H   48
+
+typedef struct {
+    const char    *app_name;   // must match the app's purr_module_header_t.name
+    const uint8_t *icon;
+    uint8_t        icon_w, icon_h;
+} wce_desktop_icon_t;
+
+static const wce_desktop_icon_t s_desktop_icons[] = {
+    { "settings",   wce_icon_settings,            WCE_ICON_SIZE, WCE_ICON_SIZE },
+    { "terminal",   wce_icon_terminal,             WCE_ICON_SIZE, WCE_ICON_SIZE },
+    { "fileman",    mw_bitmaps_folder_icon_large,  16,            16            },
+    { "calculator", wce_icon_calculator,           WCE_ICON_SIZE, WCE_ICON_SIZE },
+    { "meshchat",   wce_icon_meshchat,             WCE_ICON_SIZE, WCE_ICON_SIZE },
+};
+#define DESKTOP_ICON_COUNT (int)(sizeof(s_desktop_icons) / sizeof(s_desktop_icons[0]))
+
+// -1 if this particular device's build doesn't register that app — its grid
+// slot is then skipped but stays reserved (position comes from the table
+// index, not a filtered count), so icons don't shift around across devices
+// with different app sets.
+static int dt_icon_app_index(const char *name) {
+    int n = app_manager_count();
+    for (int i = 0; i < n; i++) {
+        const app_entry_t *app = app_manager_get(i);
+        if (app && strcmp(app->name, name) == 0) return i;
+    }
+    return -1;
+}
+
+static void dt_icon_cell_pos(int idx, int16_t *out_x, int16_t *out_y) {
+    int cols = (int)((SCR_W - DTICON_LEFT) / DTICON_CELL_W);
+    if (cols < 1) cols = 1;
+    int col = idx % cols;
+    int row = idx / cols;
+    *out_x = (int16_t)(DTICON_LEFT + col * DTICON_CELL_W);
+    *out_y = (int16_t)(DTICON_TOP  + row * DTICON_CELL_H);
+}
+
+static void draw_desktop_icons(const mw_gl_draw_info_t *d) {
+    for (int i = 0; i < DESKTOP_ICON_COUNT; i++) {
+        if (dt_icon_app_index(s_desktop_icons[i].app_name) < 0) continue;
+
+        int16_t x, y;
+        dt_icon_cell_pos(i, &x, &y);
+
+        // White, not the taskbar's black WCE_TXT — the wallpaper is a dark
+        // teal (WCE_DESKTOP), so white is what actually reads against it.
+        mw_gl_set_fg_colour(WCE_HI);
+        mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
+        mw_gl_monochrome_bitmap(d, x, y,
+                                 s_desktop_icons[i].icon_w, s_desktop_icons[i].icon_h,
+                                 s_desktop_icons[i].icon);
+
+        mw_gl_set_font(MW_GL_FONT_9);
+        mw_gl_string(d, x, (int16_t)(y + WCE_ICON_SIZE + 1), s_desktop_icons[i].app_name);
+    }
+}
+
+// Hit-tests the whole cell, not just the (sometimes smaller, e.g. fileman's
+// 16x16) icon bitmap footprint — a bigger, more forgiving tap target.
+static bool dt_icon_hit_test(int16_t tx, int16_t ty, int *out_app_idx) {
+    for (int i = 0; i < DESKTOP_ICON_COUNT; i++) {
+        int app_idx = dt_icon_app_index(s_desktop_icons[i].app_name);
+        if (app_idx < 0) continue;
+
+        int16_t x, y;
+        dt_icon_cell_pos(i, &x, &y);
+        if (tx >= x && tx < x + DTICON_CELL_W && ty >= y && ty < y + DTICON_CELL_H) {
+            *out_app_idx = app_idx;
+            return true;
+        }
+    }
+    return false;
+}
+
 static void desktop_paint(mw_handle_t handle, const mw_gl_draw_info_t *d) {
     (void)handle;
     const int16_t W = (int16_t)SCR_W;
@@ -165,6 +261,8 @@ static void desktop_paint(mw_handle_t handle, const mw_gl_draw_info_t *d) {
     mw_gl_set_fill(MW_GL_FILL); mw_gl_set_border(MW_GL_BORDER_OFF);
     mw_gl_set_solid_fill_colour(WCE_DESKTOP);
     mw_gl_rectangle(d, 0, 0, W, H);
+
+    draw_desktop_icons(d);
 
     mw_gl_set_solid_fill_colour(WCE_BAR);
     mw_gl_rectangle(d, 0, TASKBAR_Y, SCR_W, TASKBAR_H);
@@ -425,6 +523,14 @@ static void desktop_message(const mw_message_t *msg) {
                 }
                 mw_paint_all();
             }
+        }
+    }
+
+    {
+        int app_idx;
+        if (dt_icon_hit_test(tx, ty, &app_idx)) {
+            app_manager_launch_idx(app_idx);
+            mw_paint_all();
         }
     }
 }

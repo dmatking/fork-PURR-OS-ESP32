@@ -19,6 +19,7 @@
 #include "wifi_mgr.h"
 #include "bt_mgr.h"
 #include "mesh_ble.h"
+#include "sdkconfig.h"
 
 #define NVS_NS  "purr_settings"
 
@@ -60,6 +61,11 @@ static purr_win_t  s_wifi_dlg_win   = 0;
 static purr_wid_t  s_wifi_dlg_input = 0;
 static char        s_wifi_dlg_ssid[33] = "";
 
+// Bluetooth is gated behind CONFIG_BT_NIMBLE_ENABLED (off by default — see
+// bt_mgr.c/Kconfig.projbuild) — the whole section, state included, compiles
+// out when it's off rather than being deleted, so a future device that
+// enables it gets the full working UI back with zero further changes.
+#ifdef CONFIG_BT_NIMBLE_ENABLED
 #define MAX_BT_RESULTS 24
 static purr_win_t  s_bt_win        = 0;   // separate "Bluetooth Settings" window, built on demand
 static purr_wid_t  s_bt_status_lbl = 0;
@@ -68,6 +74,7 @@ static char        s_bt_labels[MAX_BT_RESULTS][48];
 static const char *s_bt_label_ptrs[MAX_BT_RESULTS];
 static uint8_t     s_bt_addrs[MAX_BT_RESULTS][6];
 static int         s_bt_count = 0;
+#endif  // CONFIG_BT_NIMBLE_ENABLED
 
 static purr_wid_t  s_wallpaper_list = 0;
 static char        s_wallpaper_paths[MAX_WALLPAPERS][WALLPAPER_PATH_LEN];
@@ -333,6 +340,8 @@ static void on_wifi_settings_open(purr_wid_t w, purr_event_t e, void *u) {
 // ── Bluetooth ─────────────────────────────────────────────────────────────────
 // BLE only — T-Deck Plus's ESP32-S3 has no classic Bluetooth hardware (see
 // bt_mgr.h's comment). Lives in its own window, same rationale as WiFi above.
+// Gated behind CONFIG_BT_NIMBLE_ENABLED — see the s_bt_* state block above.
+#ifdef CONFIG_BT_NIMBLE_ENABLED
 
 static void set_bt_status(const char *msg) {
     if (s_bt_status_lbl) purr_win_label_set(s_bt_status_lbl, msg);
@@ -414,6 +423,8 @@ static void on_bt_settings_open(purr_wid_t w, purr_event_t e, void *u) {
     s_bt_status_lbl = purr_win_label(s_bt_win, bt_mgr_is_enabled() ? "Bluetooth enabled." : "Bluetooth disabled.");
     purr_win_show(s_bt_win);
 }
+
+#endif  // CONFIG_BT_NIMBLE_ENABLED
 
 // ── Developer Mode ────────────────────────────────────────────────────────────
 // Gates whether unsigned .hiss scripts are allowed to run — see
@@ -546,7 +557,9 @@ static int settings_init(void) {
     purr_win_label(s_win, "Network");
     purr_wid_t nr = purr_win_row(s_win, 4);
     purr_win_button(s_win, "WiFi Settings",      on_wifi_settings_open, NULL);
+#ifdef CONFIG_BT_NIMBLE_ENABLED
     purr_win_button(s_win, "Bluetooth Settings", on_bt_settings_open,   NULL);
+#endif
     purr_win_layout_end(nr);
 
     // ── Wallpaper section ──────────────────────────────────────────────────
@@ -592,7 +605,9 @@ static int settings_init(void) {
 static void settings_deinit(void) {
     close_wifi_dialog();
     if (s_wifi_win) { purr_win_destroy(s_wifi_win); s_wifi_win = 0; s_wifi_status_lbl = 0; s_wifi_list = 0; }
+#ifdef CONFIG_BT_NIMBLE_ENABLED
     if (s_bt_win)   { purr_win_destroy(s_bt_win);   s_bt_win   = 0; s_bt_status_lbl   = 0; s_bt_list   = 0; }
+#endif
     purr_win_destroy(s_win);
     s_win = 0;
 }

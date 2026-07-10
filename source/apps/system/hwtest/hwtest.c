@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "freertos/idf_additions.h"
 #include "esp_heap_caps.h"
 #include "purr_win.h"
@@ -21,6 +22,14 @@ static purr_win_t s_win = 0;
 static purr_wid_t s_out = 0;
 static TaskHandle_t s_poller = NULL;
 static bool s_running = false;
+// Given by poller_task() right before it self-deletes, waited on by
+// hwtest_deinit() before it destroys s_win — the fixed vTaskDelay(100ms)
+// this replaces was a heuristic (poller_task's own loop period is 30ms, so
+// 100ms usually covers it) rather than a hard guarantee against the same
+// use-after-free class fixed in meshchat.c/meshdiag.c (Kill/close could
+// still tear down s_win/s_out while poller_task was mid purr_win_textarea_set()
+// on them under enough scheduling contention).
+static SemaphoreHandle_t s_poller_done = NULL;
 
 static char    s_log[HW_LOG_LINES][HW_LINE_LEN];
 static int     s_log_head = 0;
@@ -91,6 +100,7 @@ static void poller_task(void *arg) {
         }
         vTaskDelay(pdMS_TO_TICKS(30));
     }
+    if (s_poller_done) xSemaphoreGive(s_poller_done);
     // Must match the WithCaps variant used to create this task.
     vTaskDeleteWithCaps(NULL);
 }
@@ -114,6 +124,11 @@ static void on_clear(purr_wid_t w, purr_event_t e, void *u) {
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
 static int hwtest_init(void) {
+    // Reused across relaunches — starts "empty" (taken), which is exactly
+    // the state hwtest_deinit()'s xSemaphoreTake() below needs at the start
+    // of every run.
+    if (!s_poller_done) s_poller_done = xSemaphoreCreateBinary();
+
     s_win = purr_win_create("HW Tester");
 
     s_out = purr_win_textarea(s_win, 100, 80);
@@ -138,10 +153,11 @@ static int hwtest_init(void) {
 
 static void hwtest_deinit(void) {
     s_running = false;
-    if (s_poller) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        s_poller = NULL;
-    }
+    // Wait for poller_task() to actually exit before touching s_win/s_out
+    // below — see s_poller_done's declaration comment.
+    if (s_poller_done) xSemaphoreTake(s_poller_done, pdMS_TO_TICKS(2000));
+    s_poller = NULL;
+
     purr_win_destroy(s_win);
     s_win = 0;
 }

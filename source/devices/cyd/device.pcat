@@ -24,7 +24,7 @@ bt          = true
 lora        = ""
 
 [modules]
-ui          = "kittenui"
+ui          = "miniwin"
 app_manager = "app_manager"
 
 [ui]
@@ -33,24 +33,29 @@ theme       = "wce"
 [apps]
 # Base OS — staple apps always present
 settings    = true
-about       = true
+# about — a standalone app used to exist (see settings.c's build_about_text()
+# comment: "mirrors about.c's build_info()") but was folded into Settings'
+# own About tab during a rewrite; this device.pcat reference to it was never
+# cleaned up and broke the link (undefined reference to purr_module_about,
+# since the app itself no longer exists anywhere in the tree).
 # Core usable apps
 terminal    = true
 fileman     = true
+taskmgr     = true
 
 [flash]
 # Priority 1 — required, kernel panics without these
 display/ili9341  = 1
 touch/xpt2046    = 1
 # Priority 2 — important UI + management layer
-kittenui         = 2
+miniwin          = 2
 app_manager      = 2
 lua_runtime      = 2
 # Priority 3 — base OS apps
 apps/settings    = 3
-apps/about       = 3
 apps/terminal    = 3
 apps/fileman     = 3
+apps/taskmgr     = 3
 
 [pins]
 display_cs    = 15

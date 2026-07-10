@@ -1,8 +1,14 @@
-// mesh_radio.c — Meshtastic LONG_FAST radio preset + AES-256-CTR crypto.
+// mesh_radio.c — Meshtastic LONG_FAST radio preset + AES-128-CTR crypto.
 // Ported from PURR-OS-0.11/CoreOS/system/kernel/modules/purr_mesh.cpp — the
 // only real change is that this talks to the radio through
 // purr_kernel_radio()'s catcall_radio_t instead of a bespoke lora_manager
 // singleton, so it's radio-chip-agnostic (works with sx1262 or sx1276).
+
+#include "sdkconfig.h"
+
+// No external caller besides meshtastic_module.c — see mesh_router.c's
+// matching comment. Empty translation unit when the feature is off.
+#ifdef CONFIG_PURR_FEATURE_MESHTASTIC
 
 #include "mesh_radio.h"
 #include "../../kernel/core/purr_kernel.h"
@@ -36,10 +42,9 @@ static const uint8_t DEFAULT_PSK16[16] = {
     0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01
 };
 
-void mesh_radio_expand_psk(uint8_t key32[32])
+void mesh_radio_default_psk(uint8_t key16[16])
 {
-    memcpy(key32,      DEFAULT_PSK16, 16);
-    memcpy(key32 + 16, DEFAULT_PSK16, 16);
+    memcpy(key16, DEFAULT_PSK16, 16);
 }
 
 void mesh_radio_build_iv(uint8_t iv[16], uint32_t pkt_id, uint32_t from_node)
@@ -51,11 +56,16 @@ void mesh_radio_build_iv(uint8_t iv[16], uint32_t pkt_id, uint32_t from_node)
 }
 
 bool mesh_radio_aes_ctr(const uint8_t *in, uint8_t *out, size_t len,
-                         const uint8_t key32[32], const uint8_t iv[16])
+                         const uint8_t key16[16], const uint8_t iv[16])
 {
     mbedtls_aes_context ctx;
     mbedtls_aes_init(&ctx);
-    if (mbedtls_aes_setkey_enc(&ctx, key32, 256) != 0) {
+    // AES-128, not AES-256 — see mesh_radio_default_psk()'s comment. The
+    // channel's actual key length (16 bytes) is what selects the cipher in
+    // real Meshtastic firmware (CryptoEngine::encryptAESCtr: 16 bytes ==
+    // AES128, else AES256); this project only ever uses the 16-byte default
+    // channel key today, so AES-128 is simply the correct, only case.
+    if (mbedtls_aes_setkey_enc(&ctx, key16, 128) != 0) {
         mbedtls_aes_free(&ctx);
         return false;
     }
@@ -67,3 +77,5 @@ bool mesh_radio_aes_ctr(const uint8_t *in, uint8_t *out, size_t len,
     mbedtls_aes_free(&ctx);
     return rc == 0;
 }
+
+#endif  // CONFIG_PURR_FEATURE_MESHTASTIC

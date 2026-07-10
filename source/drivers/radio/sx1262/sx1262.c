@@ -90,6 +90,7 @@ void sx1262_set_spi_host(spi_host_device_t host)
 #define CMD_SET_REGULATOR_MODE  0xA0
 #define CMD_SET_PA_CONFIG       0x95
 #define CMD_WRITE_REGISTER      0x0D
+#define CMD_SET_DIO2_AS_RF_SWITCH_CTRL 0x9D
 
 // LoRa sync word lives at these two register addresses. Each byte packs the
 // sync word nibble with a fixed 0x04 low nibble — a known SX126x quirk (not
@@ -131,12 +132,31 @@ static int8_t  s_last_signal_rssi;
 
 // ── SPI helpers ───────────────────────────────────────────────────────────────
 
+// BUSY normally falls within microseconds, so a short initial busy-spin
+// keeps the common-case latency low. But esp_rom_delay_us() never yields to
+// the scheduler — if BUSY ever stays high for real (a plausible transient
+// after switching frequency bands/recalibrating, or any other one-off
+// hardware hiccup), the old all-spin version could monopolize this task's
+// CPU core for the full BUSY_TIMEOUT_US (3s) with nothing else on that core
+// able to run at all, including whatever UI task happens to share it —
+// live-confirmed as the cause of a MiniWin "UI TASK UNRESPONSIVE" crash-
+// guard strike (6s heartbeat threshold, tripped by two such stalls back to
+// back) the moment Meshtastic's mesh_task() started polling this radio
+// continuously. Past the short spin window, fall back to vTaskDelay(1) —
+// a real yield — for the remainder of the timeout so a stuck BUSY line
+// costs this task time, not every other task's scheduling on its core.
+#define WAIT_BUSY_SPIN_US 200
+
 static void wait_busy(void)
 {
     int64_t deadline = esp_timer_get_time() + BUSY_TIMEOUT_US;
+    int64_t spin_until = esp_timer_get_time() + WAIT_BUSY_SPIN_US;
     while (gpio_get_level(s_pin_busy) && esp_timer_get_time() < deadline) {
-        // tight spin — BUSY typically falls within microseconds
-        esp_rom_delay_us(10);
+        if (esp_timer_get_time() < spin_until) {
+            esp_rom_delay_us(10);
+        } else {
+            vTaskDelay(1);
+        }
     }
 }
 
@@ -222,6 +242,29 @@ static esp_err_t set_frequency_internal(uint32_t hz)
     };
     write_command(CMD_SET_RF_FREQUENCY, p, 4);
     return ESP_OK;
+}
+
+// SX126x's image-rejection calibration is band-specific (Semtech's own
+// reference driver recalibrates on every frequency change, not just once
+// at init) — this was previously only ever called from sx1262_init() using
+// whatever frequency_hz happened to be in that call's radio_config_t
+// (868 MHz default on this board, per its own default config below), and
+// never again. Meshtastic's mesh_radio_apply_preset() retunes to the real
+// channel frequency (906.875 MHz US default) purely via set_frequency(),
+// which re-armed RX correctly but left the radio calibrated for the wrong
+// band the whole time — a confirmed-live root cause for "radio inits fine,
+// TX/RX report success, but never actually hears anything": degraded
+// sensitivity/image rejection at the real operating frequency, with
+// nothing in the command sequence ever failing to make that visible.
+static void calibrate_image(uint32_t hz)
+{
+    uint8_t cal[2];
+    if (hz < 446000000UL)      { cal[0] = 0x6B; cal[1] = 0x6F; }
+    else if (hz < 734000000UL) { cal[0] = 0x75; cal[1] = 0x81; }
+    else if (hz < 828000000UL) { cal[0] = 0xC1; cal[1] = 0xC5; }
+    else if (hz < 877000000UL) { cal[0] = 0xD7; cal[1] = 0xDB; }
+    else                        { cal[0] = 0xE1; cal[1] = 0xE9; }
+    write_command(CMD_CALIBRATE_IMAGE, cal, 2);
 }
 
 static esp_err_t set_modulation(uint8_t sf, uint32_t bw_hz, uint8_t cr)
@@ -341,15 +384,7 @@ static esp_err_t sx1262_init(const radio_config_t *cfg)
     set_frequency_internal(freq);
 
     // Calibrate image for the chosen band
-    {
-        uint8_t cal[2];
-        if (freq < 446000000UL)      { cal[0] = 0x6B; cal[1] = 0x6F; }
-        else if (freq < 734000000UL) { cal[0] = 0x75; cal[1] = 0x81; }
-        else if (freq < 828000000UL) { cal[0] = 0xC1; cal[1] = 0xC5; }
-        else if (freq < 877000000UL) { cal[0] = 0xD7; cal[1] = 0xDB; }
-        else                         { cal[0] = 0xE1; cal[1] = 0xE9; }
-        write_command(CMD_CALIBRATE_IMAGE, cal, 2);
-    }
+    calibrate_image(freq);
 
     // Modulation
     set_modulation(sf, bw, cr);
@@ -362,6 +397,26 @@ static esp_err_t sx1262_init(const radio_config_t *cfg)
                         0x00, IRQ_TX_DONE | IRQ_RX_DONE | IRQ_CRC_ERR,
                         0x00, 0x00, 0x00, 0x00 };
       write_command(CMD_SET_DIO_IRQ_PARAMS, p, 8); }
+
+    // Most integrated SX1262 modules (this board's included, per the
+    // official Meshtastic firmware's own T-Deck board definition —
+    // variants/esp32s3/t-deck/variant.h sets SX126X_DIO2_AS_RF_SWITCH and
+    // confirms "the TTGO module hooks the SX1262-DIO2 in to control the
+    // TX/RX switch") wire DIO2 to automatically drive the antenna's TX/RX
+    // switch — without telling the chip to actually use DIO2 that way, the
+    // switch's state is undefined, and RX can silently never see any real
+    // RF no matter how correctly everything else is configured. Opcode and
+    // data byte match RadioLib's SX126x::setDio2AsRfSwitch(true) exactly
+    // (RADIOLIB_SX126X_CMD_SET_DIO2_AS_RF_SWITCH_CTRL = 0x9D,
+    // RADIOLIB_SX126X_DIO2_AS_RF_SWITCH = 0x01) — Meshtastic's own firmware
+    // is built on RadioLib, so this is the exact command real Meshtastic
+    // nodes send. First attempt placed this right after regulator mode and
+    // hung sx1262_init() outright (meshtastic's own boot-time "ready" log
+    // line, normally present within ~1-2s, never appeared even 30s after a
+    // fresh reset) — moved here to match RadioLib's begin() ordering
+    // exactly: after packet type/sync word/frequency/modulation are
+    // already configured, immediately before the first RX/TX.
+    { uint8_t p = 0x01; write_command(CMD_SET_DIO2_AS_RF_SWITCH_CTRL, &p, 1); }
 
     // Start in receive mode
     start_rx_continuous();
@@ -500,6 +555,7 @@ static esp_err_t sx1262_set_frequency(uint32_t hz)
 {
     standby();
     esp_err_t ret = set_frequency_internal(hz);
+    calibrate_image(hz);   // band-specific — see calibrate_image()'s comment
     start_rx_continuous();
     return ret;
 }

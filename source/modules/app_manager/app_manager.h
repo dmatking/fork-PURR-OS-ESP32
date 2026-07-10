@@ -28,6 +28,11 @@ typedef enum {
                           // registers these only when the launching script's
                           // tier is HISS). Trust is extension-only, same as
                           // every other tier here — no flash-vs-SD gating.
+    APP_TIER_KITTEN = 4, // Lua script — like .hiss (same VM/launch path,
+                          // same kitt.*/radio.*/gps.* bindings, same
+                          // purr-sig/Developer-Mode consent gate), but the
+                          // first one found on SD autoruns at boot without
+                          // being manually launched (see app_manager_init()).
 } app_tier_t;
 
 // ── App entry ─────────────────────────────────────────────────────────────────
@@ -61,6 +66,7 @@ int  app_manager_scan(void);
 // Launch an app by index or by path. Returns 0 on success.
 int  app_manager_launch_idx(int idx);
 int  app_manager_launch_path(const char *path);
+int  app_manager_launch_by_name(const char *name);
 
 // Stop a running app by index
 void app_manager_stop(int idx);

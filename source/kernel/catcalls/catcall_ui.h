@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-#define CATCALL_UI_VERSION 4
+#define CATCALL_UI_VERSION 5
 
 typedef uint32_t purr_win_t;   // window handle
 typedef uint32_t purr_wid_t;   // widget handle (label, button, textarea, etc.)
@@ -28,6 +28,23 @@ typedef enum {
 } purr_event_t;
 
 typedef void (*purr_win_cb_t)(purr_wid_t wid, purr_event_t event, void *user);
+
+// Raw canvas drawing + touch — for widget-dense UIs (e.g. a calculator
+// keypad) that draw their own controls as flat colour/text rather than
+// creating one native widget per button. PURR-OS-0.11's app model always
+// worked this way (see PURR-OS-0.11/devices/apps/app_lua_window.cpp's
+// l_win_rect/l_win_button/l_win_wait_touch — even its "buttons" were just
+// entries in an app-owned draw list, never real widget-manager objects) and
+// never hit a hang class confirmed live in the *current* widget-manager
+// backend: closing a window with ~20 native button controls can leave the
+// UI task permanently stuck inside the backend's own control-teardown code,
+// for reasons that traced clean through every bounded loop involved and
+// don't reproduce with a low control count. Until that's understood, apps
+// that need many buttons (calculators, keypads, grids) should draw them
+// with this API instead of one native button widget each.
+typedef void (*purr_win_paint_cb_t)(purr_win_t win, void *user);
+typedef void (*purr_win_touch_cb_t)(purr_win_t win, int16_t x, int16_t y,
+                                     bool pressed, void *user);
 
 // Text alignment
 typedef enum {
@@ -100,5 +117,22 @@ typedef struct {
     // ── Keyboard ───────────────────────────────────────────────────────────
     void (*kb_show) (purr_win_t win, purr_wid_t target_textarea);
     void (*kb_hide) (purr_win_t win);
+
+    // ── Canvas (raw draw + touch, see purr_win_paint_cb_t's doc above) ──────
+    // canvas_on_paint's cb is invoked by the backend whenever win's client
+    // area needs (re)drawing (creation, restore, overlap uncovering) — call
+    // canvas_rect/canvas_text only from inside it, where the backend has a
+    // valid paint context set up. canvas_repaint() requests another such
+    // call asynchronously (e.g. after app state changes) rather than drawing
+    // immediately, since there may be no valid paint context at the call
+    // site (a button-style tap handled via canvas_on_touch, for instance).
+    void (*canvas_on_paint) (purr_win_t win, purr_win_paint_cb_t cb, void *user);
+    void (*canvas_on_touch) (purr_win_t win, purr_win_touch_cb_t cb, void *user);
+    void (*canvas_rect)     (purr_win_t win, int16_t x, int16_t y,
+                              int16_t w, int16_t h, uint32_t color);
+    void (*canvas_text)     (purr_win_t win, int16_t x, int16_t y,
+                              const char *text, uint32_t color);
+    void (*canvas_repaint)  (purr_win_t win);
+    void (*canvas_size)     (purr_win_t win, int16_t *w, int16_t *h);   // client area size
 
 } catcall_ui_t;

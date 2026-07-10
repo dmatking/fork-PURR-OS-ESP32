@@ -1,0 +1,17 @@
+# modules/usb_msc/module.pcat
+#
+# Not a PURR_MODULE_REGISTER()-based catcall module — a plain component
+# called directly from a specialized kernel's app_main(), same as
+# source/drivers/radio/sx1262. This .pcat file exists purely so
+# modulestrap's directory scan picks up source/modules/usb_msc/ and adds it
+# to cattobaked/components_manifest.cmake (see usb_msc.h's doc comment for
+# the actual design).
+
+name              = "usb_msc"
+version           = "1.0.0"
+module_type       = "PURR_MOD_DRIVER"
+kernel_min        = "0.9.0"
+kernel_max        = ""
+provides          = []
+required_catcalls = []
+idf_requires      = "esp_common driver freertos esp_tinyusb fatfs sdmmc"

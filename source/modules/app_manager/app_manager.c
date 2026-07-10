@@ -62,17 +62,19 @@ static app_tier_t tier_from_ext(const char *filename)
     if (strcmp(ext, ".meow") == 0) return APP_TIER_MEOW;
     if (strcmp(ext, ".hiss") == 0) return APP_TIER_HISS;
     if (strcmp(ext, ".claw") == 0) return APP_TIER_CLAW;
+    if (strcmp(ext, ".kitten") == 0) return APP_TIER_KITTEN;
     return APP_TIER_PAWS;   // .paws and anything else
 }
 
 static const char *tier_name(app_tier_t t)
 {
     switch (t) {
-    case APP_TIER_MEOW: return "meow";
-    case APP_TIER_HISS: return "hiss";
-    case APP_TIER_PAWS: return "paws";
-    case APP_TIER_CLAW: return "claw";
-    default:            return "?";
+    case APP_TIER_MEOW:   return "meow";
+    case APP_TIER_HISS:   return "hiss";
+    case APP_TIER_PAWS:   return "paws";
+    case APP_TIER_CLAW:   return "claw";
+    case APP_TIER_KITTEN: return "kitten";
+    default:              return "?";
     }
 }
 
@@ -111,7 +113,8 @@ static void scan_dir(const char *dir)
         if (strcmp(ext, ".meow") != 0 &&
             strcmp(ext, ".hiss") != 0 &&
             strcmp(ext, ".paws") != 0 &&
-            strcmp(ext, ".claw") != 0) continue;
+            strcmp(ext, ".claw") != 0 &&
+            strcmp(ext, ".kitten") != 0) continue;
 
         char name[sizeof(((app_entry_t *)0)->name)];
         make_display_name(ent->d_name, name, sizeof(name));
@@ -243,14 +246,14 @@ static void meow_task(void *arg) {
     vTaskDeleteWithCaps(NULL);
 }
 
-// Scans a .hiss script's own source for a "-- purr-sig: <value>" comment —
-// the same self-declared, honor-system tag catstrap.py's cmd_validate()/
-// build_app() read at build time on the dev machine, but this is the copy
-// that actually matters: it gates whether launch_meow() below lets an
-// unsigned .hiss script run. A whole-buffer strstr() rather than a strict
-// line-anchored parser — good enough for an honor-system tag, and simpler
-// than re-deriving line boundaries on-device. Falls back to "unsigned" for
-// no tag, or a value not in this list.
+// Scans a .hiss/.kitten script's own source for a "-- purr-sig: <value>"
+// comment — the same self-declared, honor-system tag catstrap.py's
+// cmd_validate()/build_app() read at build time on the dev machine, but
+// this is the copy that actually matters: it gates whether launch_meow()
+// below lets an unsigned privileged script run. A whole-buffer strstr()
+// rather than a strict line-anchored parser — good enough for an
+// honor-system tag, and simpler than re-deriving line boundaries on-device.
+// Falls back to "unsigned" for no tag, or a value not in this list.
 static const char *scan_purr_sig(const char *code) {
     static const char *values[] = { "dev-signed", "trusted-signed", "dev-approved" };
     const char *p = strstr(code, "purr-sig:");
@@ -282,7 +285,9 @@ static int launch_meow(app_entry_t *app, int idx)
     }
 
     strncpy(s_meow_pending_path, app->path, sizeof(s_meow_pending_path) - 1);
-    s_meow_pending_privileged = (app->tier == APP_TIER_HISS);
+    // .kitten is "like a .hiss" — same privileged kitt.*/radio.*/gps.* Lua
+    // namespace access, not just the same file-discovery/launch treatment.
+    s_meow_pending_privileged = (app->tier == APP_TIER_HISS || app->tier == APP_TIER_KITTEN);
 
     // Preload the script into a PSRAM buffer here, on this function's own
     // caller's stack — for the only launch path that exists today (a
@@ -354,12 +359,17 @@ static int launch_meow(app_entry_t *app, int idx)
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     }
 
-    // Developer Mode gate — .hiss only (see purr_kernel_dev_mode_enabled()'s
-    // doc comment). A signed script (dev-signed/trusted-signed/dev-approved)
-    // always runs; only "unsigned" is blocked, and only when Developer Mode
-    // is off. Rejected here, before any task/semaphore exists, so nothing
-    // downstream needs to know this ever almost ran.
-    if (app->tier == APP_TIER_HISS) {
+    // Developer Mode gate — .hiss and .kitten (both privileged tiers, see
+    // purr_kernel_dev_mode_enabled()'s doc comment). A signed script
+    // (dev-signed/trusted-signed/dev-approved) always runs; only "unsigned"
+    // is blocked, and only when Developer Mode is off. Rejected here, before
+    // any task/semaphore exists, so nothing downstream needs to know this
+    // ever almost ran. .kitten needs this even more than .hiss does —
+    // app_manager_init() autoruns the first .kitten found on the SD card at
+    // *every* boot with no user interaction at all, so without this gate any
+    // unsigned .kitten dropped onto the card would silently get full
+    // kitt.*/radio.*/gps.* privilege on every power-on.
+    if (app->tier == APP_TIER_HISS || app->tier == APP_TIER_KITTEN) {
         const char *sig = scan_purr_sig(code);
         if (strcmp(sig, "unsigned") == 0 && !purr_kernel_dev_mode_enabled()) {
             heap_caps_free(code);
@@ -373,8 +383,9 @@ static int launch_meow(app_entry_t *app, int idx)
             s_meow_pending_privileged = false;
             app->state = APP_STATE_ERROR;
             snprintf(app->error, sizeof(app->error),
-                     "unsigned .hiss — enable Developer Mode in Settings");
-            ESP_LOGW(TAG, "launch .hiss: '%s' rejected — unsigned, Developer Mode off", app->name);
+                     "unsigned .%s — enable Developer Mode in Settings", tier_name(app->tier));
+            ESP_LOGW(TAG, "launch .%s: '%s' rejected — unsigned, Developer Mode off",
+                     tier_name(app->tier), app->name);
             return -1;
         }
     }
@@ -618,7 +629,29 @@ int app_manager_launch_path(const char *path)
         if (strcmp(s_apps[i].path, path) == 0) {
             app_entry_t *app = &s_apps[i];
             if (app->state == APP_STATE_RUNNING) return 0;
-            if (app->tier == APP_TIER_MEOW || app->tier == APP_TIER_HISS) return launch_meow(app, i);
+            if (app->tier == APP_TIER_MEOW || app->tier == APP_TIER_HISS ||
+                app->tier == APP_TIER_KITTEN) return launch_meow(app, i);
+            return launch_native(app, i);
+        }
+    }
+    return -1;
+}
+
+// For a pre-linked (PURR_MOD_APP) app, app->name is the module's own
+// hdr->name (see app_manager_scan() above) — matches the module's
+// PURR_MODULE_REGISTER() name, not necessarily its display name. Intended
+// for a specialized kernel boot.c to auto-launch a specific built-in app
+// (e.g. a device's diagnostics screen) once app_manager_init() has scanned;
+// calling this before that scan has run always returns -1 (nothing found).
+int app_manager_launch_by_name(const char *name)
+{
+    if (!name) return -1;
+    for (int i = 0; i < s_app_count; i++) {
+        if (strcmp(s_apps[i].name, name) == 0) {
+            app_entry_t *app = &s_apps[i];
+            if (app->state == APP_STATE_RUNNING) return 0;
+            if (app->tier == APP_TIER_MEOW || app->tier == APP_TIER_HISS ||
+                app->tier == APP_TIER_KITTEN) return launch_meow(app, i);
             return launch_native(app, i);
         }
     }
@@ -775,11 +808,32 @@ static void app_manager_on_window_created(purr_win_t win) {
     purr_win_on_close(win, app_manager_on_win_close, (void *)app);
 }
 
+// Launches the first .kitten app found on the initial boot scan, without
+// the user manually tapping it. Called once from app_manager_init() only —
+// deliberately NOT from app_manager_scan() itself, so a later manual
+// rescan (e.g. Fileman's SD hot-reload) never re-triggers this. The Lua
+// runtime on these boards is single-instance ("only one Lua VM runs at a
+// time" — see app_manager_get_pending_meow_path()'s doc comment), so this
+// launches the first .kitten found, not every one present — the same
+// limitation manually launching multiple .meow/.hiss apps already has,
+// not a new restriction.
+static void autorun_kitten(void)
+{
+    for (int i = 0; i < s_app_count; i++) {
+        if (s_apps[i].tier == APP_TIER_KITTEN) {
+            ESP_LOGI(TAG, "autorun: launching .kitten app '%s'", s_apps[i].name);
+            app_manager_launch_idx(i);
+            return;
+        }
+    }
+}
+
 int app_manager_init(void)
 {
     memset(s_ctxs, 0, sizeof(s_ctxs));
     purr_kernel_set_window_created_cb(app_manager_on_window_created);
     app_manager_scan();
+    autorun_kitten();
     ESP_LOGI(TAG, "init complete");
     return 0;
 }

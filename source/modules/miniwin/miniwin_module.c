@@ -237,15 +237,20 @@ static void miniwin_task(void *arg)
         // followed by a full reset the moment an app launches. KittenUI's
         // task loop already does this (see kittenui_module.c); MiniWin's
         // didn't.
+        purr_kernel_ui_breadcrumb("lock");
         purr_kernel_ui_lock();
+        purr_kernel_ui_breadcrumb("process_message");
         mw_process_message();
         // Runs any close-icon teardowns queued by MW_WINDOW_REMOVED_MESSAGE
         // this iteration — deliberately from here, not from inside
         // mw_process_message()'s own callback dispatch. See
         // miniwin_win.c's win_message_func()/miniwin_win_process_pending_
         // closes() comments for why (MiniWin's own reentrancy guard).
+        purr_kernel_ui_breadcrumb("pending_closes");
         miniwin_win_process_pending_closes();
+        purr_kernel_ui_breadcrumb("keyboard_poll");
         miniwin_keyboard_poll();  // drain all inputs: cursor gets pointer/click, keys → focused win
+        purr_kernel_ui_breadcrumb("cursor_poll");
         miniwin_cursor_poll();    // redraw cursor on top of frame if position changed
 
         // Refresh the status bar (RAM/WiFi/LoRa/battery) once a second —
@@ -253,13 +258,16 @@ static void miniwin_task(void *arg)
         TickType_t now = xTaskGetTickCount();
         if ((now - last_status_redraw) >= pdMS_TO_TICKS(1000)) {
             last_status_redraw = now;
+            purr_kernel_ui_breadcrumb("status_repaint");
 #ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
             mw_paint_window_client_rect(wce_desktop_handle(), &status_rect);
 #else
             mw_paint_window_client_rect(MW_ROOT_WINDOW_HANDLE, &status_rect);
 #endif
         }
+        purr_kernel_ui_breadcrumb("unlock");
         purr_kernel_ui_unlock();
+        purr_kernel_ui_breadcrumb("idle");
         purr_kernel_ui_heartbeat();
 
         // taskYIELD() only hands off to an equal/higher-priority READY task —

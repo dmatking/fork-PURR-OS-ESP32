@@ -1,5 +1,7 @@
 # PURR OS — v0.13.0
 
+# Documentation will not be updated until the eve of a 1.0 RC build, as the focus is stability and support for right now. reach out if you have any issues/concerns!
+
 **P.U.R.R.** = Portable Unified Runtime & Radio Operating System
 **K.I.T.T** = Kernel Interface Translation Toolkit
 

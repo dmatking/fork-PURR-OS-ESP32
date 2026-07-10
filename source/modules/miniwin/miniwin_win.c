@@ -46,6 +46,13 @@ typedef struct {
     bool           torn_down;
     purr_win_cb_t  close_cb;
     void          *close_user;
+    // Canvas (raw draw + touch) — see purr_win_paint_cb_t's doc in
+    // catcall_ui.h. NULL unless the app opted in via
+    // purr_win_canvas_on_paint()/_on_touch().
+    purr_win_paint_cb_t canvas_paint_cb;
+    void                *canvas_paint_user;
+    purr_win_touch_cb_t  canvas_touch_cb;
+    void                *canvas_touch_user;
 } win_slot_t;
 
 typedef struct {
@@ -83,6 +90,35 @@ static purr_wid_t     s_ta_focused[MAX_WINS];   // wid of focused textarea per w
 static purr_win_t s_pending_closes[MAX_PENDING_CLOSES];
 static int        s_pending_close_count = 0;
 
+// ── List storage ─────────────────────────────────────────────────────────
+// Declared up here (rather than down by the other list functions) because
+// win_message_func()'s MW_LIST_BOX_ITEM_PRESSED_MESSAGE handler needs it.
+typedef struct {
+    mw_ui_list_box_data_t box;
+    // Authoritative last-pressed index, captured from
+    // MW_LIST_BOX_ITEM_PRESSED_MESSAGE's message_data in win_message_func().
+    // MiniWin's own box.line_is_selected is a transient "press animation"
+    // flag that the list box widget itself clears (ui_list_box.c's
+    // MW_TIMER_MESSAGE case) before this message is even posted — reading
+    // it from mw_list_get_selected() always returned -1. -1 = none pressed
+    // yet, or cleared by a content change.
+    int last_pressed;
+} list_slot_t;
+
+static list_slot_t s_list_data[MAX_WIDS];
+
+// ── Textarea storage ─────────────────────────────────────────────────────
+// Also declared up here — win_message_func()'s MW_KEY_PRESSED_MESSAGE
+// handler needs to reach a focused textarea's buffer directly.
+static mw_ui_text_box_data_t s_ta_data[MAX_WIDS];
+static char *s_ta_buf[MAX_WIDS];
+
+// Forward-declared — defined with the rest of the textarea widget functions
+// further down, but win_message_func()'s MW_KEY_PRESSED_MESSAGE handler
+// needs to call them.
+static void mw_ta_recalc_height(int idx);
+static void mw_ta_append(purr_wid_t wid, const char *text);
+
 static purr_win_t alloc_win(mw_handle_t h) {
     for (int i = 0; i < MAX_WINS; i++)
         if (!s_wins[i].used) {
@@ -91,6 +127,10 @@ static purr_win_t alloc_win(mw_handle_t h) {
             s_wins[i].torn_down = false;
             s_wins[i].close_cb = NULL;
             s_wins[i].close_user = NULL;
+            s_wins[i].canvas_paint_cb = NULL;
+            s_wins[i].canvas_paint_user = NULL;
+            s_wins[i].canvas_touch_cb = NULL;
+            s_wins[i].canvas_touch_user = NULL;
             s_cursor_y[i] = 0;
             s_layout[i].active = false;
             s_ta_focused[i] = 0;
@@ -151,6 +191,12 @@ static void layout_place(purr_win_t h, int16_t width, int16_t height,
 
 // ── Per-window paint / message stubs ─────────────────────────────────────────
 
+// Set only for the duration of a win_paint_func() call that has a
+// registered canvas_paint_cb — canvas_rect()/canvas_text() are only valid
+// called synchronously from inside that callback (same task, same call
+// stack, so a plain static is safe — no concurrent writers).
+static const mw_gl_draw_info_t *s_canvas_draw_info = NULL;
+
 static void win_paint_func(mw_handle_t window_handle, const mw_gl_draw_info_t *draw_info)
 {
     // MiniWin does not clear a window's client area on its own before its
@@ -167,6 +213,13 @@ static void win_paint_func(mw_handle_t window_handle, const mw_gl_draw_info_t *d
 
     purr_win_t win = win_index_for_handle(window_handle);
     if (win == 0) return;
+
+    if (s_wins[win-1].canvas_paint_cb) {
+        s_canvas_draw_info = draw_info;
+        s_wins[win-1].canvas_paint_cb(win, s_wins[win-1].canvas_paint_user);
+        s_canvas_draw_info = NULL;
+    }
+
     purr_wid_t focused = s_ta_focused[win-1];
     if (focused == 0) return;
     wid_slot_t *s = get_wid(focused);
@@ -194,16 +247,49 @@ static void win_message_func(const mw_message_t *msg)
         mw_handle_t win  = msg->recipient_handle;
         for (int i = 0; i < MAX_WIDS; i++) {
             if (s_wids[i].used && s_wids[i].mw_win == win && s_wids[i].mw_ctrl == ctrl) {
-                if (s_wids[i].cb)
+                if (s_wids[i].cb) {
+                    // Button click callbacks run synchronously on this task —
+                    // for .meow apps this is a direct lua_pcall() (see
+                    // lua_runtime.c's threading-model comment). If a script's
+                    // click handler ever blocks or loops, this is where it
+                    // shows up as stuck.
+                    purr_kernel_ui_breadcrumb("process_message/button_click_cb");
                     s_wids[i].cb((purr_wid_t)(i+1), PURR_EVENT_CLICKED, s_wids[i].user);
+                    purr_kernel_ui_breadcrumb("process_message/button_click_cb_done");
+                }
                 break;
             }
+        }
+    } else if (msg->message_id == MW_TOUCH_DOWN_MESSAGE || msg->message_id == MW_TOUCH_UP_MESSAGE ||
+               msg->message_id == MW_TOUCH_DRAG_MESSAGE) {
+        // MiniWin already posts these to a window's own message_func,
+        // client-relative, whenever a touch lands in the client area and
+        // doesn't hit any native control (see process_touch_message()'s
+        // window-client branch in MiniWin/miniwin.c) — no new touch
+        // plumbing needed, just consuming what's already sent. Only
+        // dispatched to apps that registered via purr_win_canvas_on_touch();
+        // apps that only use native buttons never see these (MiniWin routes
+        // touches inside a control's rect to the control instead).
+        purr_win_t win = win_index_for_handle(msg->recipient_handle);
+        if (win != 0 && s_wins[win-1].canvas_touch_cb) {
+            int16_t x = (int16_t)(msg->message_data >> 16);
+            int16_t y = (int16_t)(msg->message_data & 0xFFFFU);
+            bool pressed = (msg->message_id != MW_TOUCH_UP_MESSAGE);
+            s_wins[win-1].canvas_touch_cb(win, x, y, pressed, s_wins[win-1].canvas_touch_user);
         }
     } else if (msg->message_id == MW_LIST_BOX_ITEM_PRESSED_MESSAGE) {
         mw_handle_t ctrl = msg->sender_handle;
         mw_handle_t win  = msg->recipient_handle;
         for (int i = 0; i < MAX_WIDS; i++) {
             if (s_wids[i].used && s_wids[i].mw_win == win && s_wids[i].mw_ctrl == ctrl) {
+                // Capture the real pressed index from message_data BEFORE
+                // firing callbacks — mw_list_get_selected() reads this, not
+                // MiniWin's own box.line_is_selected (which the list box
+                // widget clears itself before ever posting this message;
+                // see list_slot_t's comment). i indexes s_list_data the same
+                // way it indexes s_wids — both are allocated together by
+                // mw_list_create()'s single first-free-slot scan.
+                s_list_data[i].last_pressed = (int)(uint8_t)msg->message_data;
                 // MiniWin's list box has no intermediate highlight-without-confirm
                 // state — a tap both selects and confirms in one message, so both
                 // events fire together rather than SELECTED preceding ACTIVATED
@@ -247,8 +333,51 @@ static void win_message_func(const mw_message_t *msg)
         if (win == 0 || s_wins[win-1].torn_down) return;
 
         s_wins[win-1].torn_down = true;
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+        // mw_win_destroy()'s top-down path unregisters the taskbar entry
+        // itself (miniwin_win.c's own wce_taskbar_unregister() call) before
+        // it ever calls mw_remove_window() — but that path is skipped
+        // entirely here, since torn_down is already true by the time
+        // mw_win_destroy() runs for a bottom-up close (X icon). Without
+        // this, the taskbar keeps a stale handle for this window forever;
+        // the very next repaint calls mw_get_window_flags() on it and hits
+        // MW_ASSERT("Bad window handle") — confirmed live right after the
+        // mw_remove_window() infinite-loop fix started letting bottom-up
+        // closes actually complete instead of hanging before ever reaching
+        // this far.
+        wce_taskbar_unregister(wh);
+#endif
         if (s_pending_close_count < MAX_PENDING_CLOSES) {
             s_pending_closes[s_pending_close_count++] = win;
+        }
+    } else if (msg->message_id == MW_KEY_PRESSED_MESSAGE) {
+        // miniwin_keyboard.c posts this straight to the focused window for
+        // every physical key-down (masked to the low byte — plain ASCII);
+        // nothing here ever consumed it, so typed characters never reached
+        // any textarea's buffer at all — confirmed live once the
+        // mw_ta_create() layout fix made textareas actually visible enough
+        // to notice typing did nothing.
+        purr_win_t win = win_index_for_handle(msg->recipient_handle);
+        if (win == 0) return;
+        purr_wid_t focused_ta = s_ta_focused[win-1];
+        if (focused_ta == 0) return;
+        int idx = (int)(focused_ta - 1);
+        if (idx < 0 || idx >= MAX_WIDS || !s_ta_buf[idx]) return;
+
+        uint8_t key = (uint8_t)msg->message_data;
+        if (key == 0x08 || key == 0x7F) {
+            // Backspace/Delete — trim one char off the end.
+            size_t len = strlen(s_ta_buf[idx]);
+            if (len > 0) {
+                s_ta_buf[idx][len - 1] = '\0';
+                mw_ta_recalc_height(idx);
+                mw_paint_control(s_wids[idx].mw_ctrl);
+            }
+        } else if (key == '\r' || key == '\n') {
+            mw_ta_append(focused_ta, "\n");
+        } else if (key >= 0x20 && key <= 0x7E) {
+            char ch[2] = { (char)key, '\0' };
+            mw_ta_append(focused_ta, ch);
         }
     }
 }
@@ -376,18 +505,8 @@ static void mw_win_hide(purr_win_t h) {
     if (wh != MW_INVALID_HANDLE) mw_set_window_visible(wh, false);
 }
 
-// ── Textarea storage (declared ahead of mw_win_clear, which frees it) ───────
-
-static mw_ui_text_box_data_t s_ta_data[MAX_WIDS];
-static char *s_ta_buf[MAX_WIDS];
-
-// ── List storage (declared ahead of mw_win_clear, which frees it) ──────────
-
-typedef struct {
-    mw_ui_list_box_data_t box;
-} list_slot_t;
-
-static list_slot_t s_list_data[MAX_WIDS];
+// ── Textarea storage — declared earlier, above win_message_func (see that
+// forward comment) — and List storage, same (see its own forward comment).
 
 // Avoids relying on strdup, which newlib-nano configs can omit.
 static char *dup_str(const char *s) {
@@ -577,11 +696,21 @@ static purr_wid_t mw_ta_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
 
     int16_t disp_w = mw_hal_lcd_get_display_width();
     int16_t disp_h = mw_hal_lcd_get_display_height();
-    mw_util_rect_t r = {
-        4, 28,
-        (int16_t)((disp_w * w_pct) / 100 - 8),
-        (int16_t)((disp_h * h_pct) / 100)
-    };
+    int16_t width  = (int16_t)((disp_w * w_pct) / 100 - 8);
+    int16_t height = (int16_t)((disp_h * h_pct) / 100);
+    // Was hardcoded to (4, 28), ignoring layout_place() entirely — every
+    // other widget type (list/button/label) goes through layout_place() to
+    // get a position that accounts for an active row/col layout or the
+    // vertical-stacking cursor. A textarea placed beside a list in a row
+    // (fileman's file-list + preview-pane layout, exactly this app's
+    // structure) or as the second of two stacked textareas (terminal's
+    // output + input, meshchat's chat log + input) landed right on top of
+    // whatever came before it instead of beside/below it — confirmed live
+    // as a white rectangle (this control's default bg_colour) covering a
+    // file list's contents.
+    int16_t x, y;
+    layout_place(h, width, height, 4, &x, &y);
+    mw_util_rect_t r = { x, y, width, height };
     mw_handle_t ctrl = mw_ui_text_box_add_new(&r, wh,
         MW_CONTROL_FLAG_IS_VISIBLE | MW_CONTROL_FLAG_IS_ENABLED,
         &s_ta_data[slot]);
@@ -677,6 +806,7 @@ static purr_wid_t mw_list_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
     s_list_data[slot].box.number_of_items = 0;
     s_list_data[slot].box.list_box_entries = NULL;
     s_list_data[slot].box.line_enables = MW_ALL_ITEMS_ENABLED;
+    s_list_data[slot].last_pressed = -1;
 
     int16_t x, y;
     layout_place(h, width, (int16_t)(num_lines * MW_UI_LIST_BOX_ROW_HEIGHT), 4, &x, &y);
@@ -709,6 +839,7 @@ static void mw_list_set_items(purr_wid_t wid, const char **items, int count) {
     }
     s_list_data[idx].box.lines_to_scroll = 0;
     s_list_data[idx].box.line_is_selected = false;
+    s_list_data[idx].last_pressed = -1;  // content changed — old index may not even exist anymore
     mw_paint_control(s->mw_ctrl);
 }
 
@@ -719,7 +850,7 @@ static void mw_list_clear(purr_wid_t wid) {
 static int mw_list_get_selected(purr_wid_t wid) {
     int idx = (int)(wid - 1);
     if (idx < 0 || idx >= MAX_WIDS || !s_wids[idx].used) return -1;
-    return s_list_data[idx].box.line_is_selected ? (int)s_list_data[idx].box.selection : -1;
+    return s_list_data[idx].last_pressed;
 }
 
 static void mw_list_set_selected(purr_wid_t wid, int index) {
@@ -728,9 +859,11 @@ static void mw_list_set_selected(purr_wid_t wid, int index) {
     int idx = (int)(wid - 1);
     if (index < 0) {
         s_list_data[idx].box.line_is_selected = false;
+        s_list_data[idx].last_pressed = -1;
     } else {
         s_list_data[idx].box.selection = (uint8_t)index;
         s_list_data[idx].box.line_is_selected = true;
+        s_list_data[idx].last_pressed = index;
     }
     mw_paint_control(s->mw_ctrl);
 }
@@ -768,6 +901,51 @@ static void mw_layout_end(purr_wid_t wid) {
 static void mw_kb_show(purr_win_t h, purr_wid_t target) { (void)h; (void)target; }
 static void mw_kb_hide(purr_win_t h) { (void)h; }
 
+// ── Canvas (raw draw + touch) ────────────────────────────────────────────────
+
+static void mw_canvas_on_paint(purr_win_t h, purr_win_paint_cb_t cb, void *user) {
+    if (h < 1 || h > MAX_WINS) return;
+    s_wins[h-1].canvas_paint_cb = cb;
+    s_wins[h-1].canvas_paint_user = user;
+}
+
+static void mw_canvas_on_touch(purr_win_t h, purr_win_touch_cb_t cb, void *user) {
+    if (h < 1 || h > MAX_WINS) return;
+    s_wins[h-1].canvas_touch_cb = cb;
+    s_wins[h-1].canvas_touch_user = user;
+}
+
+static void mw_canvas_rect(purr_win_t h, int16_t x, int16_t y, int16_t w, int16_t h_px, uint32_t color) {
+    if (h < 1 || h > MAX_WINS || !s_canvas_draw_info) return;
+    mw_gl_set_fill(MW_GL_FILL);
+    mw_gl_set_border(MW_GL_BORDER_OFF);
+    mw_gl_set_solid_fill_colour((mw_hal_lcd_colour_t)color);
+    mw_gl_clear_pattern();
+    mw_gl_rectangle(s_canvas_draw_info, x, y, w, h_px);
+}
+
+static void mw_canvas_text(purr_win_t h, int16_t x, int16_t y, const char *text, uint32_t color) {
+    if (h < 1 || h > MAX_WINS || !s_canvas_draw_info || !text) return;
+    mw_gl_set_fg_colour((mw_hal_lcd_colour_t)color);
+    mw_gl_set_bg_transparency(MW_GL_BG_TRANSPARENT);
+    mw_gl_set_font(MW_GL_FONT_16);
+    mw_gl_string(s_canvas_draw_info, x, y, text);
+}
+
+static void mw_canvas_repaint(purr_win_t h) {
+    mw_handle_t wh = get_win(h);
+    if (wh == MW_INVALID_HANDLE) return;
+    mw_paint_window_client(wh);
+}
+
+static void mw_canvas_size(purr_win_t h, int16_t *w, int16_t *h_out) {
+    mw_handle_t wh = get_win(h);
+    if (wh == MW_INVALID_HANDLE) { if (w) *w = 0; if (h_out) *h_out = 0; return; }
+    mw_util_rect_t client = mw_get_window_client_rect(wh);
+    if (w) *w = client.width;
+    if (h_out) *h_out = client.height;
+}
+
 // ── Registration ──────────────────────────────────────────────────────────────
 
 static const catcall_ui_t s_miniwin_ui = {
@@ -801,6 +979,12 @@ static const catcall_ui_t s_miniwin_ui = {
     .layout_end       = mw_layout_end,
     .kb_show          = mw_kb_show,
     .kb_hide          = mw_kb_hide,
+    .canvas_on_paint  = mw_canvas_on_paint,
+    .canvas_on_touch  = mw_canvas_on_touch,
+    .canvas_rect      = mw_canvas_rect,
+    .canvas_text      = mw_canvas_text,
+    .canvas_repaint   = mw_canvas_repaint,
+    .canvas_size      = mw_canvas_size,
 };
 
 void miniwin_win_register(void) {

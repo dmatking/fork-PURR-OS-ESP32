@@ -5,6 +5,18 @@
 // with keycode 0x0028 (Enter/OK). Held-direction acceleration kicks in after
 // 200 ms.
 //
+// This is the original held-direction-repeat design (restored) — a from-
+// scratch rewrite to pure single-edge-per-roll was tried in between and
+// reverted: it fixed a real stuck-pin spam bug (see TRACKBALL_MAX_HOLD_MS
+// below for the actual fix) but felt badly unresponsive in exchange
+// ("have to roll it 5-6 times for one step to register"), because repeat-
+// while-held is what gave normal rolling its felt sensitivity — confirmed
+// live, this is the same input model BlackPurr's shell was built and
+// tuned against (blackpurr_module.c/blackpurr_shell.c consume this same
+// driver's poll_event() output with no different logic of their own, so
+// "port what BlackPurr had" means this configuration, not a different
+// consumer-side algorithm).
+//
 // Register with kernel via purr_kernel_register_input() at init.
 
 #include "freertos/FreeRTOS.h"
@@ -54,6 +66,19 @@ static const char *TAG = "trackball";
 // smooth pointer motion, so this can — and should — be much more
 // deliberate than a cursor would want.
 #define TRACKBALL_MOVE_INTERVAL_MS  120
+
+// Safety cap: if a direction has been continuously held (post-deadzone) for
+// longer than any real deliberate scroll-hold would plausibly need, stop
+// repeating it — treat it as a stuck pin (electrical or mechanical) rather
+// than genuine input, and go silent until it actually releases and gets
+// pressed again. This is the one real, targeted fix for a live-confirmed
+// bug: a direction pin was observed holding a perfectly stable, non-
+// bouncing LOW for many seconds straight (not chatter — raw levels never
+// fluctuated across repeated samples), which the held=repeat design turned
+// into infinite accelerated spam in that direction forever. A genuine
+// human hold-to-scroll comfortably finishes well under this window; a
+// stuck pin now gets cut off instead of running away.
+#define TRACKBALL_MAX_HOLD_MS  1000
 
 // Event queue depth
 #define EVENT_QUEUE_DEPTH   16
@@ -197,11 +222,19 @@ static void update_state(void)
         // happens to last just past that window would still fire one
         // spurious step — this adds a no-op gap so only a deliberate hold
         // produces movement.
+        int64_t held_us = now - s_hold_start[d];
         bool past_deadzone = pressed &&
-            (now - s_hold_start[d]) > (int64_t)(TRACKBALL_DEADZONE_MS * 1000);
+            held_us > (int64_t)(TRACKBALL_DEADZONE_MS * 1000);
+
+        // Stuck-pin safety cap — see TRACKBALL_MAX_HOLD_MS's comment. Held
+        // this long without a genuine release+re-press is treated as a
+        // fault, not input.
+        if (past_deadzone && held_us > (int64_t)(TRACKBALL_MAX_HOLD_MS * 1000)) {
+            past_deadzone = false;
+        }
 
         if (past_deadzone) {
-            bool accel = (now - s_hold_start[d]) > (int64_t)(TRACKBALL_ACCEL_MS * 1000);
+            bool accel = held_us > (int64_t)(TRACKBALL_ACCEL_MS * 1000);
             int16_t step = accel ? 3 : 1;
             combined_dx += dx[i] * step;
             combined_dy += dy[i] * step;
@@ -221,21 +254,16 @@ static void update_state(void)
             .modifiers = 0,
         };
         enqueue(&ev);
-        // TEMPORARY diagnostic for the "drifts on its own when idle" report —
-        // remove once root-caused. Raw levels show whether this is genuine
-        // electrical chatter on a specific pin vs. a debounce/deadzone bug.
-        ESP_LOGI(TAG, "move dx=%d dy=%d  raw[UP,DN,LT,RT]=%d,%d,%d,%d  debounced[UP,DN,LT,RT]=%d,%d,%d,%d",
-                 combined_dx, combined_dy,
-                 gpio_get_level(s_pins[DIR_UP]), gpio_get_level(s_pins[DIR_DOWN]),
-                 gpio_get_level(s_pins[DIR_LEFT]), gpio_get_level(s_pins[DIR_RIGHT]),
-                 s_prev_state[DIR_UP], s_prev_state[DIR_DOWN],
-                 s_prev_state[DIR_LEFT], s_prev_state[DIR_RIGHT]);
     }
 
-    // Click
+    // Click — capture-before-call, matching the directions above. (A
+    // previous version compared s_prev_state[DIR_CLICK] *after* calling
+    // pin_pressed(), which already overwrites that field — the edge check
+    // was an unconditional tautology and click never actually fired.)
     {
+        bool was_pressed = s_prev_state[DIR_CLICK];
         bool pressed = pin_pressed(DIR_CLICK);
-        if (pressed && !s_prev_state[DIR_CLICK]) {
+        if (pressed && !was_pressed) {
             input_event_t ev = {
                 .type      = INPUT_EVENT_KEY_DOWN,
                 .keycode   = 0x0028,
@@ -245,7 +273,7 @@ static void update_state(void)
             };
             enqueue(&ev);
             s_hold_start[DIR_CLICK] = now;
-        } else if (!pressed && s_prev_state[DIR_CLICK]) {
+        } else if (!pressed && was_pressed) {
             input_event_t ev = {
                 .type      = INPUT_EVENT_KEY_UP,
                 .keycode   = 0x0028,
@@ -255,7 +283,6 @@ static void update_state(void)
             };
             enqueue(&ev);
         }
-        s_prev_state[DIR_CLICK] = pressed;
     }
 }
 

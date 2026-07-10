@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "purr_module.h"
 #include "../catcalls/catcalls.h"
 #include "../catcalls/catcall_ui.h"
@@ -17,8 +18,8 @@ extern "C" {
 
 // ── Version ───────────────────────────────────────────────────────────────────
 
-#define PURR_KERNEL_VERSION  "1.0.0-dp2"
-#define KITT_VERSION         "0.11.1"
+#define PURR_KERNEL_VERSION  "1.0.0-dp3"
+#define KITT_VERSION         "1.0.0"
 
 // ── Module loader ─────────────────────────────────────────────────────────────
 
@@ -98,6 +99,28 @@ void purr_kernel_ui_unlock(void);
 // pumping entirely, e.g. deadlocked on a lock it'll never release) and
 // trigger purr_crash_guard's hang path. See purr_crash_guard.h.
 void purr_kernel_ui_heartbeat(void);
+
+// Optional: record which step of its own pump loop the active UI backend is
+// currently inside (a string literal is fine — no copy is taken). Purely
+// diagnostic: read back and logged by the health watchdog at the moment it
+// detects a hang, so a stuck-forever iteration says *where* it's stuck
+// instead of just "unresponsive" — the previous, first-time debugging pass
+// on a live "miniwin hangs, cause unknown" report had nothing better to go
+// on than that generic message. Cheap enough (one pointer store) to call at
+// every step of a pump loop, not just once per iteration like the heartbeat
+// above.
+void purr_kernel_ui_breadcrumb(const char *step);
+
+// ── Kernel log tail ───────────────────────────────────────────────────────────
+// Captures every ESP_LOG* call system-wide into a small in-RAM scrollback
+// buffer — call purr_kernel_klog_init() once, early in boot, then any
+// module can pull recent kernel activity for on-screen display (e.g. a
+// diagnostics screen) with no serial cable attached. Doesn't replace normal
+// serial logging — the original vprintf is still called every time.
+void   purr_kernel_klog_init(void);
+// Copies up to out_size-1 of the most recent captured log text into out
+// (null-terminated). Returns the number of bytes copied.
+size_t purr_kernel_klog_tail(char *out, size_t out_size);
 
 // ── System info ───────────────────────────────────────────────────────────────
 
@@ -218,6 +241,16 @@ void __attribute__((noreturn)) purr_kernel_panic(const char *reason);
 // entity_name is shown on screen and included in the log-dump; may be NULL.
 // Never returns.
 void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool recoverable, const char *entity_name);
+
+// Optional hook a specialized kernel boot registers (e.g.
+// kernel_tdeck_plus/kernel_tdp_boot.c, calling usb_msc_share_sd() —
+// source/modules/usb_msc/usb_msc.h) so purr_kernel_panic_ex()'s recoverable
+// branch can automatically expose the SD card over USB the moment the panic
+// screen appears, without purr_kernel.c needing any direct dependency on
+// USB/TinyUSB/SD specifics — same registration pattern as
+// purr_kernel_set_window_created_cb() above. NULL (never registered) is a
+// silent no-op — devices without USB MSC support just don't get this.
+void purr_kernel_set_panic_usb_share_cb(void (*cb)(void));
 
 #ifdef __cplusplus
 }

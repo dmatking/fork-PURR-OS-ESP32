@@ -1,0 +1,13 @@
+[module]
+name        = "pounce"
+version     = "0.1.0"
+type        = "ui"
+description = "Pounce — raw framebuffer, keyboard+trackball-first UI backend"
+author      = "PURR OS"
+
+[requires]
+catcalls    = "display"
+kernel_min  = "0.11.1"
+
+[build]
+sources     = "pounce_module.c pounce_win.c pounce_render.c pounce_focus.c pounce_status.c"

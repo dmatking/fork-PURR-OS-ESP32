@@ -38,9 +38,10 @@ theme       = "wce"
 
 [apps]
 settings    = true
-about       = true
+# about — folded into Settings' own About tab, see cyd/device.pcat's comment
 terminal    = true
 fileman     = true
+taskmgr     = true
 
 [flash]
 display/st7789    = 1
@@ -52,9 +53,9 @@ radio/sx1276      = 2
 lua_runtime       = 2
 gps/generic_nmea  = 3
 apps/settings     = 3
-apps/about        = 3
 apps/terminal     = 3
 apps/fileman      = 3
+apps/taskmgr      = 3
 
 [pins]
 display_cs    = 12

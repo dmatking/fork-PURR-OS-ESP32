@@ -1,14 +1,36 @@
 // mesh_router.c — packet encode/decode, flood routing, dedup, node table.
-// Ported from PURR-OS-0.11/CoreOS/system/kernel/modules/purr_mesh.cpp — the
-// wire format is nanopb-encoded meshtastic_MeshPacket directly (ciphertext
-// in pkt.encrypted.bytes, IV derived from the packet's own plaintext id/from
-// fields), NOT the [4B magic][16B IV][ciphertext] framing described in the
-// old archived plan doc — that doc was an abbreviated/inaccurate summary of
-// this actual, working code.
+// Ported from PURR-OS-0.11/CoreOS/system/kernel/modules/purr_mesh.cpp, but
+// the wire format this file previously used (a nanopb-encoded
+// meshtastic_MeshPacket directly as the LoRa payload) was WRONG — confirmed
+// live once real Meshtastic RF traffic was finally being received (after
+// this session's RadioLib driver rewrite fixed chip bring-up): every real
+// packet's first 4 bytes decoded as 0xFF 0xFF 0xFF 0xFF, which looked like
+// SPI/driver corruption but is actually the literal, correct broadcast
+// value of a 4-byte native-endian `to` field. Real Meshtastic firmware
+// (RadioInterface.h's PacketHeader struct, RadioLibInterface.cpp's
+// handleReceiveInterrupt()) sends a fixed 16-byte RAW BINARY header —
+// to,from,id (uint32 each, native/little-endian), flags, channel-hash,
+// next_hop, relay_node — directly followed by the encrypted Data payload
+// bytes. There is no protobuf-encoded outer MeshPacket on the air at all;
+// only the inner Data (portnum+payload) is protobuf, and only after
+// decryption. Confirmed byte-for-byte against real captured packets: byte
+// 13 (the channel-hash byte) was 0x08 in every strong-signal capture,
+// exactly matching xorHash("LongFast") ^ xorHash(defaultpsk) computed by
+// hand — this is what real nearby nodes on the default channel actually
+// transmit.
 //
 // relay_packet() is the one place this talks to the radio directly (a
 // verbatim re-send of an already-encoded packet, not a new encode), via
 // purr_kernel_radio() instead of the old lora_manager singleton.
+
+#include "sdkconfig.h"
+
+// No external caller besides meshtastic_module.c (see meshtastic.h vs
+// mesh_router.h's own "internal, not a public API" comment) — when
+// CONFIG_PURR_FEATURE_MESHTASTIC is off this whole file compiles to an
+// empty translation unit, no stub needed. See Kconfig.projbuild's help
+// text for why this needs to be a real compile-time gate.
+#ifdef CONFIG_PURR_FEATURE_MESHTASTIC
 
 #include "mesh_router.h"
 #include "mesh_radio.h"
@@ -29,6 +51,16 @@ static const char *TAG = "mesh_router";
 
 static uint32_t s_node_id    = 0;
 static uint32_t s_packet_seq = 1;
+
+// ── Raw over-the-air PacketHeader — matches RadioInterface.h exactly ───────
+// to,from,id (uint32 native-endian) + flags + channel-hash + next_hop +
+// relay_node = 16 bytes, directly followed by the encrypted Data payload.
+#define MESH_HDR_LEN                  16
+#define MESH_FLAG_HOP_LIMIT_MASK      0x07
+#define MESH_FLAG_WANT_ACK_MASK       0x08
+#define MESH_FLAG_VIA_MQTT_MASK       0x10
+#define MESH_FLAG_HOP_START_MASK      0xE0
+#define MESH_FLAG_HOP_START_SHIFT     5
 
 void mesh_router_init(uint32_t node_id)
 {
@@ -106,32 +138,39 @@ const mesh_node_t *mesh_router_node_at(int idx)
 
 // ── Packet helpers ────────────────────────────────────────────────────────────
 
-// Encrypt a plaintext Data payload and wrap it in a new MeshPacket.
+// Encrypt a plaintext Data payload and wrap it in a raw 16-byte PacketHeader
+// (NOT a protobuf-encoded MeshPacket — see this file's top comment).
 // Returns wire byte count, or 0 on failure.
 static size_t encode_data_packet(uint8_t *wire, size_t wire_max,
-                                  uint32_t to, uint8_t hop_limit, uint8_t channel,
+                                  uint32_t to, uint8_t hop_limit, uint8_t channel_hash,
                                   const uint8_t *plain, size_t plain_len)
 {
     if (plain_len > 233) return 0;  // Meshtastic max Data payload
+    if (MESH_HDR_LEN + plain_len > wire_max) return 0;
 
-    meshtastic_MeshPacket pkt = meshtastic_MeshPacket_init_zero;
-    pkt.from                  = s_node_id;
-    pkt.to                    = to;
-    pkt.id                    = s_packet_seq++;
-    pkt.hop_limit             = hop_limit;
-    pkt.hop_start             = hop_limit;
-    pkt.channel               = channel;
-    pkt.which_payload_variant = meshtastic_MeshPacket_encrypted_tag;
+    uint32_t from = s_node_id;
+    uint32_t id   = s_packet_seq++;
 
-    uint8_t key32[32], iv[16], cipher[256];
-    mesh_radio_expand_psk(key32);
-    mesh_radio_build_iv(iv, pkt.id, pkt.from);
-    if (!mesh_radio_aes_ctr(plain, cipher, plain_len, key32, iv)) return 0;
-    memcpy(pkt.encrypted.bytes, cipher, plain_len);
-    pkt.encrypted.size = (pb_size_t)plain_len;
+    uint8_t key16[16], iv[16], cipher[256];
+    mesh_radio_default_psk(key16);
+    mesh_radio_build_iv(iv, id, from);
+    if (!mesh_radio_aes_ctr(plain, cipher, plain_len, key16, iv)) return 0;
 
-    pb_ostream_t ws = pb_ostream_from_buffer(wire, wire_max);
-    return pb_encode(&ws, meshtastic_MeshPacket_fields, &pkt) ? ws.bytes_written : 0;
+    uint8_t *p = wire;
+    memcpy(p, &to,   4); p += 4;
+    memcpy(p, &from, 4); p += 4;
+    memcpy(p, &id,   4); p += 4;
+    // hop_start == hop_limit at creation time (we're always the originator
+    // here — mesh_router_relay() is the only place that decrements an
+    // in-flight packet's hop_limit without touching hop_start).
+    *p++ = (uint8_t)((hop_limit & MESH_FLAG_HOP_LIMIT_MASK) |
+                      ((hop_limit << MESH_FLAG_HOP_START_SHIFT) & MESH_FLAG_HOP_START_MASK));
+    *p++ = channel_hash;
+    *p++ = 0;  // next_hop — no routing hints yet
+    *p++ = 0;  // relay_node
+    memcpy(p, cipher, plain_len);
+
+    return MESH_HDR_LEN + plain_len;
 }
 
 size_t mesh_router_encode_text(uint8_t *wire, size_t wire_max, uint32_t to, const char *text)
@@ -148,7 +187,7 @@ size_t mesh_router_encode_text(uint8_t *wire, size_t wire_max, uint32_t to, cons
     if (!pb_encode(&os, meshtastic_Data_fields, &d)) return 0;
 
     return encode_data_packet(wire, wire_max, to,
-                               MESH_HOP_LIMIT, 0, plain, os.bytes_written);
+                               MESH_HOP_LIMIT, MESH_CHANNEL_HASH, plain, os.bytes_written);
 }
 
 size_t mesh_router_encode_nodeinfo(uint8_t *wire, size_t wire_max)
@@ -173,33 +212,40 @@ size_t mesh_router_encode_nodeinfo(uint8_t *wire, size_t wire_max)
     if (!pb_encode(&ds, meshtastic_Data_fields, &d)) return 0;
 
     return encode_data_packet(wire, wire_max, (uint32_t)MESH_BROADCAST,
-                               MESH_HOP_LIMIT, 0, plain, ds.bytes_written);
+                               MESH_HOP_LIMIT, MESH_CHANNEL_HASH, plain, ds.bytes_written);
 }
 
 void mesh_router_relay(const uint8_t *raw, size_t raw_len)
 {
-    meshtastic_MeshPacket pkt = meshtastic_MeshPacket_init_zero;
-    pb_istream_t is = pb_istream_from_buffer(raw, raw_len);
-    if (!pb_decode(&is, meshtastic_MeshPacket_fields, &pkt)) return;
-    if (pkt.to != (uint32_t)MESH_BROADCAST) return;
-    if (pkt.hop_limit == 0) return;
+    if (raw_len <= MESH_HDR_LEN || raw_len > 256) return;
 
-    pkt.hop_limit--;
+    uint32_t hdr_to, hdr_from, hdr_id;
+    memcpy(&hdr_to,   raw,     4);
+    memcpy(&hdr_from, raw + 4, 4);
+    memcpy(&hdr_id,   raw + 8, 4);
+    if (hdr_to != (uint32_t)MESH_BROADCAST) return;
+
+    uint8_t flags = raw[12];
+    uint8_t hop_limit = flags & MESH_FLAG_HOP_LIMIT_MASK;
+    if (hop_limit == 0) return;
+    hop_limit--;
 
     uint8_t relay_buf[256];
-    pb_ostream_t os = pb_ostream_from_buffer(relay_buf, sizeof(relay_buf));
-    if (!pb_encode(&os, meshtastic_MeshPacket_fields, &pkt)) return;
+    memcpy(relay_buf, raw, raw_len);
+    // Only the hop_limit bits change — hop_start/want_ack/via_mqtt and the
+    // channel-hash/next_hop/relay_node bytes are relayed verbatim.
+    relay_buf[12] = (uint8_t)((flags & ~MESH_FLAG_HOP_LIMIT_MASK) | hop_limit);
 
     // Random back-off 0-500ms to reduce simultaneous relay collisions
     uint32_t delay_ms = esp_random() % 500;
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
 
     const catcall_radio_t *radio = purr_kernel_radio();
-    if (radio && radio->send) radio->send(relay_buf, os.bytes_written);
+    if (radio && radio->send) radio->send(relay_buf, raw_len);
 
     ESP_LOGI(TAG, "relay from=%08lX id=%lu hops_left=%u delay=%lums",
-             (unsigned long)pkt.from, (unsigned long)pkt.id,
-             (unsigned)pkt.hop_limit, (unsigned long)delay_ms);
+             (unsigned long)hdr_from, (unsigned long)hdr_id,
+             (unsigned)hop_limit, (unsigned long)delay_ms);
 }
 
 bool mesh_router_decode(const uint8_t *raw, size_t raw_len,
@@ -207,34 +253,47 @@ bool mesh_router_decode(const uint8_t *raw, size_t raw_len,
                          uint8_t *hop_limit, int *portnum,
                          uint8_t *payload, size_t *payload_len, size_t payload_max)
 {
-    meshtastic_MeshPacket pkt = meshtastic_MeshPacket_init_zero;
-    pb_istream_t is = pb_istream_from_buffer(raw, raw_len);
-    if (!pb_decode(&is, meshtastic_MeshPacket_fields, &pkt)) return false;
-
-    *from      = pkt.from;
-    *to        = pkt.to;
-    *pkt_id    = pkt.id;
-    *hop_limit = pkt.hop_limit;
-
-    if (pkt.which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
-        *portnum = (int)pkt.decoded.portnum;
-        size_t n = pkt.decoded.payload.size < payload_max ? pkt.decoded.payload.size : payload_max;
-        memcpy(payload, pkt.decoded.payload.bytes, n);
-        *payload_len = n;
-        return true;
+    if (raw_len <= MESH_HDR_LEN) {
+        ESP_LOGW(TAG, "decode: raw_len=%u too short for %d-byte header",
+                 (unsigned)raw_len, MESH_HDR_LEN);
+        return false;
     }
-    if (pkt.which_payload_variant != meshtastic_MeshPacket_encrypted_tag) return false;
 
-    uint8_t key32[32], iv[16], plain[256];
-    size_t enc_len = pkt.encrypted.size;
-    if (enc_len > sizeof(plain)) return false;
-    mesh_radio_expand_psk(key32);
-    mesh_radio_build_iv(iv, pkt.id, pkt.from);
-    if (!mesh_radio_aes_ctr(pkt.encrypted.bytes, plain, enc_len, key32, iv)) return false;
+    uint32_t hdr_to, hdr_from, hdr_id;
+    memcpy(&hdr_to,   raw,     4);
+    memcpy(&hdr_from, raw + 4, 4);
+    memcpy(&hdr_id,   raw + 8, 4);
+    uint8_t flags = raw[12];
+
+    *from      = hdr_from;
+    *to        = hdr_to;
+    *pkt_id    = hdr_id;
+    *hop_limit = flags & MESH_FLAG_HOP_LIMIT_MASK;
+
+    const uint8_t *enc = raw + MESH_HDR_LEN;
+    size_t enc_len = raw_len - MESH_HDR_LEN;
+    uint8_t key16[16], iv[16], plain[256];
+    if (enc_len > sizeof(plain)) {
+        ESP_LOGW(TAG, "decode: from=%08lX id=%lu enc_len=%u exceeds plain buffer",
+                 (unsigned long)hdr_from, (unsigned long)hdr_id, (unsigned)enc_len);
+        return false;
+    }
+    mesh_radio_default_psk(key16);
+    mesh_radio_build_iv(iv, hdr_id, hdr_from);
+    if (!mesh_radio_aes_ctr(enc, plain, enc_len, key16, iv)) {
+        ESP_LOGW(TAG, "decode: from=%08lX id=%lu AES-CTR call itself failed",
+                 (unsigned long)hdr_from, (unsigned long)hdr_id);
+        return false;
+    }
 
     meshtastic_Data d = meshtastic_Data_init_zero;
     pb_istream_t ds = pb_istream_from_buffer(plain, enc_len);
-    if (!pb_decode(&ds, meshtastic_Data_fields, &d)) return false;
+    if (!pb_decode(&ds, meshtastic_Data_fields, &d)) {
+        ESP_LOGW(TAG, "decode: from=%08lX id=%lu channel=%u enc_len=%u inner Data pb_decode failed: %s",
+                 (unsigned long)hdr_from, (unsigned long)hdr_id, (unsigned)raw[13],
+                 (unsigned)enc_len, PB_GET_ERROR(&ds));
+        return false;
+    }
 
     *portnum = (int)d.portnum;
     size_t n = d.payload.size < payload_max ? d.payload.size : payload_max;
@@ -242,3 +301,5 @@ bool mesh_router_decode(const uint8_t *raw, size_t raw_len,
     *payload_len = n;
     return true;
 }
+
+#endif  // CONFIG_PURR_FEATURE_MESHTASTIC

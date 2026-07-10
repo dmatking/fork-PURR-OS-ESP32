@@ -27,6 +27,15 @@ typedef struct {
     char    name[32];
     uint8_t count;
     uint8_t disabled;
+    // Last reason string this entity was struck for — persisted so a
+    // recovery panic on the *next* boot (purr_crash_guard_check_reset_
+    // reason()) can show the real, specific reason instead of always
+    // falling back to a generic "unclean reset / hard crash". Confirmed
+    // live as worth having: a first debugging pass on a hang had nothing
+    // more specific than "UI TASK UNRESPONSIVE" to go on even after a
+    // reboot, whereas a breadcrumbed reason (see purr_kernel_ui_
+    // breadcrumb()) survives here and actually says where.
+    char    reason[64];
 } entry_t;
 
 static uint32_t hash_name(const char *s)
@@ -88,6 +97,8 @@ static void record_strike_and_maybe_panic(const char *entity_name, const char *r
     }
     if (e.count < 255) e.count++;
     if (e.count >= STRIKE_THRESHOLD) e.disabled = 1;
+    strncpy(e.reason, reason ? reason : "", sizeof(e.reason) - 1);
+    e.reason[sizeof(e.reason) - 1] = '\0';
     save_entry(entity_name, &e);
 
     ESP_LOGW(TAG, "strike %u/%d for '%s': %s", e.count, STRIKE_THRESHOLD,
@@ -95,7 +106,7 @@ static void record_strike_and_maybe_panic(const char *entity_name, const char *r
 
     if (force_panic || e.count >= STRIKE_THRESHOLD) {
         char panic_reason[128];
-        snprintf(panic_reason, sizeof(panic_reason), "%.32s: %.48s (strike %u/%d)",
+        snprintf(panic_reason, sizeof(panic_reason), "%.32s: %.64s (strike %u/%d)",
                  entity_name, reason ? reason : "unknown", e.count, STRIKE_THRESHOLD);
         purr_kernel_panic_ex(panic_reason, /*recoverable=*/true, entity_name);
         // noreturn in practice — purr_kernel_panic_ex() loops until the
@@ -150,7 +161,7 @@ static QueueHandle_t s_worker_queue = NULL;
 
 typedef struct {
     char entity_name[32];
-    char reason[48];
+    char reason[64];
 } hang_msg_t;
 
 static void worker_task(void *arg)
@@ -225,6 +236,15 @@ void purr_crash_guard_check_reset_reason(void)
     if (err != ESP_OK || name[0] == '\0') return;
 
     ESP_LOGW(TAG, "unclean reset (reason=%d) while '%s' was active", (int)r, name);
-    record_strike_and_maybe_panic(name, "unclean reset / hard crash", /*force_panic=*/false);
+
+    // Prefer whatever specific reason this entity was already struck for
+    // (e.g. a breadcrumbed "UI TASK UNRESPONSIVE @ step" from mark_hang())
+    // over the generic fallback — makes the *next* boot's recovery panic
+    // say where, not just that something crashed.
+    entry_t prev;
+    const char *reason = "unclean reset / hard crash";
+    if (load_entry(name, &prev) && prev.reason[0]) reason = prev.reason;
+
+    record_strike_and_maybe_panic(name, reason, /*force_panic=*/false);
     clear_breadcrumb();
 }

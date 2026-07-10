@@ -25,8 +25,72 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 static const char *TAG = "purr_kernel";
+
+// ── Kernel log tail (ring buffer) ───────────────────────────────────────────
+// Captures every ESP_LOG* call system-wide into a small scrollback buffer so
+// a diagnostic screen can show recent kernel activity without a serial
+// cable attached — built for the Meshtastic diagnostics screen
+// (source/apps/system/meshdiag/meshdiag.c), general-purpose otherwise.
+// Installed via esp_log_set_vprintf(), which every ESP-IDF log call already
+// routes through — the original vprintf (normally the UART writer) is kept
+// and still called every time, so serial logging is completely unaffected.
+
+#define KLOG_BUF_SIZE 4096
+static char              *s_klog_buf  = NULL;
+static size_t              s_klog_len = 0;
+static portMUX_TYPE        s_klog_lock = portMUX_INITIALIZER_UNLOCKED;
+static vprintf_like_t      s_klog_orig_vprintf = NULL;
+
+static int klog_vprintf(const char *fmt, va_list args) {
+    char line[256];
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int n = vsnprintf(line, sizeof(line), fmt, args_copy);
+    va_end(args_copy);
+
+    if (n > 0 && s_klog_buf) {
+        size_t tlen = (size_t)n;
+        if (tlen >= sizeof(line)) tlen = sizeof(line) - 1;   // vsnprintf truncated
+        portENTER_CRITICAL(&s_klog_lock);
+        if (s_klog_len + tlen >= KLOG_BUF_SIZE - 1) {
+            // Scroll: drop the oldest half rather than the newest data —
+            // same pattern as meshchat.c's chat-log scrollback.
+            size_t half = KLOG_BUF_SIZE / 2;
+            size_t keep = s_klog_len > half ? s_klog_len - half : 0;
+            memmove(s_klog_buf, s_klog_buf + (s_klog_len - keep), keep);
+            s_klog_len = keep;
+        }
+        memcpy(s_klog_buf + s_klog_len, line, tlen);
+        s_klog_len += tlen;
+        s_klog_buf[s_klog_len] = '\0';
+        portEXIT_CRITICAL(&s_klog_lock);
+    }
+
+    return s_klog_orig_vprintf ? s_klog_orig_vprintf(fmt, args) : 0;
+}
+
+void purr_kernel_klog_init(void) {
+    if (s_klog_buf) return;   // already installed
+    s_klog_buf = heap_caps_malloc(KLOG_BUF_SIZE, MALLOC_CAP_SPIRAM);
+    if (!s_klog_buf) return;
+    s_klog_buf[0] = '\0';
+    s_klog_orig_vprintf = esp_log_set_vprintf(klog_vprintf);
+}
+
+size_t purr_kernel_klog_tail(char *out, size_t out_size) {
+    if (!out || out_size == 0) return 0;
+    if (!s_klog_buf) { out[0] = '\0'; return 0; }
+    portENTER_CRITICAL(&s_klog_lock);
+    size_t n = (s_klog_len < out_size - 1) ? s_klog_len : (out_size - 1);
+    size_t start = s_klog_len - n;
+    memcpy(out, s_klog_buf + start, n);
+    portEXIT_CRITICAL(&s_klog_lock);
+    out[n] = '\0';
+    return n;
+}
 
 // ── Catcall registry ──────────────────────────────────────────────────────────
 
@@ -94,6 +158,12 @@ void purr_kernel_set_window_created_cb(purr_window_created_cb_t cb) {
 }
 void purr_kernel_notify_window_created(purr_win_t win) {
     if (s_window_created_cb) s_window_created_cb(win);
+}
+
+static void (*s_panic_usb_share_cb)(void) = NULL;
+
+void purr_kernel_set_panic_usb_share_cb(void (*cb)(void)) {
+    s_panic_usb_share_cb = cb;
 }
 
 // ── UI thread safety ──────────────────────────────────────────────────────────
@@ -232,7 +302,7 @@ static const panic_glyph_t PANIC_FONT[] = {
 };
 #define PANIC_FONT_COUNT (sizeof(PANIC_FONT) / sizeof(PANIC_FONT[0]))
 
-#define PANIC_SCALE   4
+#define PANIC_SCALE   2
 #define PANIC_CHAR_W  (3 * PANIC_SCALE + PANIC_SCALE)   // glyph + 1-cell gap
 #define PANIC_CHAR_H  (5 * PANIC_SCALE + PANIC_SCALE)   // glyph + 1-line gap
 
@@ -368,6 +438,18 @@ void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool rec
     // user forces a reset, per design. Raw touch polling only (no
     // LVGL/MiniWin dependency — must work even when the disabled entity IS
     // the active UI backend).
+
+    // Share the SD card over USB automatically, the moment the panic screen
+    // appears — no button tap required (see purr_kernel_set_panic_usb_share_
+    // cb()'s doc comment). Everything else the OS would be doing with the
+    // card is already halted by this point, so there's no "still in use"
+    // race to worry about.
+    bool usb_shared = false;
+    if (s_panic_usb_share_cb) {
+        s_panic_usb_share_cb();
+        usb_shared = true;
+    }
+
     int btn_h   = 48;
     int btn_y   = h - btn_h - 8;
     int dump_x  = 4;
@@ -376,6 +458,10 @@ void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool rec
     int reset_w = dump_w;
 
     if (disp) {
+        if (usb_shared) {
+            panic_draw_string(disp, 4, btn_y - PANIC_CHAR_H - 4, "SD SHARED VIA USB", 0xFFFFu,
+                               (int)((w - 8) / PANIC_CHAR_W));
+        }
         disp->fill_rect(dump_x, btn_y, dump_w, btn_h, 0x0000u);
         panic_draw_string(disp, dump_x + 4, btn_y + 6, "TAP:DUMP LOGS", 0xFFFFu,
                            (int)((dump_w - 8) / PANIC_CHAR_W));
@@ -897,6 +983,13 @@ void purr_kernel_ui_heartbeat(void)
     ensure_health_watchdog_started();
 }
 
+static const char *s_ui_breadcrumb = "?";
+
+void purr_kernel_ui_breadcrumb(const char *step)
+{
+    s_ui_breadcrumb = step ? step : "?";
+}
+
 static void health_watchdog_task(void *arg)
 {
     (void)arg;
@@ -917,7 +1010,12 @@ static void health_watchdog_task(void *arg)
         if (ui && s_ui_last_heartbeat_ms != 0) {
             uint64_t now = purr_kernel_uptime_ms();
             if (now - s_ui_last_heartbeat_ms > UI_HANG_THRESHOLD_MS) {
-                purr_crash_guard_mark_hang(ui->name, "UI TASK UNRESPONSIVE");
+                // Include the last breadcrumb (purr_kernel_ui_breadcrumb())
+                // so the panic screen says which step of the pump loop it
+                // never got past, not just that it's unresponsive.
+                char reason[64];
+                snprintf(reason, sizeof(reason), "UI TASK UNRESPONSIVE @ %s", s_ui_breadcrumb);
+                purr_crash_guard_mark_hang(ui->name, reason);
                 // Loops forever inside purr_kernel_panic_ex() (blue,
                 // recoverable) — nothing after this point runs again
                 // this boot.

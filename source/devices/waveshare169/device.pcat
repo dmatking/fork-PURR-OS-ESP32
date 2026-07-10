@@ -23,7 +23,7 @@ bt          = true
 lora        = ""
 
 [modules]
-ui          = "kittenui"
+ui          = "miniwin"
 app_manager = "app_manager"
 
 [ui]
@@ -37,11 +37,12 @@ about       = false
 terminal    = false
 fileman     = false
 calculator  = false
+taskmgr     = false
 
 [flash]
 display/st7789   = 1
 touch/cst816s    = 1
-kittenui         = 2
+miniwin          = 2
 app_manager      = 2
 
 [pins]

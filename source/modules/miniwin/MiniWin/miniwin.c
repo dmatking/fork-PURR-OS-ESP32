@@ -29,6 +29,7 @@ SOFTWARE.
 ***************/
 
 #include <string.h>
+#include <stdio.h>
 #include "miniwin.h"
 #include "miniwin_message_queue.h"
 #include "miniwin_settings.h"
@@ -36,6 +37,7 @@ SOFTWARE.
 #include "hal/hal_init.h"
 #include "hal/hal_touch.h"
 #include "ui/ui_common.h"
+#include "purr_kernel.h"
 
 /****************
 *** CONSTANTS ***
@@ -3840,9 +3842,31 @@ static bool check_and_process_touch_on_title_bar(uint8_t window_id, int16_t touc
 						/* it was touch down and window isn't modal so close window if it's allowed */
 						if ((mw_all_windows[window_id].window_flags & MW_WINDOW_FLAG_CAN_BE_CLOSED) == MW_WINDOW_FLAG_CAN_BE_CLOSED)
 						{
-							/* it's allowed, close it */
+							/* Restored to a real close (mw_remove_window()) —
+							 * this used to redirect to minimise instead
+							 * (same code as the minimise-icon branch below)
+							 * to route around a hang that, at the time,
+							 * looked like it lived in mw_remove_control()'s
+							 * own teardown loop but every step of that code
+							 * is individually bounded and matches upstream
+							 * miniwinwm exactly. Root cause turned out to be
+							 * one level up: several apps' own background
+							 * refresh tasks (meshchat.c/meshdiag.c/hwtest.c)
+							 * raced their own purr_win_* calls against
+							 * deinit() tearing the same window down under
+							 * them — a plain use-after-free that happened to
+							 * corrupt MiniWin's control table and land the
+							 * observed hang inside mw_remove_control(), not
+							 * a MiniWin bug at all. Fixed at the source (each
+							 * app's deinit() now waits for its own task to
+							 * actually exit before destroying anything), so
+							 * X can safely do what it always should have.
+							 * win_message_func()'s MW_WINDOW_REMOVED_MESSAGE
+							 * handler (miniwin_win.c) already defers the
+							 * close callback until after this dispatch fully
+							 * unwinds — built for exactly this bottom-up
+							 * case. */
 							mw_remove_window(mw_all_windows[window_id].window_handle);
-							mw_paint_all();
 						}
 					}
 				}
@@ -3950,6 +3974,13 @@ static void do_paint_all(void)
 	/* loop to paint that number of windows */
 	while (windows_painted < visible_windows)
 	{
+		// Static, not stack — purr_kernel_ui_breadcrumb() stores the pointer
+		// as-is, no copy taken (see its header doc). Reused every iteration;
+		// only meaningful while the UI task is actually stuck here.
+		static char z_order_breadcrumb[48];
+		snprintf(z_order_breadcrumb, sizeof(z_order_breadcrumb),
+				"process_message/paint_z%u_of_%u", (unsigned)next_z_order, (unsigned)visible_windows);
+		purr_kernel_ui_breadcrumb(z_order_breadcrumb);
 		paint_window_frame_and_client_with_z_order(next_z_order);
 		windows_painted++;
 
@@ -4049,12 +4080,26 @@ static void rationalize_z_orders(void)
 	/* find number of used windows */
 	existing_window_count = find_number_of_displayed_windows();
 
-	/* loop until number of windows rationalized is number of used windows */
-	while (number_of_windows_rationalized < existing_window_count)
+	/* loop until number of windows rationalized is number of used windows.
+	 * Bounded defensively: if two windows ever end up sharing the same
+	 * z_order (confirmed live as reachable — root-caused a hang where
+	 * closing a window's title-bar icon froze the whole UI task forever),
+	 * find_next_z_order() eventually has nothing left to find and returns
+	 * the MW_MAX_Z_ORDER sentinel every call, which no real window's
+	 * z_order can ever equal — so number_of_windows_rationalized stops
+	 * advancing while this condition stays true, spinning forever with no
+	 * yield. MW_MAX_WINDOW_COUNT is a hard ceiling on how many distinct
+	 * z-orders could ever need rationalizing, so it can't cut off a
+	 * legitimate in-progress rationalization. */
+	uint16_t safety_iterations = 0U;
+	while (number_of_windows_rationalized < existing_window_count &&
+			safety_iterations < (uint16_t)MW_MAX_WINDOW_COUNT)
 	{
+		safety_iterations++;
+
 		/* find the next z order beyond the last z order found */
 		next_z_order_existing = find_next_z_order(next_z_order_existing);
-		
+
 		/* loop through all used user windows */
 		for (i = MW_FIRST_USER_WINDOW_ID; i < MW_MAX_WINDOW_COUNT; i++)
 		{
@@ -4064,14 +4109,14 @@ static void rationalize_z_orders(void)
 					(mw_all_windows[i].window_flags & MW_WINDOW_FLAG_IS_MINIMISED) == 0U)
 			{
 				mw_all_windows[i].z_order = next_z_order_rationalized;
-				
+
 				/* increment number of windows that have been rationalized */
 				number_of_windows_rationalized++;
 				break;
 			}
 		}
-		
-		/* increase the next available z order */		
+
+		/* increase the next available z order */
 		next_z_order_rationalized++;
 	}
 
@@ -4858,7 +4903,17 @@ void mw_paint_window_client_rect(mw_handle_t window_handle, const mw_util_rect_t
 void mw_remove_window(mw_handle_t window_handle)
 {
 	static bool reentered = false;
-	uint8_t i;
+	// uint16_t, not uint8_t — this is also the loop counter for the
+	// message-queue-cancel loop below, bounded by MW_MESSAGE_QUEUE_SIZE
+	// (256). A uint8_t can never reach 256 (wraps 255->0 forever), making
+	// that loop a genuine infinite loop every time this function runs on a
+	// window with even one control — confirmed live via fine-grained
+	// breadcrumbs (last breadcrumb was "close_ctrl_mq_i64", deep inside
+	// that exact loop) during what looked at first like a background-task
+	// race or CPU-starvation hang. The compiler's own
+	// "-Wtype-limits: comparison is always true" warning on this loop was
+	// the same bug pointing right at itself the whole time.
+	uint16_t i;
 	uint8_t window_id;
 	mw_message_t *message;
 
@@ -4879,13 +4934,23 @@ void mw_remove_window(mw_handle_t window_handle)
 	}
 
 	/* remove all controls that have this window as a parent */
+	purr_kernel_ui_breadcrumb("process_message/close_ctrl_loop");
 	for (i = 0U; i < MW_MAX_CONTROL_COUNT; i++)
 	{
 		if (mw_all_controls[i].parent_handle == window_handle)
 		{
+			// Static, not stack — purr_kernel_ui_breadcrumb() stores the
+			// pointer as-is (see its header doc). Reused every iteration;
+			// only meaningful while the UI task is actually stuck here.
+			static char ctrl_breadcrumb[48];
+			snprintf(ctrl_breadcrumb, sizeof(ctrl_breadcrumb),
+					"process_message/close_ctrl_i%u_h%u", (unsigned)i,
+					(unsigned)mw_all_controls[i].control_handle);
+			purr_kernel_ui_breadcrumb(ctrl_breadcrumb);
 			mw_remove_control(mw_all_controls[i].control_handle);
 		}
 	}
+	purr_kernel_ui_breadcrumb("process_message/close_ctrl_loop_done");
 
 	/* cancel all outstanding timers for this window */
 	for (i = 0U; i < MW_MAX_TIMER_COUNT; i++)
@@ -4918,10 +4983,12 @@ void mw_remove_window(mw_handle_t window_handle)
 
 	/* call the message handler immediately as the window is about to be removed and we cannot post a message
 	 * to this window when it's gone */
+	purr_kernel_ui_breadcrumb("process_message/close_msgfunc");
 	mw_message_t temp_message = {MW_UNUSED_MESSAGE_PARAMETER, window_handle, MW_WINDOW_REMOVED_MESSAGE, MW_WINDOW_MESSAGE, MW_UNUSED_MESSAGE_PARAMETER, NULL};
 	mw_all_windows[window_id].message_func(&temp_message);
 
 	/* remove this window by marking it as unused */
+	purr_kernel_ui_breadcrumb("process_message/close_flags_clear");
 	mw_all_windows[window_id].window_flags &= ~MW_WINDOW_FLAG_IS_USED;
 
 	/* remove this window from the minimised list */
@@ -4931,9 +4998,23 @@ void mw_remove_window(mw_handle_t window_handle)
 	}
 
 	/* rationalize the z orders in case they are irrational */
+	purr_kernel_ui_breadcrumb("process_message/close_rationalize_z");
 	rationalize_z_orders();
+	purr_kernel_ui_breadcrumb("process_message/close_rationalize_z_done");
 
 	reentered = false;
+
+	// This function never repainted anything on its own — whatever was
+	// underneath the just-removed window (desktop, other windows) stayed
+	// exactly as last drawn until some unrelated later event happened to
+	// trigger a repaint. Confirmed live as stale/leftover pixels after
+	// closing an app — looked exactly like a stuck overlay sitting on top
+	// of everything, even once the window itself was genuinely gone.
+	// Every close path (title-bar X icon here directly, and
+	// mw_win_destroy()'s top-down purr_win_destroy() path) funnels through
+	// this one function, so fixing it here covers both.
+	purr_kernel_ui_breadcrumb("process_message/close_repaint");
+	mw_paint_all();
 }
 
 mw_util_rect_t mw_get_window_client_rect(mw_handle_t window_handle)
@@ -5258,7 +5339,9 @@ bool mw_resize_control(mw_handle_t control_handle, int16_t new_width, int16_t ne
 
 void mw_remove_control(mw_handle_t control_handle)
 {
-	uint8_t i;
+	// uint16_t — see mw_remove_window()'s matching comment; this is the
+	// exact function+loop the live hang was traced to.
+	uint16_t i;
 	mw_message_t *message;
 	uint8_t control_id;
 
@@ -5269,6 +5352,7 @@ void mw_remove_control(mw_handle_t control_handle)
 		MW_ASSERT((bool)false, "Bad control handle");
 		return;
 	}
+	purr_kernel_ui_breadcrumb("process_message/close_ctrl_body_start");
 
 	/* cancel all outstanding timers for this control */
 	for (i = 0U; i < MW_MAX_TIMER_COUNT; i++)
@@ -5301,8 +5385,10 @@ void mw_remove_control(mw_handle_t control_handle)
 
 	/* call the message handler immediately as the control is about to be removed and we cannot post a message
 	 * to this control when it's gone */
+	purr_kernel_ui_breadcrumb("process_message/close_ctrl_msgfunc");
 	mw_message_t temp_message = {MW_UNUSED_MESSAGE_PARAMETER, control_handle, MW_CONTROL_REMOVED_MESSAGE, MW_CONTROL_MESSAGE, MW_UNUSED_MESSAGE_PARAMETER, NULL};
 	mw_all_controls[control_id].message_func(&temp_message);
+	purr_kernel_ui_breadcrumb("process_message/close_ctrl_msgfunc_done");
 
 	/* remove this control by marking it as unused */
    	mw_all_controls[control_id].control_flags &= (uint16_t)(~MW_CONTROL_FLAG_IS_USED);
@@ -5421,7 +5507,9 @@ mw_handle_t mw_set_timer(uint32_t fire_time, mw_handle_t recipient_handle, mw_me
 
 void mw_cancel_timer(mw_handle_t timer_handle)
 {
-	uint8_t i;
+	// uint16_t — see mw_remove_window()'s matching comment (same
+	// uint8_t-vs-MW_MESSAGE_QUEUE_SIZE=256 infinite-loop bug).
+	uint16_t i;
 	mw_message_t *message;
 	uint8_t timer_id;
 
@@ -5641,7 +5729,9 @@ bool mw_process_message(void)
 			/* sort on message type */
 			case MW_WINDOW_PAINT_ALL_MESSAGE:
 				/* paint all windows and their controls */
+				purr_kernel_ui_breadcrumb("process_message/do_paint_all");
 				do_paint_all();
+				purr_kernel_ui_breadcrumb("process_message/do_paint_all_done");
 				break;
 
 			case MW_WINDOW_FRAME_PAINT_MESSAGE:

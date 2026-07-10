@@ -8,6 +8,19 @@
 # code, not a proven default yet.
 CONFIG_PURR_MINIWIN_DESKTOP_WINCE=y
 
+# This panel batch is physically wired BGR — every colour's red/blue channels
+# render swapped otherwise. Confirmed live on the WinCE desktop above: the
+# teal wallpaper (WCE_DESKTOP = 0x008080) rendered as dark olive-yellow
+# (0x808000, the R/B-swapped value), and a focused app window's title bar
+# (MW_TITLE_BAR_COLOUR_FOCUS = MW_HAL_LCD_BLUE = 0x0000FF) rendered as
+# exactly MW_HAL_LCD_RED (0xFF0000) — the identical named constant, not just
+# a similar hue. See PURR_DISPLAY_ST7789_BGR_ORDER's Kconfig help text for
+# what was ruled out first (SPI byte-order, software RGB math, panel
+# inversion — all already correct/unrelated). tdeck/waveshare169 share this
+# same st7789.c driver but are left at the RGB default — this hasn't been
+# confirmed as a defect on their panels too, so it isn't assumed to be.
+CONFIG_PURR_DISPLAY_ST7789_BGR_ORDER=y
+
 # LVGL's internal object/style pool defaulted to a fixed 32KB arena
 # (Kconfig caps the built-in pool at 128KB max — bumping it there still
 # wasn't enough and produced the identical crash), completely separate from
@@ -68,20 +81,37 @@ CONFIG_LV_CONF_SKIP=n
 # CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
 # CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
-# Bluetooth — NimBLE host stack, BLE only. ESP32-S3 has NO classic
-# Bluetooth (BR/EDR) hardware at all — SOC_BT_CLASSIC_SUPPORTED isn't even
-# defined for this chip in ESP-IDF's soc_caps.h (only SOC_BLE_SUPPORTED is).
-# Bluedroid was tried first (its dual-mode capability was the original
-# reasoning) but that's moot on hardware that can never use the Classic-BT
-# half of it anyway — and its real cost showed up on real hardware: its
-# startup couldn't allocate its internal work queue on this board's tight
-# internal DRAM budget ("BTU_StartUp Unable to allocate resources for
-# bt_workqueue" -> assert failed: list_begin, confirmed live, bt_mgr had
-# literally never run on real hardware before that). NimBLE is BLE-only by
-# design (a match, not a compromise, for this chip) and uses roughly half
-# Bluedroid's RAM. See bt_mgr.c/mesh_ble.c for the corresponding API port.
-CONFIG_BT_ENABLED=y
-CONFIG_BT_NIMBLE_ENABLED=y
+# Bluetooth — OFF as of this pass (gated behind CONFIG_BT_NIMBLE_ENABLED,
+# same "bt_mgr.c" file the comments below still describe — see bt_mgr.c's
+# own #ifdef guard and this file's device.pcat sibling for the "toggle it,
+# don't delete it" reasoning). All the lessons learned below are kept, not
+# removed, since they'll be immediately relevant again the moment BT is
+# re-enabled here or on another device.
+#
+# CONFIG_BT_ENABLED/CONFIG_BT_NIMBLE_ENABLED themselves are no longer set by
+# hand here — purrstrap's _sdkconfig_lines() now derives them straight from
+# device.pcat's [modules] bt = "bt_mgr" (mirrors how [modules] ui already
+# drives CONFIG_PURR_UI_BACKEND_*), so re-enabling BT is a device.pcat edit +
+# `purrstrap generate`, not an overrides edit. The other three tuning lines
+# below (BT_NIMBLE_50_FEATURE_SUPPORT / BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL)
+# are hardware-specific knobs the generator does NOT derive automatically —
+# still have to be uncommented by hand here, or this board hits the exact
+# DRAM crashes documented below all over again.
+#
+# NimBLE host stack, BLE only. ESP32-S3 has NO classic Bluetooth (BR/EDR)
+# hardware at all — SOC_BT_CLASSIC_SUPPORTED isn't even defined for this
+# chip in ESP-IDF's soc_caps.h (only SOC_BLE_SUPPORTED is). Bluedroid was
+# tried first (its dual-mode capability was the original reasoning) but
+# that's moot on hardware that can never use the Classic-BT half of it
+# anyway — and its real cost showed up on real hardware: its startup
+# couldn't allocate its internal work queue on this board's tight internal
+# DRAM budget ("BTU_StartUp Unable to allocate resources for bt_workqueue"
+# -> assert failed: list_begin, confirmed live, bt_mgr had literally never
+# run on real hardware before that). NimBLE is BLE-only by design (a match,
+# not a compromise, for this chip) and uses roughly half Bluedroid's RAM.
+# See bt_mgr.c/mesh_ble.c for the corresponding API port.
+# (CONFIG_BT_ENABLED/CONFIG_BT_NIMBLE_ENABLED: see this section's header
+# comment — now derived from device.pcat, not set here.)
 
 # NimBLE's BLE 5.0 feature menu (2M-PHY, coded-PHY, extended advertising)
 # defaults to on (CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT default y) and pulls
@@ -94,7 +124,7 @@ CONFIG_BT_NIMBLE_ENABLED=y
 # Scanning/connecting/basic GATT (everything bt_mgr.c/mesh_ble.c actually
 # do) doesn't need any BLE 5.0 feature — same reasoning that kept the old
 # Bluedroid config on 4.2-only.
-CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
+# CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
 
 # Even with BLE 5.0 features off, esp_nimble_hci_init() still failed live
 # ("BLE_INIT: hci inits failed" -> "nimble host init failed" -> bt_mgr's own
@@ -115,7 +145,7 @@ CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
 # allocations to PSRAM instead of fighting for scarce internal DRAM.
 # CONFIG_SPIRAM_USE_MALLOC=y (already on, see this file's LV_MEM_CUSTOM
 # comment) satisfies this option's own Kconfig dependency.
-CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+# CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
 
 # wifi_mgr/bt_mgr/lua_runtime were declared in device.pcat's [flash] section
 # (staging priority) but never in [modules] — purrstrap's _generate_glue()
@@ -138,4 +168,19 @@ CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
 # attempt. Standard ESP-IDF answer to "DRAM segment ... will not fit" on a
 # PSRAM-equipped board.
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# USB MSC (share the SD card over USB on panic) — source/modules/usb_msc.
+# PAUSED as of this comment: enabling CONFIG_TINYUSB_CDC_ENABLED +
+# switching the console off USB-Serial-JTAG left the board completely
+# invisible on the USB bus after flashing (confirmed live: not even an
+# unrecognized device in lsusb, not just a missing /dev/ttyACM0) — with no
+# serial path left to diagnose why. Reverted here to restore the known-
+# working USB-Serial-JTAG console first; usb_msc_init()'s call site in
+# kernel_tdp_boot.c is also disabled to match (see its own comment there).
+# The MSC-only half of the feature (CONFIG_TINYUSB_MSC_ENABLED, no CDC,
+# no console conflict) is still worth trying as a follow-up — it was never
+# actually the thing that broke enumeration.
+# CONFIG_TINYUSB_CDC_ENABLED=y
+# CONFIG_TINYUSB_MSC_ENABLED=y
+# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=n
 

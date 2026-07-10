@@ -1,0 +1,37 @@
+-- breadcrumb.kitten — kernel-extension demo for the .kitten tier.
+--
+-- Exercises kitt.breadcrumb()/kitt.klog_tail() — new kernel-extension
+-- primitives that wrap purr_kernel_ui_breadcrumb()/purr_kernel_klog_tail()
+-- (purr_kernel.h). Previously, adding one more diagnostic breadcrumb meant
+-- editing C and reflashing; now a .kitten script can read the live kernel
+-- log tail and mark its own custom breadcrumbs at runtime — the same
+-- primitives this session's hang-hunting used, now scriptable.
+--
+-- Deploy: copy this file to /sdcard/apps/breadcrumb.kitten — .kitten apps
+-- are never baked into the firmware image, same as .meow/.hiss. If it's
+-- the only .kitten on the card, app_manager_init() autoruns it at boot with
+-- no manual launch; otherwise launch it from the desktop like any app.
+--
+-- purr-sig: dev-signed
+
+local win_h = win.create("Breadcrumb")
+
+local log_out = win.textarea(win_h, 100, 65)
+
+local mark_row = win.row(win_h, 4)
+local mark_in  = win.textarea(win_h, 70, 12)
+win.button(win_h, "Mark", function()
+    local text = win.textarea_get(mark_in)
+    if text and #text > 0 then
+        kitt.breadcrumb(text)
+        win.textarea_set(mark_in, "")
+    end
+end)
+win.layout_end(mark_row)
+
+win.button(win_h, "Refresh Log", function()
+    win.textarea_set(log_out, kitt.klog_tail())
+end)
+
+win.textarea_set(log_out, kitt.klog_tail())
+win.show(win_h)

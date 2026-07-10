@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "freertos/idf_additions.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -41,6 +42,13 @@ static purr_wid_t  s_buddy_list  = 0;
 static purr_wid_t  s_status_lbl  = 0;
 static TaskHandle_t s_refresh_task = NULL;
 static bool         s_running      = false;
+// Given by buddy_refresh_task() right before it self-deletes, waited on by
+// meshchat_deinit() before it destroys any window — see that function's
+// comment for the use-after-free this closes (Task Manager's Kill button
+// could tear down s_buddy_win/s_buddy_list/s_status_lbl while this task was
+// still mid-refresh_buddy_list()/refresh_status_label(), touching those same
+// now-freed handles; confirmed live as the "close_ctrl_body_start" hang).
+static SemaphoreHandle_t s_refresh_done = NULL;
 
 // ── Broadcast (shared-channel) window state ──────────────────────────────────
 
@@ -132,8 +140,17 @@ static void buddy_refresh_task(void *arg) {
     while (s_running) {
         refresh_buddy_list();
         refresh_status_label();
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        // Slept in short steps (not one 10s vTaskDelay) so a stop request
+        // (s_running = false) is noticed within ~200ms, not up to 10s late —
+        // meshchat_deinit() blocks on s_refresh_done for this task to
+        // actually exit before it destroys the windows/widgets this loop
+        // touches, so a slow-to-notice stop directly extends how long Kill
+        // stalls waiting, not just a cosmetic delay.
+        for (int waited_ms = 0; waited_ms < 10000 && s_running; waited_ms += 200) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
     }
+    if (s_refresh_done) xSemaphoreGive(s_refresh_done);
     // Must match the WithCaps variant used to create this task (see its
     // xTaskCreateWithCaps() call site below).
     vTaskDeleteWithCaps(NULL);
@@ -278,6 +295,10 @@ static int meshchat_init(void) {
         s_broadcast_log = heap_caps_malloc(CHAT_LOG_LEN, MALLOC_CAP_SPIRAM);
         if (s_broadcast_log) s_broadcast_log[0] = '\0';
     }
+    // Reused across relaunches like s_broadcast_log above — starts "empty"
+    // (taken), which is exactly the state meshchat_deinit()'s
+    // xSemaphoreTake() below needs at the start of every run.
+    if (!s_refresh_done) s_refresh_done = xSemaphoreCreateBinary();
 
     s_buddy_win  = purr_win_create("MeshChat");
     s_status_lbl = purr_win_label(s_buddy_win, "Mesh: starting...");
@@ -308,6 +329,16 @@ static int meshchat_init(void) {
 
 static void meshchat_deinit(void) {
     s_running = false;
+    // Wait for buddy_refresh_task() to actually notice s_running == false
+    // and exit before touching any window/widget below — see
+    // s_refresh_done's declaration comment for the use-after-free this
+    // closes. Bounded timeout matches app_manager_stop()'s own
+    // wait-then-proceed pattern; the task loop has no blocking calls beyond
+    // its own short vTaskDelay steps, so it should never actually take
+    // anywhere near this long to respond.
+    if (s_refresh_done) xSemaphoreTake(s_refresh_done, pdMS_TO_TICKS(2000));
+    s_refresh_task = NULL;
+
     mesh_manager_remove_rx_callback(on_mesh_rx);
 
     for (int i = 0; i < MAX_CHATS; i++) {

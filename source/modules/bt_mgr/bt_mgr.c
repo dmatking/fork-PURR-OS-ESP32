@@ -16,6 +16,18 @@
 
 #include "bt_mgr.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
+
+// bt_mgr is unconditionally compiled into every device's firmware (it's
+// always in modulestrap's target list, regardless of device.pcat), but
+// NimBLE's headers/component only exist when CONFIG_BT_NIMBLE_ENABLED=y
+// (currently only tdeck_plus, via its .overrides — see bt_mgr.h's header
+// comment). Confirmed live via a full 10-device build: every other device
+// failed outright on a missing nimble/nimble_port.h. The #else branch below
+// gives every caller (settings.c, mesh_ble.c) a real symbol back — a
+// permanent "not available" answer — instead of a build failure.
+#ifdef CONFIG_BT_NIMBLE_ENABLED
+
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -271,6 +283,22 @@ void bt_mgr_deinit(void) {
     if (s_host_ok) nimble_port_stop();
     if (s_scan_done_sem) { vSemaphoreDelete(s_scan_done_sem); s_scan_done_sem = NULL; }
 }
+
+#else  // !CONFIG_BT_NIMBLE_ENABLED — see this file's top-of-file comment
+
+int  bt_mgr_init(void) { return 0; }
+void bt_mgr_deinit(void) {}
+esp_err_t bt_mgr_ensure_active(void) { return ESP_ERR_NOT_SUPPORTED; }
+void bt_mgr_register_gatt_provider(void (*queue_fn)(void)) { (void)queue_fn; }
+bool bt_mgr_host_ready(void) { return false; }
+bool bt_mgr_set_enabled(bool on) { (void)on; return false; }
+bool bt_mgr_is_enabled(void) { return false; }
+int  bt_mgr_scan(uint32_t duration_sec) { (void)duration_sec; return -1; }
+int  bt_mgr_scan_count(void) { return 0; }
+bool bt_mgr_scan_at(int idx, bt_scan_result_t *out) { (void)idx; (void)out; return false; }
+esp_err_t bt_mgr_pair(const uint8_t addr[6]) { (void)addr; return ESP_ERR_NOT_SUPPORTED; }
+
+#endif  // CONFIG_BT_NIMBLE_ENABLED
 
 // ── .purr module header ───────────────────────────────────────────────────────
 #include "purr_module.h"

@@ -1,0 +1,35 @@
+-- kittentest.kitten — PURR OS demo app: exercises the .kitten tier's one
+-- distinguishing behavior — autorun at boot, with no manual launch.
+--
+-- Deploy: copy this file to /sdcard/apps/kittentest.kitten. app_manager_init()
+-- launches the FIRST .kitten file it finds on the initial boot scan
+-- automatically (see app_manager.c's autorun_kitten()) — if this window
+-- appears without you tapping anything, autorun worked.
+--
+-- Same privileged API as .hiss (kitt.*/radio.*/gps.*, on top of win.*/sd.*) —
+-- "like a .hiss" means the same Lua namespace access, not just the same
+-- file-discovery treatment. Also same purr-sig/Developer-Mode consent gate
+-- as .hiss (app_manager.c's launch_meow()) — tagged dev-signed below since
+-- this is a first-party demo; an unsigned .kitten needs Developer Mode on
+-- to autorun at all.
+--
+-- purr-sig: dev-signed
+
+local win_h = win.create("Kitten Test")
+local out   = win.textarea(win_h, 100, 70)
+
+win.textarea_set(out,
+    "If you're reading this without tapping anything,\n" ..
+    "autorun worked: this .kitten script launched\n" ..
+    "itself at boot.\n\n" ..
+    "KITT modules loaded: " .. #kitt.modules())
+
+local function on_dismiss()
+    win.textarea_set(out, "Still here — .kitten apps run like .hiss otherwise:\nsame win.*/sd.*/kitt.*/radio.*/gps.* access.")
+end
+
+local row = win.row(win_h, 4)
+win.button(win_h, "OK", on_dismiss)
+win.layout_end(row)
+
+win.show(win_h)

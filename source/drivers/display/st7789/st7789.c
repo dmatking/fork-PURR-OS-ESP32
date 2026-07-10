@@ -376,6 +376,9 @@ static esp_err_t st7789_init(const display_config_t *cfg)
     // Panel init sequence
     uint8_t madctl = ws169 ? MADCTL_PORTRAIT
                             : ((rotation == 0) ? MADCTL_LANDSCAPE : MADCTL_PORTRAIT);
+#ifdef CONFIG_PURR_DISPLAY_ST7789_BGR_ORDER
+    madctl |= 0x08;   // panel is physically wired BGR — see Kconfig help text
+#endif
     st7789_init_regs(madctl);
 
     // Clear GRAM before display on.

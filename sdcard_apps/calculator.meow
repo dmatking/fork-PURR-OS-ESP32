@@ -1,17 +1,60 @@
--- calculator.meow — PURR OS Calculator (.meow, replaces the old .paws app)
--- Same 4-function + percent/backspace/clear/chained-op logic as the retired
--- source/apps/system/calculator/calculator.c, rebuilt against the win.*
--- Lua API. Named "calculator" (this file's basename) so app_manager's
--- make_display_name() derives the app name "calculator" and the existing
--- icon mapping in cupcake_ui.c (icon_for_app(), {"calculator", ...}) keeps
--- resolving with no icon-code changes.
+-- calculator.meow — PURR OS Calculator (.meow)
+-- Same 4-function + percent/clear/chained-op logic as before, but the
+-- keypad is drawn as raw rects/text and hit-tested by hand instead of one
+-- native win.button() per key. Confirmed live: closing a window holding
+-- ~20 native MiniWin button controls left the whole UI task permanently
+-- stuck inside the backend's own control-teardown code (mw_remove_control()
+-- loop) — every step of that code is individually bounded and matches
+-- upstream miniwinwm exactly, so the trigger appears to be the sheer number
+-- of native controls torn down in one synchronous burst, not a logic bug
+-- reachable through code review. PURR-OS-0.11 never hit this class of bug
+-- because its apps always drew their own "buttons" as plain rects and did
+-- their own touch hit-testing (see PURR-OS-0.11/sdcard_apps/calc.paw) —
+-- this file follows that same proven pattern via win.rect()/win.text()/
+-- win.on_touch() instead of win.button(), so this window creates zero
+-- native controls besides itself.
 --
 -- Deploy: copy this file to /sdcard/apps/calculator.meow on the device's SD
 -- card — .meow apps are never baked into the firmware image.
 
 local win_h = win.create("Calculator")
-local display = win.label(win_h, "0")
-win.label_align(display, 2)   -- 2 = right
+local W = win.width(win_h)
+local H = win.height(win_h)
+
+-- ── Layout ────────────────────────────────────────────────────────────────
+
+local DISP_H = 40
+local ROWS   = 5
+local COLS   = 4
+local PAD    = 3
+local BW = math.floor((W - PAD * (COLS + 1)) / COLS)
+local BH = math.floor((H - DISP_H - PAD * (ROWS + 1)) / ROWS)
+local GRID_Y = DISP_H + PAD
+
+local C_BG   = 0x1A1A2E
+local C_DISP = 0x16213E
+local C_TXT  = 0xE0E0E0
+local C_NUM  = 0x2A2A4A
+local C_OP   = 0x1A4A6A
+local C_EQ   = 0xCC4400
+local C_CLR  = 0x4A1A1A
+
+-- {row, col, label, colour, colspan}
+local KEYS = {
+    {0, 0, "C",   C_CLR}, {0, 1, "+/-", C_OP},  {0, 2, "%", C_OP}, {0, 3, "/", C_OP},
+    {1, 0, "7",   C_NUM}, {1, 1, "8",   C_NUM},  {1, 2, "9", C_NUM}, {1, 3, "*", C_OP},
+    {2, 0, "4",   C_NUM}, {2, 1, "5",   C_NUM},  {2, 2, "6", C_NUM}, {2, 3, "-", C_OP},
+    {3, 0, "1",   C_NUM}, {3, 1, "2",   C_NUM},  {3, 2, "3", C_NUM}, {3, 3, "+", C_OP},
+    {4, 0, "0",   C_NUM}, {4, 1, ".",   C_NUM},  {4, 2, "=", C_EQ, 2},
+}
+
+local function key_rect(row, col, span)
+    span = span or 1
+    local x = PAD + col * (BW + PAD)
+    local y = GRID_Y + PAD + row * (BH + PAD)
+    local w = BW * span + PAD * (span - 1)
+    return x, y, w, BH
+end
 
 -- ── State ─────────────────────────────────────────────────────────────────
 
@@ -23,17 +66,12 @@ local decimal = false
 local dec_pos = 1
 local entry   = "0"
 
-local function refresh()
-    win.label_set(display, entry)
-end
-
 local function entry_set(v)
     if v == math.floor(v) and math.abs(v) < 1e12 then
         entry = string.format("%.0f", v)
     else
         entry = string.format("%.6g", v)
     end
-    refresh()
 end
 
 local function entry_reset()
@@ -42,10 +80,9 @@ local function entry_reset()
     dec_pos = 1
     fresh   = true
     entry   = "0"
-    refresh()
 end
 
--- ── Button handlers ──────────────────────────────────────────────────────────
+-- ── Key handlers ──────────────────────────────────────────────────────────
 
 local function on_digit(d)
     if fresh then
@@ -70,7 +107,6 @@ local function on_dot()
         decimal = true
         dec_pos = 1
         entry = entry .. "."
-        refresh()
     end
 end
 
@@ -86,7 +122,6 @@ local function apply_op()
             accum = accum / operand
         else
             entry = "ERR:DIV0"
-            refresh()
             return
         end
     else
@@ -126,40 +161,44 @@ local function on_pct()
     entry_set(operand)
 end
 
--- ── Keypad layout — same 5-row grid as calculator.c ──────────────────────────
+local function handle_key(label)
+    if label == "C" then on_clear()
+    elseif label == "+/-" then on_sign()
+    elseif label == "%" then on_pct()
+    elseif label == "." then on_dot()
+    elseif label == "=" then on_equals()
+    elseif label == "+" or label == "-" or label == "*" or label == "/" then on_op(label)
+    else on_digit(tonumber(label)) end
+end
 
-local r0 = win.row(win_h, 4)
-win.button(win_h, "C",   on_clear)
-win.button(win_h, "+/-", on_sign)
-win.button(win_h, "%",   on_pct)
-win.button(win_h, "/",   function() on_op("/") end)
-win.layout_end(r0)
+-- ── Draw + input ──────────────────────────────────────────────────────────
 
-local r1 = win.row(win_h, 4)
-win.button(win_h, "7", function() on_digit(7) end)
-win.button(win_h, "8", function() on_digit(8) end)
-win.button(win_h, "9", function() on_digit(9) end)
-win.button(win_h, "*", function() on_op("*") end)
-win.layout_end(r1)
+local function redraw(w)
+    win.rect(w, 0, 0, W, H, C_BG)
+    win.rect(w, 0, 0, W, DISP_H, C_DISP)
+    win.text(w, W - 10 - (#entry * 9), (DISP_H - 16) / 2, entry, C_TXT)
 
-local r2 = win.row(win_h, 4)
-win.button(win_h, "4", function() on_digit(4) end)
-win.button(win_h, "5", function() on_digit(5) end)
-win.button(win_h, "6", function() on_digit(6) end)
-win.button(win_h, "-", function() on_op("-") end)
-win.layout_end(r2)
+    for _, k in ipairs(KEYS) do
+        local row, col, label, colour, span = k[1], k[2], k[3], k[4], k[5]
+        local x, y, kw, kh = key_rect(row, col, span)
+        win.rect(w, x, y, kw, kh, colour)
+        win.text(w, x + kw / 2 - #label * 4, y + kh / 2 - 8, label, C_TXT)
+    end
+end
 
-local r3 = win.row(win_h, 4)
-win.button(win_h, "1", function() on_digit(1) end)
-win.button(win_h, "2", function() on_digit(2) end)
-win.button(win_h, "3", function() on_digit(3) end)
-win.button(win_h, "+", function() on_op("+") end)
-win.layout_end(r3)
+win.on_paint(win_h, redraw)
 
-local r4 = win.row(win_h, 4)
-win.button(win_h, "0", function() on_digit(0) end)
-win.button(win_h, ".", on_dot)
-win.button(win_h, "=", on_equals)
-win.layout_end(r4)
+win.on_touch(win_h, function(w, x, y, pressed)
+    if not pressed then return end
+    for _, k in ipairs(KEYS) do
+        local row, col, label, _, span = k[1], k[2], k[3], k[4], k[5]
+        local kx, ky, kw, kh = key_rect(row, col, span)
+        if x >= kx and x < kx + kw and y >= ky and y < ky + kh then
+            handle_key(label)
+            win.repaint(w)
+            return
+        end
+    end
+end)
 
 win.show(win_h)

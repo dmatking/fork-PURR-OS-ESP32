@@ -39,6 +39,15 @@
 #include "meshtastic.h"
 #include "mesh_radio.h"
 #include "bt_mgr.h"
+#include "sdkconfig.h"
+
+// This whole file only builds against NimBLE (CONFIG_BT_NIMBLE_ENABLED,
+// currently tdeck_plus only — see bt_mgr.c's matching guard/comment). Every
+// device compiles this module unconditionally, so the #else stub below
+// keeps mesh_ble_init()/deinit()/set_advertising() real, linkable no-ops
+// everywhere else instead of a build failure on missing NimBLE headers.
+#ifdef CONFIG_BT_NIMBLE_ENABLED
+
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
 #include "esp_log.h"
@@ -338,3 +347,11 @@ void mesh_ble_deinit(void) {
     if (!bt_mgr_host_ready()) return;
     mesh_ble_set_advertising(false);
 }
+
+#else  // !CONFIG_BT_NIMBLE_ENABLED — see this file's top-of-file comment
+
+int  mesh_ble_init(void) { return 0; }
+void mesh_ble_deinit(void) {}
+void mesh_ble_set_advertising(bool on) { (void)on; }
+
+#endif  // CONFIG_BT_NIMBLE_ENABLED

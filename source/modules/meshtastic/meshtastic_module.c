@@ -5,10 +5,21 @@
 // assuming a specific chip, and talks to it only through catcall_radio_t.
 
 #include "meshtastic.h"
+#include "sdkconfig.h"
+
+// meshtastic_module.c is unconditionally compiled into every device's
+// firmware (components under source/modules/ always are — confirmed live
+// this session, it's why bt_mgr.c/mesh_ble.c broke 9/10 devices before
+// getting the same guard). CONFIG_PURR_FEATURE_MESHTASTIC is off by
+// default everywhere; the #else branch below gives every caller
+// (meshchat.c's 10 call sites, mesh_ble.c) real, linkable no-op symbols
+// instead of a build failure or a deleted app. See Kconfig.projbuild's
+// help text.
+#ifdef CONFIG_PURR_FEATURE_MESHTASTIC
+
 #include "mesh_radio.h"
 #include "mesh_router.h"
 #include "mesh_ble.h"
-#include "../../kernel/core/purr_module.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -86,8 +97,21 @@ static void mesh_task(void *arg)
                 uint8_t  payload[240];
                 size_t   payload_len = 0;
 
-                if (mesh_router_decode(raw, (size_t)raw_len, &from, &to, &pkt_id, &hop_limit,
-                                        &portnum, payload, &payload_len, sizeof(payload) - 1)) {
+                // Diagnostic — previously a failed decode (bad CRC, wrong
+                // channel key, malformed header) was completely silent, the
+                // same as nothing arriving at all. With a live "0 nodes"
+                // report and no other visible errors, that ambiguity is the
+                // actual blocker: the else branch below is what tells apart
+                // "no RF ever lands" (never fires) from "RF lands but won't
+                // decode" (fires with a real raw_len/rssi) — a wrong channel
+                // PSK or sync word looks identical to dead silence otherwise.
+                bool decoded = mesh_router_decode(raw, (size_t)raw_len, &from, &to, &pkt_id, &hop_limit,
+                                        &portnum, payload, &payload_len, sizeof(payload) - 1);
+                if (!decoded) {
+                    ESP_LOGW(TAG, "rx: %d bytes received but failed to decode (rssi=%d snr=%.1f)",
+                             raw_len, rssi, snr);
+                }
+                if (decoded) {
                     if (!mesh_router_dedup_seen(from, pkt_id)) {
                         mesh_router_dedup_add(from, pkt_id);
                         mesh_router_node_touch(from, (int8_t)rssi);
@@ -245,7 +269,23 @@ void mesh_manager_deinit(void)
     s_ready = false;
 }
 
+#else  // !CONFIG_PURR_FEATURE_MESHTASTIC — see this file's top-of-file comment
+
+bool     mesh_manager_is_alive(void)                            { return false; }
+bool     mesh_manager_send_text(uint32_t to, const char *text)  { (void)to; (void)text; return false; }
+void     mesh_manager_add_rx_callback(mesh_rx_cb_t cb)          { (void)cb; }
+void     mesh_manager_remove_rx_callback(mesh_rx_cb_t cb)       { (void)cb; }
+uint32_t mesh_manager_node_id(void)                             { return 0; }
+int      mesh_manager_node_count(void)                          { return 0; }
+bool     mesh_manager_ready(void)                                { return false; }
+int      mesh_manager_node_at(int idx, mesh_node_info_t *out)   { (void)idx; (void)out; return -1; }
+int      mesh_manager_init(void)                                { return 0; }
+void     mesh_manager_deinit(void)                               {}
+
+#endif  // CONFIG_PURR_FEATURE_MESHTASTIC
+
 // ── Module header ─────────────────────────────────────────────────────────────
+#include "../../kernel/core/purr_module.h"
 
 PURR_MODULE_REGISTER(meshtastic) = {
     .magic             = PURR_MODULE_MAGIC,

@@ -58,7 +58,20 @@ mw_hal_touch_state_t mw_hal_touch_get_state(void)
         // (calibrate.c) learns whatever mapping/orientation this panel
         // actually has from taps in this same coordinate space — it doesn't
         // need or want a pre-scale applied here.
-        if (touch->read_point(&tx, &ty)) {
+        //
+        // Breadcrumbed separately from the generic "process_message" step
+        // (see purr_kernel_ui_breadcrumb()'s doc comment) — GT911 shares its
+        // I2C bus with BBQ20 (confirmed recurring "I2C bus ... already
+        // acquired" warning every boot this session) and this I2C read runs
+        // on every single miniwin_task() iteration, making it the prime
+        // suspect for a live "UI TASK UNRESPONSIVE @ process_message" hang
+        // that only appeared once Meshtastic started adding real CPU/bus
+        // load — narrowing it to specifically here (vs. elsewhere in
+        // mw_process_message()) on the next occurrence.
+        purr_kernel_ui_breadcrumb("process_message/touch_read_point");
+        bool got = touch->read_point(&tx, &ty);
+        purr_kernel_ui_breadcrumb("process_message/touch_read_point_done");
+        if (got) {
             s_cached_x = tx;
             s_cached_y = ty;
             s_pressed  = true;

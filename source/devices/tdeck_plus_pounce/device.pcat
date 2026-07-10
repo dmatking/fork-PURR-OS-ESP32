@@ -1,0 +1,113 @@
+# devices/tdeck_plus_pounce/device.pcat
+# T-Deck Plus running the "Pounce" UI backend — raw framebuffer,
+# keyboard+trackball-first, Meshtastic-first. See pounce_plan.md at the repo
+# root for the design. Same hardware as tdeck_plus, own device slug (same
+# precedent as tdeck_plus_arduino/tdeck_plus_test) so tdeck_plus's own
+# MiniWin/WinCE setup is never touched by this device's regeneration.
+
+[device]
+name        = "tdeck_plus_pounce"
+chip        = "esp32s3"
+kernel_type = "native"
+flash_mb    = 16
+port        = "/dev/ttyACM0"
+psram       = true
+psram_mb    = 8
+
+spiffs_offset  = "0xD90000"
+
+[drivers]
+display     = "st7789"
+touch       = "gt911"
+input       = "trackball"
+keyboard    = "bbq20"
+radio       = "sx1262"
+gps         = "generic_nmea"
+
+[radio]
+wifi        = true
+# bt — off. Pounce's design has no BLE phone-companion UI, no reason to pay
+# for it. Flip to true + add "bt_mgr" to [modules]/[flash] below to bring it
+# back with zero code changes (CONFIG_BT_NIMBLE_ENABLED now derives straight
+# from [modules] bt, see purrstrap.py's _sdkconfig_lines()).
+bt          = false
+lora        = "sx1262"
+
+[modules]
+ui          = "pounce"
+app_manager = "app_manager"
+# mesh — ON. Pounce's status strip (pounce_plan.md A6) needs real
+# mesh_rssi/mesh_nodes/mesh_unread data — CONFIG_PURR_FEATURE_MESHTASTIC now
+# derives straight from this field, no manual sdkconfig editing needed.
+mesh        = "meshtastic"
+lua         = "lua_runtime"
+wifi        = "wifi_mgr"
+
+[apps]
+settings    = true
+terminal    = true
+fileman     = true
+hwtest      = true
+drivermgr   = true
+meshchat    = true
+meshdiag    = true
+services    = true
+
+[flash]
+display/st7789    = 1
+touch/gt911       = 1
+input/trackball   = 1
+pounce            = 2
+app_manager       = 2
+radio/sx1262      = 2
+driver_manager    = 2
+wifi_mgr          = 2
+lua_runtime       = 2
+meshtastic         = 2
+gps/generic_nmea  = 3
+apps/settings     = 3
+apps/terminal     = 3
+apps/fileman      = 3
+apps/hwtest       = 3
+apps/drivermgr    = 3
+apps/meshchat     = 3
+apps/meshdiag     = 3
+apps/services     = 3
+
+[pins]
+display_cs    = 12
+display_dc    = 11
+display_mosi  = 41
+display_sclk  = 40
+display_rst   = -1
+display_bl    = 42
+
+touch_sda     = 18
+touch_scl     = 8
+touch_int     = 16
+touch_rst     = -1
+
+trackball_up   = 3
+trackball_down = 15
+trackball_left = 1
+trackball_right= 2
+trackball_click= 0
+
+# LoRa shares the same SPI2_HOST bus as display/SD below (confirmed against
+# LilyGo's own utilities.h/TDECK_PINS.h).
+lora_mosi     = 41
+lora_miso     = 38
+lora_sclk     = 40
+lora_cs       = 9
+lora_rst      = 17
+lora_busy     = 13
+lora_irq      = 45
+
+gps_tx        = 43
+gps_rx        = 44
+
+sd_cs         = 39
+sd_mosi       = 41
+sd_miso       = 38
+sd_sclk       = 40
+sd_enabled    = true

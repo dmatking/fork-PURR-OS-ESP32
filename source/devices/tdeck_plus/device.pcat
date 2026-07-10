@@ -18,21 +18,29 @@ display     = "st7789"
 touch       = "gt911"
 input       = "trackball"
 keyboard    = "bbq20"
-radio       = "sx1262"
+radio       = "sx1262_rl"
 gps         = "generic_nmea"
 
 [radio]
 wifi        = true
-bt          = true
-lora        = "sx1262"
+# bt — off. Gated behind CONFIG_BT_NIMBLE_ENABLED (see CoreOS/main/
+# Kconfig.projbuild), not deleted — flip that Kconfig + re-add "bt_mgr" to
+# [modules]/[flash] below to bring it back with zero code changes.
+bt          = false
+# sx1262_rl — RadioLib-backed driver (source/drivers/radio/sx1262_rl),
+# swapped in for real Meshtastic node discovery instead of the hand-rolled
+# sx1262.c SPI driver (still present, unused by this device — see the
+# "Vendor Meshtastic's real radio/crypto code" plan).
+lora        = "sx1262_rl"
 
 [modules]
 ui          = "miniwin"
 app_manager = "app_manager"
+# mesh — re-enabled for active Meshtastic diagnosis (was off, gated behind
+# CONFIG_PURR_FEATURE_MESHTASTIC, see CoreOS/main/Kconfig.projbuild).
 mesh        = "meshtastic"
 lua         = "lua_runtime"
 wifi        = "wifi_mgr"
-bt          = "bt_mgr"
 
 [ui]
 theme       = "wce"
@@ -45,6 +53,7 @@ hwtest      = true
 drivermgr   = true
 meshchat    = true
 services    = true
+taskmgr     = true
 
 [flash]
 display/st7789    = 1
@@ -52,13 +61,12 @@ touch/gt911       = 1
 input/trackball   = 1
 cardstack         = 2
 app_manager       = 2
-radio/sx1262      = 2
+radio/sx1262_rl   = 2
 driver_manager    = 2
 wifi_mgr          = 2
-bt_mgr            = 2
 lua_runtime       = 2
+meshtastic        = 2
 gps/generic_nmea  = 3
-meshtastic        = 3
 apps/settings     = 3
 apps/terminal     = 3
 apps/fileman      = 3
@@ -66,6 +74,7 @@ apps/hwtest       = 3
 apps/drivermgr    = 3
 apps/meshchat     = 3
 apps/services     = 3
+apps/taskmgr      = 3
 
 [pins]
 display_cs    = 12
