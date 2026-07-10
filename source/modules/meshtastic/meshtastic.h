@@ -72,6 +72,16 @@ bool mesh_manager_channel_name(int idx, char *name_out, size_t name_max);
 // decode — pick a different name or PSK).
 int mesh_manager_add_channel(const char *name, const uint8_t psk16[16]);
 
+// Removes a channel (room) — "Forget" in MeshChat's Manage screen. Refuses
+// idx==0 (the fixed LongFast primary). No-op if idx is out of range.
+void mesh_manager_remove_channel(int idx);
+
+// A channel's on-air hash byte — stable identity for a channel independent
+// of its table index (which can shift when another channel is removed).
+// Use this, not idx, as a persistent key (e.g. a history file name).
+// Returns false if idx is out of range.
+bool mesh_manager_channel_hash(int idx, uint8_t *hash_out);
+
 // Register/unregister a callback for every incoming decoded packet (any
 // portnum) — up to MESH_MAX_RX_CB subscribers at once (e.g. MeshChat and a
 // Bluetooth companion-app bridge can both observe RX independently).
@@ -103,6 +113,10 @@ typedef struct {
 // Enumerate known nodes by index (0..mesh_manager_node_count()-1). Returns
 // 0 and fills *out on success, -1 if idx is out of range.
 int mesh_manager_node_at(int idx, mesh_node_info_t *out);
+
+// Removes a node entirely — "Forget" in MeshChat's Manage screen. A future
+// message from the same node id re-adds it as unknown/new again.
+void mesh_manager_node_forget(uint32_t id);
 
 #ifdef __cplusplus
 }

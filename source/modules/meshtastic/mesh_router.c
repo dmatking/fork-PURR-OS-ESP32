@@ -40,6 +40,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include <pb_encode.h>
 #include <pb_decode.h>
 #include "meshtastic/mesh.pb.h"
@@ -95,13 +97,80 @@ void mesh_router_dedup_add(uint32_t from, uint32_t id)
 static mesh_node_t s_nodes[MAX_NODES];
 static int         s_nnode = 0;
 
+// Same NVS namespace mesh_radio.c's channel table uses ("purr_mesh"), just
+// different keys ("nodes"/"node_count" vs. its "channels"/"count") — no
+// collision, and keeping all of this module's persisted state in one
+// namespace is simpler than inventing a second one.
+#define MESH_NODES_NVS_NS "purr_mesh"
+
+// node_touch() is called from mesh_task()'s own RX handler for every
+// decoded packet — that task's stack is PSRAM-backed by design (see
+// mesh_radio_init()'s doc comment for the boot-loop crash a direct NVS
+// write from there caused previously). So no save_nodes() call below is
+// ever made directly; every mutator just flips this flag, and the actual
+// NVS write happens on mesh_persist_task()'s internal-RAM stack instead
+// (see meshtastic_module.c) — up to ~1s of latency before a change is
+// durable, which is fine for "known nodes" bookkeeping.
+static volatile bool s_nodes_dirty = false;
+
+static void save_nodes(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(MESH_NODES_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_blob(h, "nodes", s_nodes, sizeof(mesh_node_t) * (size_t)s_nnode);
+    nvs_set_i32(h, "node_count", s_nnode);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+void mesh_router_flush_nodes_if_dirty(void)
+{
+    if (!s_nodes_dirty) return;
+    s_nodes_dirty = false;
+    save_nodes();
+}
+
+void mesh_router_load_nodes(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(MESH_NODES_NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    int32_t count = 0;
+    nvs_get_i32(h, "node_count", &count);
+    if (count > 0) {
+        if (count > MAX_NODES) count = MAX_NODES;
+        size_t blob_len = sizeof(mesh_node_t) * (size_t)count;
+        if (nvs_get_blob(h, "nodes", s_nodes, &blob_len) == ESP_OK) {
+            s_nnode = count;
+            // rssi/last_ms are stale the moment they're loaded from a
+            // previous boot — reset so the UI doesn't show a fake-fresh
+            // "just seen" state for a node we haven't actually heard yet
+            // this boot. Repopulated the instant it's heard again.
+            for (int i = 0; i < s_nnode; i++) {
+                s_nodes[i].rssi    = 0;
+                s_nodes[i].last_ms = 0;
+            }
+        }
+    }
+    nvs_close(h);
+}
+
 void mesh_router_node_touch(uint32_t id, int8_t rssi, int channel_idx)
 {
     for (int i = 0; i < s_nnode; i++) {
         if (s_nodes[i].id == id) {
+            // This runs on every single decoded packet from a known node —
+            // rssi/last_ms aren't even part of what gets persisted (reset
+            // on load, see mesh_router_load_nodes()'s comment), so saving
+            // here every time would mean an NVS write per packet on a busy
+            // mesh. Only channel_idx is persisted state, and only actually
+            // save when it *changes* (a node heard on a different channel
+            // than before) — the common case (same channel, every touch)
+            // costs nothing.
+            bool channel_changed = s_nodes[i].channel_idx != channel_idx;
             s_nodes[i].rssi        = rssi;
             s_nodes[i].last_ms     = (uint32_t)(esp_timer_get_time() / 1000ULL);
             s_nodes[i].channel_idx = channel_idx;
+            if (channel_changed) s_nodes_dirty = true;
             return;
         }
     }
@@ -113,6 +182,7 @@ void mesh_router_node_touch(uint32_t id, int8_t rssi, int channel_idx)
         s_nodes[s_nnode].last_ms     = (uint32_t)(esp_timer_get_time() / 1000ULL);
         s_nodes[s_nnode].channel_idx = channel_idx;
         s_nnode++;
+        s_nodes_dirty = true;
     }
 }
 
@@ -122,12 +192,42 @@ void mesh_router_node_set_name(uint32_t id, const char *long_name, const char *s
         if (s_nodes[i].id == id) {
             if (long_name)  strncpy(s_nodes[i].long_name,  long_name,  sizeof(s_nodes[i].long_name) - 1);
             if (short_name) strncpy(s_nodes[i].short_name, short_name, sizeof(s_nodes[i].short_name) - 1);
+            s_nodes_dirty = true;
             return;
         }
     }
     // mesh_task() always calls mesh_router_node_touch() first for every
     // decoded packet (including this NodeInfo one) — the node should already
     // exist by the time this runs, so there's nothing to do if not.
+}
+
+void mesh_router_node_set_pubkey(uint32_t id, const uint8_t pubkey[32])
+{
+    for (int i = 0; i < s_nnode; i++) {
+        if (s_nodes[i].id == id) {
+            memcpy(s_nodes[i].public_key, pubkey, 32);
+            s_nodes[i].has_public_key = true;
+            s_nodes_dirty = true;
+            return;
+        }
+    }
+    // See mesh_router_node_set_name()'s matching comment.
+}
+
+void mesh_router_node_forget(uint32_t id)
+{
+    for (int i = 0; i < s_nnode; i++) {
+        if (s_nodes[i].id == id) {
+            memmove(&s_nodes[i], &s_nodes[i + 1], sizeof(mesh_node_t) * (size_t)(s_nnode - i - 1));
+            s_nnode--;
+            // Called from MeshChat's "Forget Node" button — that app's own
+            // task is also PSRAM-backed (see app_manager.c's launch_native(),
+            // only settings/fileman get a safe static internal-RAM stack),
+            // so this can't call save_nodes() directly either.
+            s_nodes_dirty = true;
+            return;
+        }
+    }
 }
 
 int mesh_router_node_count(void) { return s_nnode; }
@@ -177,6 +277,56 @@ static size_t encode_data_packet(uint8_t *wire, size_t wire_max,
     return MESH_HDR_LEN + plain_len;
 }
 
+// NULL if `id` isn't tracked yet or has no known public key on file.
+static const uint8_t *find_pubkey(uint32_t id)
+{
+    for (int i = 0; i < s_nnode; i++) {
+        if (s_nodes[i].id == id && s_nodes[i].has_public_key) return s_nodes[i].public_key;
+    }
+    return NULL;
+}
+
+// PKI-encrypted unicast packet — see mesh_radio.h's PKI section for the
+// exact wire format this replicates (channel byte forced to 0 as the PKI
+// sentinel, AES-256-CCM instead of the channel path's AES-CTR, and a
+// 12-byte tag+extraNonce trailer appended after the ciphertext). Real
+// Meshtastic's own max Data payload (233 bytes) shrinks to 221 for a PKI
+// message — the trailer eats into the same on-air packet size budget.
+static size_t encode_pki_packet(uint8_t *wire, size_t wire_max, uint32_t to, uint8_t hop_limit,
+                                 const uint8_t their_pub[32], const uint8_t *plain, size_t plain_len)
+{
+    if (plain_len > 233 - MESH_PKI_OVERHEAD) return 0;
+    if (MESH_HDR_LEN + plain_len + MESH_PKI_OVERHEAD > wire_max) return 0;
+
+    uint32_t from = s_node_id;
+    uint32_t id   = s_packet_seq++;
+
+    uint8_t shared_key[32];
+    if (!mesh_radio_ecdh_shared(their_pub, shared_key)) return 0;
+
+    uint32_t extra_nonce = esp_random();
+    uint8_t nonce[MESH_PKI_NONCE_LEN];
+    mesh_radio_build_pki_nonce(nonce, id, extra_nonce, from);
+
+    uint8_t cipher[256], tag[MESH_PKI_TAG_LEN];
+    if (!mesh_radio_aes_ccm_encrypt(plain, cipher, plain_len, shared_key, nonce, tag)) return 0;
+
+    uint8_t *p = wire;
+    memcpy(p, &to,   4); p += 4;
+    memcpy(p, &from, 4); p += 4;
+    memcpy(p, &id,   4); p += 4;
+    *p++ = (uint8_t)((hop_limit & MESH_FLAG_HOP_LIMIT_MASK) |
+                      ((hop_limit << MESH_FLAG_HOP_START_SHIFT) & MESH_FLAG_HOP_START_MASK));
+    *p++ = 0;  // channel byte 0 == "this is PKI, not a channel" sentinel
+    *p++ = 0;  // next_hop
+    *p++ = 0;  // relay_node
+    memcpy(p, cipher, plain_len); p += plain_len;
+    memcpy(p, tag, MESH_PKI_TAG_LEN); p += MESH_PKI_TAG_LEN;
+    memcpy(p, &extra_nonce, 4); p += 4;
+
+    return MESH_HDR_LEN + plain_len + MESH_PKI_OVERHEAD;
+}
+
 size_t mesh_router_encode_text(uint8_t *wire, size_t wire_max, uint32_t to, int channel_idx, const char *text)
 {
     meshtastic_Data d = meshtastic_Data_init_zero;
@@ -190,6 +340,20 @@ size_t mesh_router_encode_text(uint8_t *wire, size_t wire_max, uint32_t to, int 
     pb_ostream_t os = pb_ostream_from_buffer(plain, sizeof(plain));
     if (!pb_encode(&os, meshtastic_Data_fields, &d)) return 0;
 
+    // Automatic PKI upgrade for a direct message to a node whose public
+    // key we already have on file — matches real Meshtastic's own
+    // behavior exactly (broadcasts never PKI-encrypt; PKI is inherently
+    // point-to-point). Falls back to today's channel-PSK path when we
+    // don't have a key for the destination yet (a node we've only heard
+    // indirectly, or one running pre-PKI firmware).
+    if (to != (uint32_t)MESH_BROADCAST) {
+        const uint8_t *their_pub = find_pubkey(to);
+        if (their_pub) {
+            return encode_pki_packet(wire, wire_max, to, MESH_HOP_LIMIT,
+                                      their_pub, plain, os.bytes_written);
+        }
+    }
+
     return encode_data_packet(wire, wire_max, to,
                                MESH_HOP_LIMIT, channel_idx, plain, os.bytes_written);
 }
@@ -201,6 +365,13 @@ size_t mesh_router_encode_nodeinfo(uint8_t *wire, size_t wire_max)
     snprintf(user.long_name,  sizeof(user.long_name),  "PURR-%08lX", (unsigned long)s_node_id);
     snprintf(user.short_name, sizeof(user.short_name), "PRR");
     user.hw_model = meshtastic_HardwareModel_HELTEC_V3;
+    // Without this, modern Meshtastic clients (v2.5+, which always PKI-
+    // encrypt direct messages) have no key to encrypt a DM to us with —
+    // confirmed live as the actual cause of DMs failing instantly on the
+    // sender's end, "empty ack"/"unencrypted" warnings, well before any
+    // radio transmission happens. See mesh_radio.h's PKI section.
+    mesh_radio_identity_pubkey(user.public_key.bytes);
+    user.public_key.size = 32;
 
     uint8_t user_bytes[meshtastic_User_size];
     pb_ostream_t us = pb_ostream_from_buffer(user_bytes, sizeof(user_bytes));
@@ -242,10 +413,20 @@ size_t mesh_router_encode_ack(uint8_t *wire, size_t wire_max, uint32_t to, int c
     pb_ostream_t ds = pb_ostream_from_buffer(plain, sizeof(plain));
     if (!pb_encode(&ds, meshtastic_Data_fields, &d)) return 0;
 
+    // Same automatic PKI upgrade as mesh_router_encode_text() — an ack is
+    // just another outgoing unicast packet, and real Meshtastic makes this
+    // same to-node decision for every send regardless of how the packet
+    // being acked arrived. Falls back to channel_idx (must be the SAME
+    // channel the original packet arrived on, or the sender's own decode
+    // won't match it) when we don't have a PKI key for `to`.
+    const uint8_t *their_pub = find_pubkey(to);
+    if (their_pub) {
+        return encode_pki_packet(wire, wire_max, to, MESH_HOP_LIMIT,
+                                  their_pub, plain, ds.bytes_written);
+    }
+
     // Acks aren't broadcast and don't need to travel far — same hop_limit
-    // as everything else here, MESH_HOP_LIMIT is only 3 anyway. Must go
-    // out on the SAME channel the original packet arrived on, or the
-    // sender's own decode (a different PSK than ours) won't match it.
+    // as everything else here, MESH_HOP_LIMIT is only 3 anyway.
     return encode_data_packet(wire, wire_max, to,
                                MESH_HOP_LIMIT, channel_idx, plain, ds.bytes_written);
 }
@@ -258,7 +439,14 @@ void mesh_router_relay(const uint8_t *raw, size_t raw_len)
     memcpy(&hdr_to,   raw,     4);
     memcpy(&hdr_from, raw + 4, 4);
     memcpy(&hdr_id,   raw + 8, 4);
-    if (hdr_to != (uint32_t)MESH_BROADCAST) return;
+    // Relay anything not addressed to us, not just broadcasts — real
+    // Meshtastic's FloodingRouter::perhapsRebroadcast() only checks
+    // !isToUs(p), no separate broadcast check at all. A direct message
+    // to some other node needs exactly the same flood-relay treatment a
+    // broadcast gets to ever reach a destination beyond direct 1-hop
+    // range; restricting this to broadcast-only (the previous check)
+    // silently dropped every multi-hop DM at the first relay.
+    if (hdr_to == s_node_id) return;
 
     uint8_t flags = raw[12];
     uint8_t hop_limit = flags & MESH_FLAG_HOP_LIMIT_MASK;
@@ -313,36 +501,86 @@ bool mesh_router_decode(const uint8_t *raw, size_t raw_len,
     *hop_limit = flags & MESH_FLAG_HOP_LIMIT_MASK;
     *want_ack  = (flags & MESH_FLAG_WANT_ACK_MASK) != 0;
 
-    // Try every channel we know rather than assuming the single hardcoded
-    // default — a packet on a channel we don't have configured is
-    // expected/normal (someone else's private room), not an error, so this
-    // isn't logged as a warning the way the failure paths below are.
-    int ch_idx = mesh_radio_channel_find_by_hash(hdr_channel_hash);
-    if (ch_idx < 0) return false;
-    *channel_idx = ch_idx;
-    const mesh_channel_t *ch = mesh_radio_channel_at(ch_idx);
+    uint8_t plain[256];
+    size_t  plain_len;
 
-    const uint8_t *enc = raw + MESH_HDR_LEN;
-    size_t enc_len = raw_len - MESH_HDR_LEN;
-    uint8_t iv[16], plain[256];
-    if (enc_len > sizeof(plain)) {
-        ESP_LOGW(TAG, "decode: from=%08lX id=%lu enc_len=%u exceeds plain buffer",
-                 (unsigned long)hdr_from, (unsigned long)hdr_id, (unsigned)enc_len);
-        return false;
-    }
-    mesh_radio_build_iv(iv, hdr_id, hdr_from);
-    if (!mesh_radio_aes_ctr(enc, plain, enc_len, ch->psk, iv)) {
-        ESP_LOGW(TAG, "decode: from=%08lX id=%lu AES-CTR call itself failed",
-                 (unsigned long)hdr_from, (unsigned long)hdr_id);
-        return false;
+    if (hdr_channel_hash == 0) {
+        // PKI sentinel — checked before any channel-hash lookup, matching
+        // real Meshtastic's Router::perhapsDecode() (`p->channel == 0`
+        // triggers a PKI decrypt attempt first). We can only decrypt this
+        // if we already have `from`'s public key on file (from a prior
+        // NodeInfo) — same real limitation Meshtastic itself has; there's
+        // no per-message key exchange to fall back on.
+        const uint8_t *their_pub = find_pubkey(hdr_from);
+        if (!their_pub) return false;   // no key yet — expected/normal, not an error
+
+        if (raw_len <= MESH_HDR_LEN + MESH_PKI_OVERHEAD) {
+            ESP_LOGW(TAG, "decode: from=%08lX id=%lu too short for PKI trailer",
+                     (unsigned long)hdr_from, (unsigned long)hdr_id);
+            return false;
+        }
+        size_t cipher_len = raw_len - MESH_HDR_LEN - MESH_PKI_OVERHEAD;
+        if (cipher_len > sizeof(plain)) {
+            ESP_LOGW(TAG, "decode: from=%08lX id=%lu cipher_len=%u exceeds plain buffer",
+                     (unsigned long)hdr_from, (unsigned long)hdr_id, (unsigned)cipher_len);
+            return false;
+        }
+        const uint8_t *cipher = raw + MESH_HDR_LEN;
+        const uint8_t *tag    = cipher + cipher_len;              // MESH_PKI_TAG_LEN bytes
+        uint32_t extra_nonce;
+        memcpy(&extra_nonce, tag + MESH_PKI_TAG_LEN, 4);           // trailing 4 bytes, in the clear
+
+        uint8_t shared_key[32];
+        if (!mesh_radio_ecdh_shared(their_pub, shared_key)) {
+            ESP_LOGW(TAG, "decode: from=%08lX id=%lu ECDH failed",
+                     (unsigned long)hdr_from, (unsigned long)hdr_id);
+            return false;
+        }
+        uint8_t nonce[MESH_PKI_NONCE_LEN];
+        mesh_radio_build_pki_nonce(nonce, hdr_id, extra_nonce, hdr_from);
+        if (!mesh_radio_aes_ccm_decrypt(cipher, plain, cipher_len, shared_key, nonce, tag)) {
+            // A genuine auth failure (wrong key, corrupted packet) — not
+            // logged as loudly as other paths since PKI auth failures can
+            // also just mean "not really addressed to us" noise on a busy
+            // channel, same spirit as the channel-hash-mismatch silence.
+            return false;
+        }
+        plain_len = cipher_len;
+        *channel_idx = -1;   // PKI has no channel — sentinel for callers
+    } else {
+        // Try every channel we know rather than assuming the single
+        // hardcoded default — a packet on a channel we don't have
+        // configured is expected/normal (someone else's private room),
+        // not an error, so this isn't logged as a warning the way the
+        // failure paths below are.
+        int ch_idx = mesh_radio_channel_find_by_hash(hdr_channel_hash);
+        if (ch_idx < 0) return false;
+        *channel_idx = ch_idx;
+        const mesh_channel_t *ch = mesh_radio_channel_at(ch_idx);
+
+        const uint8_t *enc = raw + MESH_HDR_LEN;
+        size_t enc_len = raw_len - MESH_HDR_LEN;
+        if (enc_len > sizeof(plain)) {
+            ESP_LOGW(TAG, "decode: from=%08lX id=%lu enc_len=%u exceeds plain buffer",
+                     (unsigned long)hdr_from, (unsigned long)hdr_id, (unsigned)enc_len);
+            return false;
+        }
+        uint8_t iv[16];
+        mesh_radio_build_iv(iv, hdr_id, hdr_from);
+        if (!mesh_radio_aes_ctr(enc, plain, enc_len, ch->psk, iv)) {
+            ESP_LOGW(TAG, "decode: from=%08lX id=%lu AES-CTR call itself failed",
+                     (unsigned long)hdr_from, (unsigned long)hdr_id);
+            return false;
+        }
+        plain_len = enc_len;
     }
 
     meshtastic_Data d = meshtastic_Data_init_zero;
-    pb_istream_t ds = pb_istream_from_buffer(plain, enc_len);
+    pb_istream_t ds = pb_istream_from_buffer(plain, plain_len);
     if (!pb_decode(&ds, meshtastic_Data_fields, &d)) {
-        ESP_LOGW(TAG, "decode: from=%08lX id=%lu channel=%u enc_len=%u inner Data pb_decode failed: %s",
+        ESP_LOGW(TAG, "decode: from=%08lX id=%lu channel=%u plain_len=%u inner Data pb_decode failed: %s",
                  (unsigned long)hdr_from, (unsigned long)hdr_id, (unsigned)hdr_channel_hash,
-                 (unsigned)enc_len, PB_GET_ERROR(&ds));
+                 (unsigned)plain_len, PB_GET_ERROR(&ds));
         return false;
     }
 

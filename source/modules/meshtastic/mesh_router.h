@@ -60,8 +60,11 @@ typedef struct {
     char     short_name[8];
     int8_t   rssi;
     uint32_t last_ms;
-    int      channel_idx;   // channel this node was last heard on — DMs to
-                             // this node are sent back on this same channel
+    int      channel_idx;      // fallback channel for DMing this node when
+                                // PKI isn't available (see has_public_key)
+    uint8_t  public_key[32];
+    bool     has_public_key;   // once true, DMs to/from this node use real
+                                // Meshtastic's PKI encryption, not channel_idx
 } mesh_node_t;
 
 // channel_idx: which channel this packet was heard on (from
@@ -75,9 +78,37 @@ void mesh_router_node_touch(uint32_t id, int8_t rssi, int channel_idx);
 // present via mesh_router_node_touch(). No-op if the node isn't tracked yet.
 void mesh_router_node_set_name(uint32_t id, const char *long_name, const char *short_name);
 
+// Called alongside mesh_router_node_set_name() when a NodeInfo's User.public_key
+// is present (32 bytes) — once set, this node becomes reachable via PKI.
+// No-op if the node isn't tracked yet.
+void mesh_router_node_set_pubkey(uint32_t id, const uint8_t pubkey[32]);
+
+// Removes a node entirely (shift-down + re-save to NVS) — used by
+// MeshChat's "Forget" action. No-op if the node isn't tracked.
+void mesh_router_node_forget(uint32_t id);
+
 int  mesh_router_node_count(void);
 
 // Enumerate the node table by index (0..mesh_router_node_count()-1). Returns
 // NULL out of range. The returned pointer is only valid until the next
 // mesh_router_node_touch()/mesh_router_node_set_name() call.
 const mesh_node_t *mesh_router_node_at(int idx);
+
+// Loads the persisted node table from NVS (namespace "purr_mesh", keys
+// "nodes"/"node_count" — same pattern and namespace as mesh_radio.c's
+// channel table, just different keys). Only identity fields are restored
+// (id/names/channel_idx/public_key) — rssi/last_ms start fresh, repopulated
+// as soon as each node is heard again. MUST be called once from
+// mesh_manager_init(), before mesh_task() is created — never from
+// mesh_task() itself or anything it calls (PSRAM-stack-vs-NVS crash class,
+// see mesh_radio_init()'s doc comment for the full story).
+void mesh_router_load_nodes(void);
+
+// Every node-table mutator above (_touch/_set_name/_set_pubkey/_forget) is
+// reachable from a PSRAM-backed stack (mesh_task()'s RX loop, or MeshChat's
+// own app task) and so never touches NVS directly — they just mark the
+// table dirty. This performs the actual deferred NVS write, and MUST be
+// called periodically from a task with an internal-RAM stack (see
+// meshtastic_module.c's mesh_persist_task()). No-op if nothing changed
+// since the last call.
+void mesh_router_flush_nodes_if_dirty(void);

@@ -224,7 +224,9 @@ static void ensure_sd_dirs(void)
         "/sdcard/apps", "/sdcard/modules", "/sdcard/drivers",
         "/sdcard/drivers/display", "/sdcard/drivers/touch",
         "/sdcard/drivers/input", "/sdcard/drivers/radio",
-        "/sdcard/drivers/gps", "/sdcard/system", "/sdcard/system/logs", NULL
+        "/sdcard/drivers/gps", "/sdcard/system", "/sdcard/system/logs",
+        "/sdcard/meshchat",       // MeshChat DM/room history text files
+        NULL
     };
     for (int i = 0; dirs[i]; i++) {
         struct stat st;

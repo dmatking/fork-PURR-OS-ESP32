@@ -96,6 +96,61 @@ static purr_win_t  s_addroom_win      = 0;
 static purr_wid_t  s_addroom_name_in  = 0;
 static purr_wid_t  s_addroom_psk_in   = 0;
 
+// ── Manage window (forget nodes/rooms) ───────────────────────────────────────
+
+static purr_win_t  s_manage_win       = 0;
+static purr_wid_t  s_manage_node_list = 0;
+static purr_wid_t  s_manage_room_list = 0;
+
+// ── SD persistence ────────────────────────────────────────────────────────────
+// Real, unbounded history on /sdcard/meshchat/ — independent of the in-
+// memory display buffers above (CHAT_LOG_LEN-capped scrollback, unchanged).
+// Keyed by stable identity (node id / channel hash byte), not table index —
+// indices shift when a node or room is forgotten, but the underlying id/
+// hash never does. Everything here no-ops behind purr_kernel_sd_available()
+// — no SD card means today's in-memory-only behavior, not a crash.
+
+static void dm_path(uint32_t node_id, char *out, size_t out_max) {
+    snprintf(out, out_max, "/sdcard/meshchat/dm_%08lX.txt", (unsigned long)node_id);
+}
+
+static void room_path(int channel_idx, char *out, size_t out_max) {
+    uint8_t hash = 0;
+    mesh_manager_channel_hash(channel_idx, &hash);
+    snprintf(out, out_max, "/sdcard/meshchat/room_%02X.txt", hash);
+}
+
+static void append_to_sd(const char *path, const char *text) {
+    if (!purr_kernel_sd_available()) return;
+    FILE *f = fopen(path, "a");
+    if (!f) return;
+    fwrite(text, 1, strlen(text), f);
+    fclose(f);
+}
+
+// Seeds an in-memory log buffer from the tail of its SD file — called once
+// per conversation, the first time it's opened this boot (buf still empty).
+static void load_tail_from_sd(const char *path, char *buf, size_t *len, size_t buf_cap) {
+    if (!purr_kernel_sd_available()) return;
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    if (fsize <= 0) { fclose(f); return; }
+    size_t cap  = buf_cap - 1;
+    size_t want = (size_t)fsize;
+    if (want > cap) {
+        fseek(f, (long)((size_t)fsize - cap), SEEK_SET);
+        want = cap;
+    } else {
+        fseek(f, 0, SEEK_SET);
+    }
+    size_t n = fread(buf, 1, want, f);
+    buf[n] = '\0';
+    *len = n;
+    fclose(f);
+}
+
 // ── Buddy list ────────────────────────────────────────────────────────────────
 
 static void refresh_buddy_list(void) {
@@ -212,12 +267,18 @@ static void log_append(char *buf, size_t *len, const char *text) {
 static void chat_log_append(int idx, const char *text) {
     log_append(s_chat_logs[idx], &s_chat_loglen[idx], text);
     if (s_chat_win[idx] && s_chat_out[idx]) purr_win_textarea_set(s_chat_out[idx], s_chat_logs[idx]);
+    char path[64];
+    dm_path(s_buddy_ids[idx], path, sizeof(path));
+    append_to_sd(path, text);
 }
 
 static void room_log_append(int idx, const char *text) {
     if (!s_room_logs[idx]) return;
     log_append(s_room_logs[idx], &s_room_loglen[idx], text);
     if (s_room_win[idx] && s_room_out[idx]) purr_win_textarea_set(s_room_out[idx], s_room_logs[idx]);
+    char path[64];
+    room_path(idx, path, sizeof(path));
+    append_to_sd(path, text);
 }
 
 // ── DM chat window ───────────────────────────────────────────────────────────
@@ -242,6 +303,14 @@ static void open_chat(int idx) {
     if (s_chat_win[idx]) {
         purr_win_show(s_chat_win[idx]);
         return;
+    }
+
+    // First time this conversation's been opened this boot — resume its
+    // history from SD before building the window.
+    if (s_chat_loglen[idx] == 0) {
+        char path[64];
+        dm_path(s_buddy_ids[idx], path, sizeof(path));
+        load_tail_from_sd(path, s_chat_logs[idx], &s_chat_loglen[idx], CHAT_LOG_LEN);
     }
 
     s_chat_win[idx] = purr_win_create(s_buddy_labels[idx]);
@@ -291,6 +360,13 @@ static void open_room(int idx) {
         s_room_logs[idx] = heap_caps_malloc(CHAT_LOG_LEN, MALLOC_CAP_SPIRAM);
         if (s_room_logs[idx]) s_room_logs[idx][0] = '\0';
         else return;
+    }
+    // First time this room's been opened this boot — resume its history
+    // from SD before building the window.
+    if (s_room_loglen[idx] == 0) {
+        char path[64];
+        room_path(idx, path, sizeof(path));
+        load_tail_from_sd(path, s_room_logs[idx], &s_room_loglen[idx], CHAT_LOG_LEN);
     }
 
     s_room_win[idx] = purr_win_create(s_room_names[idx]);
@@ -369,6 +445,97 @@ static void on_addroom_click(purr_wid_t w, purr_event_t e, void *user) {
     open_addroom();
 }
 
+// ── Manage (forget nodes/rooms) ───────────────────────────────────────────────
+// A forget action changes which buddy/room ends up at which table index
+// (mesh_router_node_forget()/mesh_radio_remove_channel() both shift the
+// underlying table down) — rather than try to shift the parallel
+// s_chat_*/s_room_* window/log arrays to match, every open chat/room window
+// just gets closed and its in-memory log cleared. Re-opening any of them
+// reloads correctly (dm_path()/room_path() are keyed by node id / channel
+// hash, not index, so this is always safe) — a small UX cost for a
+// deliberate, infrequent action, in exchange for zero risk of a stale log
+// silently appearing under the wrong buddy's name.
+
+static void reset_all_buddy_windows(void) {
+    for (int i = 0; i < MAX_CHATS; i++) {
+        if (s_chat_win[i]) {
+            purr_win_destroy(s_chat_win[i]);
+            s_chat_win[i] = 0; s_chat_out[i] = 0; s_chat_in[i] = 0;
+        }
+        s_chat_logs[i][0] = '\0';
+        s_chat_loglen[i]  = 0;
+    }
+}
+
+static void reset_all_room_windows(void) {
+    for (int i = 0; i < MESH_MAX_CHANNELS; i++) {
+        if (s_room_win[i]) {
+            purr_win_destroy(s_room_win[i]);
+            s_room_win[i] = 0; s_room_out[i] = 0; s_room_in[i] = 0;
+        }
+        if (s_room_logs[i]) s_room_logs[i][0] = '\0';
+        s_room_loglen[i] = 0;
+    }
+}
+
+static void refresh_manage_lists(void) {
+    if (s_manage_node_list) purr_win_list_set_items(s_manage_node_list, s_buddy_label_ptrs, s_buddy_count);
+    if (s_manage_room_list) purr_win_list_set_items(s_manage_room_list, s_room_label_ptrs, s_room_count);
+}
+
+static void on_forget_node(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    int idx = purr_win_list_get_selected(s_manage_node_list);
+    if (idx < 0 || idx >= s_buddy_count) return;
+
+    char path[64];
+    dm_path(s_buddy_ids[idx], path, sizeof(path));
+    remove(path);
+    mesh_manager_node_forget(s_buddy_ids[idx]);
+    reset_all_buddy_windows();
+    refresh_buddy_list();
+    refresh_manage_lists();
+}
+
+static void on_forget_room(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    int idx = purr_win_list_get_selected(s_manage_room_list);
+    if (idx < 0 || idx >= s_room_count) return;
+
+    char path[64];
+    room_path(idx, path, sizeof(path));
+    remove(path);
+    mesh_manager_remove_channel(idx);
+    reset_all_room_windows();
+    refresh_room_list();
+    refresh_manage_lists();
+}
+
+static void open_manage(void) {
+    if (s_manage_win) {
+        purr_win_show(s_manage_win);
+        refresh_manage_lists();
+        return;
+    }
+
+    s_manage_win = purr_win_create("Manage");
+    purr_win_label(s_manage_win, "Known Nodes");
+    s_manage_node_list = purr_win_list(s_manage_win, 100, 35);
+    purr_win_button(s_manage_win, "Forget Node", on_forget_node, NULL);
+
+    purr_win_label(s_manage_win, "Rooms");
+    s_manage_room_list = purr_win_list(s_manage_win, 100, 35);
+    purr_win_button(s_manage_win, "Forget Room", on_forget_room, NULL);
+
+    refresh_manage_lists();
+    purr_win_show(s_manage_win);
+}
+
+static void on_manage_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    open_manage();
+}
+
 // ── Incoming messages ─────────────────────────────────────────────────────────
 // Registers the mesh module's single RX-callback slot — meshtastic_module.c
 // already fires purr_kernel_notify() for every TEXT_MESSAGE_APP regardless
@@ -407,7 +574,9 @@ static int meshchat_init(void) {
     // xSemaphoreTake() below needs at the start of every run.
     if (!s_refresh_done) s_refresh_done = xSemaphoreCreateBinary();
 
-    s_buddy_win  = purr_win_create("MeshChat");
+    // Display name only — the app/module id stays "meshchat" (file names,
+    // device.pcat's apps.meshchat entry, icon lookup key all unchanged).
+    s_buddy_win  = purr_win_create("MSN");
     s_status_lbl = purr_win_label(s_buddy_win, "Mesh: starting...");
 
     // Static control row — always present regardless of how many peers
@@ -415,6 +584,7 @@ static int meshchat_init(void) {
     purr_wid_t row = purr_win_row(s_buddy_win, 4);
     purr_win_button(s_buddy_win, "Refresh",  on_refresh_click,  NULL);
     purr_win_button(s_buddy_win, "Add Room", on_addroom_click,  NULL);
+    purr_win_button(s_buddy_win, "Manage",   on_manage_click,   NULL);
     purr_win_layout_end(row);
 
     purr_win_label(s_buddy_win, "Rooms");
@@ -469,6 +639,10 @@ static void meshchat_deinit(void) {
     if (s_addroom_win) {
         purr_win_destroy(s_addroom_win);
         s_addroom_win = 0; s_addroom_name_in = 0; s_addroom_psk_in = 0;
+    }
+    if (s_manage_win) {
+        purr_win_destroy(s_manage_win);
+        s_manage_win = 0; s_manage_node_list = 0; s_manage_room_list = 0;
     }
     purr_win_destroy(s_buddy_win);
     s_buddy_win = 0; s_buddy_list = 0; s_room_list = 0; s_status_lbl = 0;

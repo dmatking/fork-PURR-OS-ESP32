@@ -999,13 +999,33 @@ def cmd_flash(args):
     _venv_py = _idf_venv_python()
     _esptool = [_venv_py, "-m", "esptool"] if _venv_py else ["esptool.py"]
 
-    # Prefer the merged full-flash image (bootloader + partition table + firmware + SPIFFS)
-    merged_bin = os.path.join(out_dir, f"PURR_OS_{args.device}.bin")
-    if os.path.isfile(merged_bin):
+    # Flash bootloader/partition-table/firmware/SPIFFS as separate parts of
+    # one write_flash call, each at its own real offset — NOT the merged
+    # single-file image. merge_bin fills any gap between listed parts with
+    # 0xFF (its default), and the NVS partition (WiFi calibration, and now
+    # this project's own persisted mesh node/channel tables) sits exactly in
+    # the gap between partition-table (0x8000) and firmware (0x10000) — so
+    # writing that merged image at 0x0 silently erases NVS on every single
+    # dev flash, even without --erase-all. Confirmed live: a freshly-learned
+    # Meshtastic node's public key vanished after an otherwise-unrelated
+    # reflash, and separately "falling back to full calibration" showing up
+    # in the boot log after routine flashes. A multi-offset write_flash (the
+    # same shape as the "or from ..." alternative command already printed
+    # after every build) only ever touches the exact byte ranges of the
+    # files given — it never touches the untouched gap in between, so NVS
+    # survives a normal flash. PURR_OS_<device>.bin (built by
+    # _merge_flash_image above) is still produced and used as-is by `bake`
+    # for shipping to a brand-new device, where there's no prior NVS content
+    # to preserve anyway.
+    bootloader_bin = os.path.join(out_dir, "bootloader.bin")
+    partition_bin  = os.path.join(out_dir, "partition-table.bin")
+    firmware_bin   = os.path.join(out_dir, "firmware.bin")
+    if all(os.path.isfile(p) for p in (bootloader_bin, partition_bin, firmware_bin, flash_bin)):
         cfg_flash, _ = resolve_device(args.device)
         chip     = cfg_flash.get("device.chip", "esp32s3")
         flash_mb = cfg_flash.get("device.flash_mb", "4")
-        info(f"flashing full image {os.path.basename(merged_bin)} → 0x0 ...")
+        bl_offset = "0x0" if chip in ("esp32s3", "esp32s2", "esp32c3", "esp32c6", "esp32h2") else "0x1000"
+        info(f"flashing bootloader+partition-table+firmware+SPIFFS (NVS untouched) ...")
         erase_flag = ["--erase-all"] if getattr(args, "erase", False) else []
         cmd = _esptool + [
             "--chip", chip,
@@ -1018,7 +1038,10 @@ def cmd_flash(args):
             "--flash_mode", "dio",
             "--flash_size", f"{flash_mb}MB",
             "--flash_freq", "80m",
-            "0x0", merged_bin,
+            bl_offset, bootloader_bin,
+            "0x8000", partition_bin,
+            "0x10000", firmware_bin,
+            spiffs_offset, flash_bin,
         ]
         run_live(cmd)
     elif os.path.isfile(flash_bin):

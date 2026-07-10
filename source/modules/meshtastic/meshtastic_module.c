@@ -41,6 +41,7 @@ static uint32_t     s_node_id = 0;
 static bool          s_ready   = false;
 static mesh_rx_cb_t  s_rx_cbs[MESH_MAX_RX_CB];
 static TaskHandle_t  s_task    = NULL;
+static TaskHandle_t  s_persist_task = NULL;
 
 // Outgoing packets are encoded synchronously (cheap: AES-CTR + a small
 // memcpy, no radio access) but actually transmitted only on mesh_task()'s
@@ -137,6 +138,20 @@ static void mesh_task(void *arg)
                 // returns false here, but that's expected/normal (someone
                 // else's private room) — mesh_router_decode() itself only
                 // logs a warning for genuine decode failures, not that case.
+                // TEMPORARY diagnostic — raw header ground truth for every
+                // arrival, decoded or not, while chasing a live DM-delivery
+                // bug. Read directly out of raw[] (not mesh_router_decode()'s
+                // out-params, which aren't populated on failure) so this
+                // still shows a packet whose channel-hash doesn't match
+                // anything in our table. Remove once resolved.
+                if ((size_t)raw_len > 13) {
+                    uint32_t raw_to, raw_from;
+                    memcpy(&raw_to,   raw,     4);
+                    memcpy(&raw_from, raw + 4, 4);
+                    ESP_LOGI(TAG, "raw rx: %d bytes to=%08lX from=%08lX ch_hash=%02X rssi=%d snr=%.1f",
+                             raw_len, (unsigned long)raw_to, (unsigned long)raw_from, raw[13], rssi, snr);
+                }
+
                 bool decoded = mesh_router_decode(raw, (size_t)raw_len, &from, &to, &pkt_id, &hop_limit,
                                         &want_ack, &channel_idx, &portnum, payload, &payload_len, sizeof(payload) - 1);
                 if (!decoded) {
@@ -190,6 +205,16 @@ static void mesh_task(void *arg)
                             pb_istream_t us = pb_istream_from_buffer(payload, payload_len);
                             if (pb_decode(&us, meshtastic_User_fields, &user)) {
                                 mesh_router_node_set_name(from, user.long_name, user.short_name);
+                                // This is the other half of the PKI upgrade
+                                // (see mesh_router_encode_nodeinfo()'s
+                                // matching comment) — once we have a node's
+                                // public key on file, every future send to
+                                // it automatically switches to real
+                                // Meshtastic's PKI encryption instead of
+                                // channel-PSK.
+                                if (user.public_key.size == 32) {
+                                    mesh_router_node_set_pubkey(from, user.public_key.bytes);
+                                }
                             }
                         }
 
@@ -197,8 +222,14 @@ static void mesh_task(void *arg)
                             if (s_rx_cbs[rcb]) s_rx_cbs[rcb](from, to, channel_idx, portnum, payload, payload_len);
                         }
 
-                        // Relay broadcast packets that still have hops remaining
-                        if (to == (uint32_t)MESH_BROADCAST && hop_limit > 0) {
+                        // Relay anything not addressed to us with hops still
+                        // remaining — not just broadcasts. A direct message
+                        // to some other node needs the same flood-relay
+                        // treatment to reach a destination beyond direct
+                        // 1-hop range (see mesh_router_relay()'s comment;
+                        // matches real Meshtastic's !isToUs(p) check, which
+                        // has no separate broadcast condition at all).
+                        if (to != s_node_id && hop_limit > 0) {
                             mesh_router_relay(raw, (size_t)raw_len);
                         }
                     }
@@ -240,7 +271,15 @@ static void mesh_task(void *arg)
                 mesh_radio_lock();
                 esp_err_t ret = radio->send(tx_item.wire, tx_item.len);
                 mesh_radio_unlock();
-                ESP_LOGI(TAG, "tx len=%u ok=%d", (unsigned)tx_item.len, ret == ESP_OK);
+                // to/ch pulled straight back out of the already-encoded
+                // wire buffer (bytes 0-3 are always `to` in our
+                // PacketHeader layout) rather than threading them through
+                // mesh_tx_item_t separately — this is diagnostic-only, and
+                // the wire bytes are the actual ground truth of what went
+                // out, not whatever the caller thinks it asked for.
+                uint32_t wire_to; memcpy(&wire_to, tx_item.wire, 4);
+                ESP_LOGI(TAG, "tx to=%08lX ch_hash=%02X len=%u ok=%d",
+                         (unsigned long)wire_to, tx_item.wire[13], (unsigned)tx_item.len, ret == ESP_OK);
             }
         }
 
@@ -300,6 +339,19 @@ int mesh_manager_add_channel(const char *name, const uint8_t psk16[16])
     return mesh_radio_add_channel(name, psk16);
 }
 
+void mesh_manager_remove_channel(int idx)
+{
+    mesh_radio_remove_channel(idx);
+}
+
+bool mesh_manager_channel_hash(int idx, uint8_t *hash_out)
+{
+    const mesh_channel_t *ch = mesh_radio_channel_at(idx);
+    if (!ch || !hash_out) return false;
+    *hash_out = ch->hash;
+    return true;
+}
+
 void mesh_manager_add_rx_callback(mesh_rx_cb_t cb) {
     if (!cb) return;
     for (int i = 0; i < MESH_MAX_RX_CB; i++) {
@@ -337,6 +389,29 @@ int mesh_manager_node_at(int idx, mesh_node_info_t *out)
     return 0;
 }
 
+void mesh_manager_node_forget(uint32_t id)
+{
+    mesh_router_node_forget(id);
+}
+
+// ── Deferred NVS persistence ───────────────────────────────────────────────────
+// mesh_router.c's node table and mesh_radio.c's channel table are both
+// mutated from PSRAM-backed stacks (mesh_task()'s RX loop, MeshChat's own
+// app task) and so never call into NVS themselves anymore — they just flip
+// a dirty flag. This task exists solely to notice that flag and do the
+// actual flash write, on a plain internal-RAM stack where that's safe. A
+// 1s poll is plenty — this is "known nodes/rooms" bookkeeping, not anything
+// latency-sensitive.
+static void mesh_persist_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        mesh_router_flush_nodes_if_dirty();
+        mesh_radio_flush_channels_if_dirty();
+    }
+}
+
 // ── Module lifecycle ──────────────────────────────────────────────────────────
 
 int mesh_manager_init(void)
@@ -352,6 +427,14 @@ int mesh_manager_init(void)
         return -1;
     }
 
+    // Every NVS/flash touch this module needs (channel table, PKI identity
+    // keypair, known-nodes table) happens here, on this task, before
+    // mesh_task() exists — see mesh_radio_init()'s doc comment for the live
+    // boot-loop crash this fixes (ESP32-S3 can't disable the flash cache
+    // from a task whose own stack lives in PSRAM, which mesh_task()'s does).
+    mesh_radio_init();
+    mesh_router_load_nodes();
+
     // No NVS/flash/SD access anywhere in mesh_task()'s own call graph
     // (mesh_radio.c/mesh_router.c audited) — safe on a PSRAM-backed stack,
     // matching app_manager.c's launch_native()/launch_meow() pattern. Must
@@ -360,6 +443,15 @@ int mesh_manager_init(void)
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "failed to create mesh task");
         return -1;
+    }
+
+    // Plain xTaskCreate() — internal-RAM stack on purpose, see
+    // mesh_persist_task()'s doc comment. Small and idle almost always, so a
+    // failure here (extremely unlikely on a ~2KB ask) just means node/
+    // channel-table changes stop persisting, not a hard init failure.
+    ret = xTaskCreate(mesh_persist_task, "mesh_persist", 3072, NULL, 2, &s_persist_task);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "failed to create mesh persist task — node/channel persistence disabled");
     }
 
     // bt_mgr (device.pcat [flash] priority 2) has already brought up
@@ -377,6 +469,16 @@ void mesh_manager_deinit(void)
     // Must match the WithCaps variant used to create this task (PSRAM-backed
     // stack, see mesh_manager_init() above).
     if (s_task) { vTaskDeleteWithCaps(s_task); s_task = NULL; }
+    if (s_persist_task) {
+        // Plain internal-RAM task — safe to flush one last time right here
+        // (this function runs on the kernel module loader's own task, not
+        // mesh_task()'s PSRAM stack) before deleting it, so a change made
+        // just before shutdown isn't silently lost.
+        mesh_router_flush_nodes_if_dirty();
+        mesh_radio_flush_channels_if_dirty();
+        vTaskDelete(s_persist_task);
+        s_persist_task = NULL;
+    }
     s_ready = false;
 }
 
@@ -396,6 +498,9 @@ bool     mesh_manager_channel_name(int idx, char *name_out, size_t name_max)
                                                                  { (void)idx; (void)name_out; (void)name_max; return false; }
 int      mesh_manager_add_channel(const char *name, const uint8_t psk16[16])
                                                                  { (void)name; (void)psk16; return -1; }
+void     mesh_manager_remove_channel(int idx)                   { (void)idx; }
+bool     mesh_manager_channel_hash(int idx, uint8_t *hash_out)  { (void)idx; (void)hash_out; return false; }
+void     mesh_manager_node_forget(uint32_t id)                  { (void)id; }
 int      mesh_manager_init(void)                                { return 0; }
 void     mesh_manager_deinit(void)                               {}
 
