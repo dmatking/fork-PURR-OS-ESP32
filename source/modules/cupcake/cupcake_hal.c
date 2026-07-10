@@ -33,6 +33,24 @@ static lv_group_t        *s_kb_group = NULL;
 static uint16_t s_disp_w = 320;
 static uint16_t s_disp_h = 240;
 
+// Idle-timeout tracking for cupcake_ui.c's lock screen (see cupcake.h).
+// Stamped here rather than in cupcake_ui.c because this is where every
+// input source (touch, bbq20 keys, trackball nav) actually funnels through
+// on its way into LVGL — cupcake_ui.c only needs to read it back.
+static uint64_t s_last_activity_ms = 0;
+
+static void mark_activity(void)
+{
+    s_last_activity_ms = purr_kernel_uptime_ms();
+    // If the screen is dark because the idle timer already fired, this
+    // press is what should make the (still-locked) lock screen visible
+    // again — distinct from actually dismissing it, which is the lock
+    // overlay's own tap/swipe handler in cupcake_ui.c.
+    if (cupcake_ui_is_locked()) cupcake_ui_wake();
+}
+
+uint64_t cupcake_hal_last_activity_ms(void) { return s_last_activity_ms; }
+
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p)
 {
     const catcall_display_t *d = purr_kernel_display();
@@ -53,6 +71,7 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         data->point.x = (lv_coord_t)x;
         data->point.y = (lv_coord_t)y;
         data->state   = LV_INDEV_STATE_PR;
+        mark_activity();
     } else {
         data->state = LV_INDEV_STATE_REL;
     }
@@ -66,8 +85,8 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 // input() can't be used directly — it returns "first registered (legacy)",
 // which on tdeck_plus is the trackball (registered before bbq20 in
 // kernel_tdp_boot.c), not the keyboard — so this scans every registered
-// input catcall and reacts only to KEY_DOWN events, ignoring POINTER
-// (trackball) ones.
+// input catcall and reacts to both KEY_DOWN (bbq20) and POINTER
+// (trackball) events.
 //
 // bbq20.c only ever emits KEY_DOWN (the RP2040 bridge chip has no key-up
 // event), so a single press is reported as one PR cycle followed by one REL
@@ -75,6 +94,16 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 // LV_EVENT_KEY on the PR edge, so this one-shot pattern is sufficient; it
 // doesn't need a real "held" state to drive lv_textarea's normal
 // backspace/char-insert handling.
+//
+// Trackball POINTER deltas are translated to LV_KEY_PREV/LV_KEY_NEXT here
+// (group focus stepping) rather than true relative pointer motion — a
+// deliberate temporary choice, not a driver limitation: trackball.c itself
+// still emits real INPUT_EVENT_POINTER deltas unchanged, so a future
+// trackpad-style consumer (a revived cardstack-style UI) can register it
+// as a real LV_INDEV_TYPE_POINTER/BUTTON indev without any driver changes.
+// UP/LEFT step backward, DOWN/RIGHT step forward — trackball.c's dx/dy
+// signs are already flipped for correct pointer-style feel (see its
+// update_state() comment), so dy>0/dx>0 here means UP/LEFT was rolled.
 static void keypad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 {
     (void)drv;
@@ -94,18 +123,28 @@ static void keypad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         if (!in || !in->poll_event) continue;
         input_event_t ev;
         while (in->poll_event(&ev)) {
-            if (ev.type != INPUT_EVENT_KEY_DOWN) continue;
             uint32_t key;
-            switch (ev.keycode) {
-                case 0x08: case 0x7F: key = LV_KEY_BACKSPACE; break;
-                case 0x0D: case 0x0A: key = LV_KEY_ENTER;     break;
-                case 0x1B:            key = LV_KEY_ESC;       break;
-                default:              key = ev.keycode;       break;
+            if (ev.type == INPUT_EVENT_KEY_DOWN) {
+                switch (ev.keycode) {
+                    case 0x08: case 0x7F: key = LV_KEY_BACKSPACE; break;
+                    case 0x0D: case 0x0A: key = LV_KEY_ENTER;     break;
+                    case 0x1B:            key = LV_KEY_ESC;       break;
+                    default:              key = ev.keycode;       break;
+                }
+            } else if (ev.type == INPUT_EVENT_POINTER) {
+                if (ev.delta_y > 0)      key = LV_KEY_PREV;
+                else if (ev.delta_y < 0) key = LV_KEY_NEXT;
+                else if (ev.delta_x > 0) key = LV_KEY_PREV;
+                else if (ev.delta_x < 0) key = LV_KEY_NEXT;
+                else continue;
+            } else {
+                continue;
             }
             s_pending_key     = key;
             s_pending_release = true;
             data->key   = key;
             data->state = LV_INDEV_STATE_PR;
+            mark_activity();
             return;
         }
     }
@@ -176,6 +215,14 @@ int cupcake_hal_init(void)
     // effect of this race). Removed rather than locked — cupcake_task
     // already does this correctly, so there is nothing left for a second
     // task to contribute.
+
+    // Must be "now", not left at its 0 initializer — boot (WiFi/BT/LoRa
+    // bring-up) can easily take longer than the shortest idle timeout
+    // (1 minute), which would otherwise make cupcake_ui.c's idle check
+    // see an already-expired timer and lock the screen before the user
+    // ever touches it.
+    s_last_activity_ms = purr_kernel_uptime_ms();
+
     ESP_LOGI(TAG, "HAL init complete");
     return 0;
 }

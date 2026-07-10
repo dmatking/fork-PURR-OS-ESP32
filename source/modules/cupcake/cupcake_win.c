@@ -17,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "../../kernel/catcalls/catcall_ui.h"
+#include "../../kernel/catcalls/catcall_input.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "cupcake.h"
 
@@ -502,7 +503,23 @@ static void ck_layout_end(purr_wid_t wid) {
 // s_keyboard/s_keyboard_owner_win are declared near the top of this file
 // (alongside s_close_hooks) since ck_win_destroy() needs them too.
 
+// Devices with a real physical keyboard (T-Deck's bbq20) don't need the
+// LVGL on-screen one taking up screen space too — set_backlight is only
+// ever implemented by keyboard-class input drivers in this codebase (see
+// catcall_input.h's own doc comment on that field), so its presence among
+// registered inputs is what this checks instead of hardcoding a driver
+// name here.
+static bool ck_has_physical_keyboard(void) {
+    int n = purr_kernel_input_count();
+    for (int i = 0; i < n; i++) {
+        const catcall_input_t *inp = purr_kernel_input_at(i);
+        if (inp && inp->set_backlight) return true;
+    }
+    return false;
+}
+
 static void ck_kb_show(purr_win_t h, purr_wid_t target) {
+    if (ck_has_physical_keyboard()) return;
     lv_obj_t *w = get_win(h);
     lv_obj_t *ta = get_wid(target);
     if (!w || !ta) return;

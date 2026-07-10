@@ -394,6 +394,9 @@ static lv_obj_t *s_icon_battery;
 static lv_obj_t *s_status_notif_box;
 static lv_obj_t *s_status_taskmgr_box;
 
+static lv_obj_t *s_lock_screen;
+static bool      s_locked = false;
+
 static lv_coord_t ck_panel_y_for_state(ck_status_state_t s)
 {
     switch (s) {
@@ -731,6 +734,87 @@ static void ck_refresh_status_taskmgr(void)
     }
 }
 
+// ── Lock screen ──────────────────────────────────────────────────────────────
+// No PIN — tap or swipe to dismiss, matching where OOBE/security work
+// already stands (deferred to a future v1.0 first-run setup flow). Built
+// the same way ck_build_panel() blocks input for the notification/quick
+// panels above: a fully opaque, clickable object on lv_layer_top(), which
+// LVGL always hit-tests above every app window's lv_scr_act() tree
+// (cupcake_win.c:168's comment) — so this one object is enough to swallow
+// touches/keys meant for whatever's underneath while locked.
+
+static void restore_brightness(void)
+{
+    uint8_t level = 255;   // same default as settings.c's own s_brightness
+    nvs_handle_t h;
+    // "purr_settings"/"brightness" — settings.c's own NVS_NS/key
+    // (source/apps/system/settings/settings.c). Read directly rather than
+    // through a shared API since settings.c isn't guaranteed to have run
+    // yet this boot (it lazy-loads on first open, same as this value).
+    if (nvs_open("purr_settings", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, "brightness", &level);
+        nvs_close(h);
+    }
+    const catcall_display_t *disp = purr_kernel_display();
+    if (disp && disp->set_brightness) disp->set_brightness(level);
+}
+
+static void ck_lock_dismiss_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_locked) return;
+    s_locked = false;
+    lv_obj_add_flag(s_lock_screen, LV_OBJ_FLAG_HIDDEN);
+    // No need to reset the idle timestamp here — this dismiss callback
+    // only runs as a downstream effect of the same touch that just fired
+    // touch_read_cb()/mark_activity() in cupcake_hal.c earlier in this
+    // same lv_timer_handler() pass, so cupcake_hal_last_activity_ms() is
+    // already "now" by the time we get here.
+}
+
+static void ck_build_lock_screen(uint16_t w, uint16_t h)
+{
+    s_lock_screen = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_lock_screen);
+    lv_obj_set_size(s_lock_screen, w, h);
+    lv_obj_set_pos(s_lock_screen, 0, 0);
+    lv_obj_set_style_bg_color(s_lock_screen, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_lock_screen, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_lock_screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_lock_screen, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_lock_screen, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_lock_screen, ck_lock_dismiss_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_lock_screen, ck_lock_dismiss_cb, LV_EVENT_RELEASED, NULL);
+
+    lv_obj_t *lbl = lv_label_create(s_lock_screen);
+    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    lv_label_set_text(lbl, "Locked\ntap to unlock");
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(lbl);
+}
+
+bool cupcake_ui_is_locked(void) { return s_locked; }
+
+void cupcake_ui_wake(void)
+{
+    if (!s_locked) return;
+    restore_brightness();
+}
+
+static void ck_lock_check_idle(void)
+{
+    if (s_locked) return;
+    uint8_t timeout_min = purr_kernel_screen_timeout_min();
+    uint64_t elapsed_ms  = purr_kernel_uptime_ms() - cupcake_hal_last_activity_ms();
+    if (elapsed_ms < (uint64_t)timeout_min * 60000ULL) return;
+
+    s_locked = true;
+    const catcall_display_t *disp = purr_kernel_display();
+    if (disp && disp->set_brightness) disp->set_brightness(0);
+    lv_obj_clear_flag(s_lock_screen, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_lock_screen);
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void cupcake_ui_init(void)
@@ -744,6 +828,7 @@ void cupcake_ui_init(void)
 
     ck_build_status_panels(w);
     ck_build_status_icons(w);
+    ck_build_lock_screen(w, h);
 
     ESP_LOGI(TAG, "cupcake home screen built (%d total apps)", app_manager_count());
 }
@@ -753,4 +838,5 @@ void cupcake_ui_tick(void)
     ck_refresh_status_notif_box();
     ck_refresh_status_taskmgr();
     ck_refresh_status_icons();
+    ck_lock_check_idle();
 }

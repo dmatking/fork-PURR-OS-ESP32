@@ -30,13 +30,31 @@ uint16_t cupcake_hal_height(void);
 // right widget.
 lv_group_t *cupcake_hal_keypad_group(void);
 
+// uptime_ms() of the last real input event (touch press, physical key,
+// trackball nav step) — see cupcake_hal.c's mark_activity(). Used by
+// cupcake_ui.c's idle-timeout check.
+uint64_t cupcake_hal_last_activity_ms(void);
+
 // Builds the home screen, dock, and (hidden) app drawer. Safe to call once,
 // after the HAL and app_manager are both up.
 void cupcake_ui_init(void);
 
-// Per-tick housekeeping: refreshes the status bar/notification panel.
+// Per-tick housekeeping: refreshes the status bar/notification panel, and
+// checks the idle timeout (purr_kernel_screen_timeout_min()) against
+// cupcake_hal_last_activity_ms() to trigger the lock screen.
 // Call periodically (every ~200ms is plenty).
 void cupcake_ui_tick(void);
+
+// True once the idle timeout has fired and the lock overlay is showing
+// (or the screen is dark waiting to be woken) — cleared only by the
+// overlay's own tap/swipe-to-dismiss handler.
+bool cupcake_ui_is_locked(void);
+
+// Called by cupcake_hal.c the moment new input arrives while locked: makes
+// the (still-locked) lock screen visible again by restoring brightness.
+// Does NOT clear the locked state — that's a separate, deliberate dismiss
+// gesture on the overlay itself.
+void cupcake_ui_wake(void);
 
 #ifdef __cplusplus
 }

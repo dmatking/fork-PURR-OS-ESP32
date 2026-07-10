@@ -35,7 +35,15 @@
 #include "../../drivers/radio/sx1262_rl/sx1262_rl.h"
 #include "driver/i2c_master.h"
 #include "esp_rom_sys.h"
+// usb_msc.h — pinned/dormant (source/modules/usb_msc/DISABLED.md), its own
+// module.pcat renamed so modulestrap no longer discovers it. Everything
+// that touches it (this include, tdp_usb_share_sd() below, and the actual
+// usb_msc_init() call further down) is #if 0'd together — the component
+// isn't part of the build at all right now, so a bare #include would fail
+// to resolve the header just as the init call would fail to link.
+#if 0
 #include "../../modules/usb_msc/usb_msc.h"
+#endif
 
 // SD card (shares the display's SPI bus — see mount_sd_vfs()'s comment)
 #include "driver/spi_master.h"
@@ -200,10 +208,14 @@ static void mount_sd_vfs(void)
 // purr_kernel_set_panic_usb_share_cb() callbacks are void(void) — this just
 // closes over s_sd_card (mount_sd_vfs()'s own handle, still valid at panic
 // time regardless of which task/entity actually panicked).
+// Dormant along with the #if 0'd usb_msc_init() call below — see the
+// #include's matching comment above.
+#if 0
 static void tdp_usb_share_sd(void)
 {
     usb_msc_share_sd("/sdcard", s_sd_card);
 }
+#endif
 
 static void ensure_sd_dirs(void)
 {

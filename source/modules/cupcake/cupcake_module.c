@@ -7,6 +7,7 @@
 #include "../../kernel/core/purr_module.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
@@ -55,7 +56,19 @@ static void cupcake_task(void *arg)
     while (1) {
         purr_kernel_ui_lock();
         lv_tick_inc(5);
+        int64_t t0 = esp_timer_get_time();
         lv_timer_handler();
+        int64_t handler_us = esp_timer_get_time() - t0;
+        // Cheap, always-on: a single call taking this long means whatever
+        // ran inside it (a widget event callback, an app's init() work
+        // dispatched through here) visibly stalled rendering for that
+        // long — real data to point at if something feels sluggish again,
+        // instead of guessing. 50ms was picked as "a dropped frame you'd
+        // actually notice", not tuned against a specific measurement.
+        if (handler_us > 50000) {
+            ESP_LOGW(TAG, "lv_timer_handler() took %lldms (tick=%lu)",
+                     (long long)(handler_us / 1000), (unsigned long)tick);
+        }
         if (++tick % 40 == 0) cupcake_ui_tick();  // ~200ms
         purr_kernel_ui_unlock();
         purr_kernel_ui_heartbeat();
@@ -110,7 +123,7 @@ PURR_MODULE_REGISTER(cupcake) = {
     .module_type       = PURR_MOD_UI,
     .load_priority     = PURR_PRIORITY_IMPORTANT,
     .name              = "cupcake",
-    .version           = "0.1.0",
+    .version           = "1.0.0",
     .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = 0,

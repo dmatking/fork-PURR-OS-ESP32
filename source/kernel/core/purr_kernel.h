@@ -147,6 +147,15 @@ void     purr_kernel_set_lora_available(bool v);
 bool     purr_kernel_dev_mode_enabled(void);
 void     purr_kernel_set_dev_mode(bool v);
 
+// Screen idle timeout, minutes — off by default until Settings loads the
+// persisted value (same "purr_settings" NVS namespace, synced on
+// settings' own init()), defaulting to 1 minute in the meantime. Only
+// Cupcake currently acts on this (cupcake_ui.c's idle check); other UI
+// backends don't implement a lock screen yet, same as how
+// keyboard_set_backlight only means something on drivers that implement it.
+uint8_t  purr_kernel_screen_timeout_min(void);
+void     purr_kernel_set_screen_timeout_min(uint8_t v);
+
 // ── Notifications ─────────────────────────────────────────────────────────────
 // In-memory ring buffer, open to any module/driver/app. Not persisted across
 // reboot — cleared on boot. Newest entry is index 0.

@@ -35,12 +35,11 @@
 static purr_win_t  s_win       = 0;
 static purr_wid_t  s_status    = 0;   // bottom status label
 static purr_wid_t  s_brightness_lbl = 0;
+static purr_wid_t  s_screen_timeout_lbl = 0;
 
 static uint8_t     s_brightness = 255;
+static uint8_t     s_screen_timeout_min = 1;   // must match purr_kernel.h's own default
 static char        s_theme[16]  = "wce";
-
-static purr_wid_t  s_kb_backlight_lbl = 0;
-static uint8_t     s_kb_backlight = 0;
 
 static purr_wid_t  s_dev_mode_lbl = 0;
 static uint8_t     s_dev_mode     = 0;   // 0/1 — see purr_kernel.h's doc comment
@@ -106,9 +105,15 @@ static void nvs_load(void) {
     size_t len = sizeof(s_theme);
     nvs_get_str(h, "theme", s_theme, &len);
     nvs_get_u8(h, "brightness", &s_brightness);
-    nvs_get_u8(h, "kb_backlight", &s_kb_backlight);
+    nvs_get_u8(h, "screen_timeout", &s_screen_timeout_min);
     nvs_get_u8(h, "dev_mode", &s_dev_mode);
     nvs_close(h);
+    // Sync into the kernel-global cupcake_ui.c's idle check actually reads
+    // — nvs_get_u8() only touched our own local copy above. Without this,
+    // a timeout the user picked in a previous session stays invisible to
+    // the idle check until Settings happens to be reopened and a button
+    // pressed again.
+    purr_kernel_set_screen_timeout_min(s_screen_timeout_min);
 }
 
 static void set_status(const char *msg) {
@@ -146,26 +151,25 @@ static void on_bright_high(purr_wid_t w, purr_event_t e, void *u) { (void)w;(voi
 static void on_bright_mid (purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_brightness(160); }
 static void on_bright_low (purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_brightness(80);  }
 
-// ── Keyboard backlight ────────────────────────────────────────────────────────
-// Goes through purr_kernel_keyboard_set_backlight() (dispatches to whichever
-// registered input driver implements set_backlight — bbq20 here) rather than
-// calling the bbq20 driver directly, mirroring set_brightness() above going
-// through catcall_display instead of st7789.c directly.
+// ── Screen timeout ────────────────────────────────────────────────────────────
+// Only meaningfully acted on by Cupcake's lock screen today (cupcake_ui.c's
+// idle check) — kept here as a plain kernel-global rather than a direct
+// call into cupcake_*, so this section stays backend-agnostic like the
+// rest of Settings (this app also ships on MiniWin devices).
 
-static void set_kb_backlight(uint8_t level) {
-    s_kb_backlight = level;
-    purr_kernel_keyboard_set_backlight(level);
-    nvs_save_u8("kb_backlight", level);
+static void set_screen_timeout(uint8_t minutes) {
+    s_screen_timeout_min = minutes;
+    purr_kernel_set_screen_timeout_min(minutes);
+    nvs_save_u8("screen_timeout", minutes);
     char buf[32];
-    snprintf(buf, sizeof(buf), "Kbd backlight: %d%%", (level * 100) / 255);
-    purr_win_label_set(s_kb_backlight_lbl, buf);
-    set_status("Keyboard backlight updated.");
+    snprintf(buf, sizeof(buf), "Screen timeout: %d min", minutes);
+    purr_win_label_set(s_screen_timeout_lbl, buf);
+    set_status("Screen timeout updated.");
 }
 
-static void on_kb_bl_off (purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_kb_backlight(0);   }
-static void on_kb_bl_low (purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_kb_backlight(80);  }
-static void on_kb_bl_mid (purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_kb_backlight(160); }
-static void on_kb_bl_high(purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_kb_backlight(255); }
+static void on_timeout_1(purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_screen_timeout(1); }
+static void on_timeout_3(purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_screen_timeout(3); }
+static void on_timeout_5(purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_screen_timeout(5); }
 
 // ── Wallpaper ─────────────────────────────────────────────────────────────────
 // "Default" (the launcher's built-in gradient) plus every file found under
@@ -430,8 +434,8 @@ static void on_bt_settings_open(purr_wid_t w, purr_event_t e, void *u) {
 // Gates whether unsigned .hiss scripts are allowed to run — see
 // purr_kernel_set_dev_mode()'s doc comment in purr_kernel.h. Only "unsigned"
 // .hiss scripts are affected; a signed one always runs regardless of this.
-// Off by default — persisted so it survives a reboot, same as brightness/
-// kb_backlight above.
+// Off by default — persisted so it survives a reboot, same as brightness
+// above.
 
 static void on_dev_mode_toggle(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
@@ -536,19 +540,16 @@ static int settings_init(void) {
     purr_win_button(s_win, "High", on_bright_high, NULL);
     purr_win_layout_end(br);
 
-    // ── Keyboard backlight section ─────────────────────────────────────────
-    purr_win_label(s_win, "Keyboard Backlight");
-    char kb_bl_str[32];
-    snprintf(kb_bl_str, sizeof(kb_bl_str), "Kbd backlight: %d%%", (s_kb_backlight * 100) / 255);
-    s_kb_backlight_lbl = purr_win_label(s_win, kb_bl_str);
+    // ── Screen timeout section ───────────────────────────────────────────────
+    char timeout_str[32];
+    snprintf(timeout_str, sizeof(timeout_str), "Screen timeout: %d min", s_screen_timeout_min);
+    s_screen_timeout_lbl = purr_win_label(s_win, timeout_str);
 
-    purr_wid_t kbr = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "Off",  on_kb_bl_off,  NULL);
-    purr_win_button(s_win, "Low",  on_kb_bl_low,  NULL);
-    purr_win_button(s_win, "Mid",  on_kb_bl_mid,  NULL);
-    purr_win_button(s_win, "High", on_kb_bl_high, NULL);
-    purr_win_layout_end(kbr);
-    purr_kernel_keyboard_set_backlight(s_kb_backlight);
+    purr_wid_t tor = purr_win_row(s_win, 4);
+    purr_win_button(s_win, "1 min", on_timeout_1, NULL);
+    purr_win_button(s_win, "3 min", on_timeout_3, NULL);
+    purr_win_button(s_win, "5 min", on_timeout_5, NULL);
+    purr_win_layout_end(tor);
 
     // ── Network section ─────────────────────────────────────────────────────
     // WiFi and Bluetooth each get their own dedicated window (opened here)

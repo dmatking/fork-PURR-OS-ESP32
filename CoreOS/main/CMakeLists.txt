@@ -53,16 +53,13 @@ else()
     set(DRIVER_REQUIRES st7789 gt911 trackball bbq20)
 endif()
 
-# USB MSC (composite CDC+MSC, share the SD card over USB on panic) — scoped
-# to tdeck_plus for now (see source/modules/usb_msc/usb_msc.h). Kept out of
-# every other device's REQUIRES rather than added unconditionally so their
-# builds don't pull in esp_tinyusb's Kconfig surface for a feature they
-# never call into.
-if(PURR_DEVICE STREQUAL "tdeck_plus")
-    set(USB_MSC_REQUIRES usb_msc)
-else()
-    set(USB_MSC_REQUIRES "")
-endif()
+# USB MSC (composite CDC+MSC, share the SD card over USB on panic) — pinned/
+# dormant (source/modules/usb_msc/DISABLED.md), module.pcat renamed so
+# modulestrap no longer discovers it, so the component doesn't exist in the
+# build at all right now. Re-add `set(USB_MSC_REQUIRES usb_msc)` for
+# tdeck_plus together with un-disabling the module and the #if 0 blocks in
+# kernel_tdp_boot.c when this work resumes.
+set(USB_MSC_REQUIRES "")
 
 idf_component_register(
     SRCS

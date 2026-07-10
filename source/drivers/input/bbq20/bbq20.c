@@ -38,10 +38,17 @@ static const char *TAG = "bbq20";
 #define BBQ20_I2C_FREQ_HZ 400000
 #define BBQ20_I2C_PORT    0       // shared with GT911
 
-// BBQ10Keyboard-style register map (SolderParty/LilyGo T-Deck keyboard
-// firmware) — REG_BKL is the under-key LED backlight brightness register,
-// written directly rather than through the FIFO-pop bare-read path the
-// rest of this driver uses.
+// Keyboard backlight is NOT software-controllable, at all, from the main
+// ESP32-S3 — confirmed two ways: (1) Meshtastic's own T-Deck driver
+// (kbI2cBase.cpp) hardcodes Q10keyboard.setBacklight(0) at init and never
+// calls it again for this keyboard class, and its variant.h's `KB_BL_PIN
+// 46` is commented "not used for now"; (2) LilyGo's own engineer, on
+// github.com/Xinyuan-LilyGO/T-Deck issue #49, confirmed the boot-time
+// backlight flash is caused by IO strapping selection and is unavoidable,
+// and that there is currently no runtime control exposed — it lives
+// entirely in the keyboard's own secondary MCU firmware. Both the I2C
+// REG_BKL register (ACKs, does nothing) and driving GPIO46 via PWM from
+// this side (no visible effect either) were tried and ruled out live.
 #define BBQ20_REG_BKL     0x05
 
 #define BBQ20_POLL_MS  20
@@ -138,12 +145,16 @@ static bool bbq20_poll_event(input_event_t *out)
 }
 
 // ── Backlight ─────────────────────────────────────────────────────────────────
+// Deliberately a no-op — see the REG_BKL comment up top for why this can't
+// actually be implemented. Kept as a real (non-NULL) catcall entry only
+// because cupcake_win.c's ck_has_physical_keyboard() uses "does this input
+// driver implement set_backlight" as its signal to gate the on-screen
+// keyboard off — removing the field entirely would silently break that.
 
 esp_err_t bbq20_set_backlight(uint8_t brightness)
 {
-    if (!s_initialized || !s_dev) return ESP_ERR_INVALID_STATE;
-    uint8_t wire[2] = { BBQ20_REG_BKL, brightness };
-    return i2c_master_transmit(s_dev, wire, sizeof(wire), pdMS_TO_TICKS(50));
+    (void)brightness;
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 // ── Catcall: deinit ───────────────────────────────────────────────────────────
@@ -192,7 +203,7 @@ PURR_MODULE_REGISTER(bbq20) = {
     .module_type       = PURR_MOD_DRIVER,
     .load_priority     = PURR_PRIORITY_IMPORTANT,
     .name              = "bbq20",
-    .version           = "0.1.0",
+    .version           = "1.0.0",
     .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = CATCALL_FLAG_INPUT,

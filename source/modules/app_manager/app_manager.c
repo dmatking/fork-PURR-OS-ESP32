@@ -421,7 +421,12 @@ static int launch_meow(app_entry_t *app, int idx)
     // documented elsewhere in this session's work), so doubling it here
     // is cheap. Scripts that build a UI and return (the documented
     // "supported" .meow pattern) never ran long enough to hit this.
-    BaseType_t ok = xTaskCreateWithCaps(meow_task, app->name, 16384, ctx, 5, &ctx->task, MALLOC_CAP_SPIRAM);
+    // Priority 4, not 5 — matches cupcake_task's own render-loop priority
+    // (cupcake_module.c) rather than sitting above it. At 5 this task's
+    // synchronous script-run work could fully preempt and freeze
+    // rendering for its whole duration on the same core; at 4 it shares
+    // the CPU with the renderer instead of starving it outright.
+    BaseType_t ok = xTaskCreateWithCaps(meow_task, app->name, 16384, ctx, 4, &ctx->task, MALLOC_CAP_SPIRAM);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreateWithCaps failed for '%s' — out of PSRAM too?", app->name);
         report_launch_oom(app);
@@ -554,7 +559,9 @@ static int launch_native(app_entry_t *app, int idx)
             stack_buf = s_static_stack_fileman;
             tcb_buf   = &s_static_tcb_fileman;
         }
-        ctx->task = xTaskCreateStatic(native_task, app->name, STATIC_STACK_SIZE, ctx, 5, stack_buf, tcb_buf);
+        // Priority 4 — see the meow_task creation site's comment above for
+        // why this no longer sits above cupcake_task's own priority.
+        ctx->task = xTaskCreateStatic(native_task, app->name, STATIC_STACK_SIZE, ctx, 4, stack_buf, tcb_buf);
         if (!ctx->task) {
             // Can't happen in practice (a static buffer never "runs out"),
             // but xTaskCreateStatic() can still return NULL on bad params.
@@ -566,7 +573,9 @@ static int launch_native(app_entry_t *app, int idx)
         }
     } else {
         uint32_t stack = (app->tier == APP_TIER_CLAW) ? 16384 : 8192;
-        BaseType_t ok = xTaskCreateWithCaps(native_task, app->name, stack, ctx, 5, &ctx->task, MALLOC_CAP_SPIRAM);
+        // Priority 4 — see the meow_task creation site's comment above for
+        // why this no longer sits above cupcake_task's own priority.
+        BaseType_t ok = xTaskCreateWithCaps(native_task, app->name, stack, ctx, 4, &ctx->task, MALLOC_CAP_SPIRAM);
         if (ok != pdPASS) {
             // xTaskCreate's return value was never checked before — a silent
             // failure here left `state` stuck at RUNNING forever with no task
@@ -855,7 +864,7 @@ PURR_MODULE_REGISTER(app_manager) = {
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_SYSTEM,
     .name              = "app_manager",
-    .version           = "0.1.0",
+    .version           = "1.0.0",
     .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = 0,
