@@ -1,0 +1,8 @@
+[driver]
+name        = "adc_battery"
+type        = "battery"
+description = "Single-pin resistive-divider battery voltage/percent (T-Deck/T-Deck Plus, GPIO4/ADC1_CH3)"
+chips       = ["esp32s3"]
+
+[pins]
+adc = 4

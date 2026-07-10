@@ -8,6 +8,6 @@ idf_component_register(
         ../../../kernel/catcalls
         ../../../modules/meshtastic
         ../../../lib/lib_mesh_pb
-    REQUIRES esp_common driver freertos miniwin app_manager meshtastic
+    REQUIRES esp_common driver freertos miniwin app_manager meshtastic mbedtls
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-format-truncation)

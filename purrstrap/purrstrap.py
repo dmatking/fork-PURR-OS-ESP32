@@ -44,7 +44,7 @@ C_YLW  = "\033[93m"
 C_CYN  = "\033[96m"
 C_WHT  = "\033[97m"
 
-PURROS_VERSION = "1.0.0-dp3"
+PURROS_VERSION = "1.0.0-dp4"
 KITT_VERSION   = "1.0.0"
 
 def info(msg):        print(f"{C_GRN}[purrstrap]{C_RST} {msg}")
@@ -526,7 +526,7 @@ def _generate_glue(device, cfg, out_dir):
     # to avoid double-init. Radio and GPS are still plug-and-play.
     baked_keys = ("drivers.display", "drivers.touch", "drivers.input") if specialized else ()
     for key in ("drivers.display", "drivers.touch", "drivers.input",
-                "drivers.radio", "drivers.gps"):
+                "drivers.radio", "drivers.gps", "drivers.battery"):
         if key in baked_keys:
             continue
         val = cfg.get(key, "")

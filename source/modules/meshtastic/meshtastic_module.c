@@ -26,6 +26,7 @@
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "freertos/idf_additions.h"
 #include "esp_heap_caps.h"
 #include <string.h>
@@ -40,6 +41,19 @@ static uint32_t     s_node_id = 0;
 static bool          s_ready   = false;
 static mesh_rx_cb_t  s_rx_cbs[MESH_MAX_RX_CB];
 static TaskHandle_t  s_task    = NULL;
+
+// Outgoing packets are encoded synchronously (cheap: AES-CTR + a small
+// memcpy, no radio access) but actually transmitted only on mesh_task()'s
+// own task, via this queue — see mesh_manager_send_text()'s comment for
+// why. Depth 4: a human sending messages faster than the radio can clear
+// a ~10ms-polled queue is the actual backpressure signal, not a number
+// tuned against a measurement.
+typedef struct {
+    uint8_t wire[256];
+    size_t  len;
+} mesh_tx_item_t;
+#define MESH_TX_QUEUE_DEPTH 4
+static QueueHandle_t s_tx_queue = NULL;
 
 // NODEINFO_APP re-broadcast interval — matches the old code's actual timer
 // (15 min), not the abbreviated "every 10 minutes" mentioned in the archived
@@ -84,15 +98,29 @@ static void mesh_task(void *arg)
         const catcall_radio_t *radio = purr_kernel_radio();
 
         // ── RX ────────────────────────────────────────────────────────────
-        if (radio && radio->data_available && radio->data_available()) {
-            uint8_t raw[256];
-            int raw_len = radio->receive ? radio->receive(raw, sizeof(raw)) : 0;
-            int rssi = radio->rssi ? radio->rssi() : 0;
-            float snr = radio->snr ? radio->snr() : 0.0f;
+        // Locked for the whole data_available()/receive()/rssi()/snr()
+        // sequence — see mesh_radio_lock()'s doc comment. Everything past
+        // this point (decode, dedup, notify, callbacks) doesn't touch the
+        // radio and doesn't need the lock held.
+        mesh_radio_lock();
+        bool have_data = radio && radio->data_available && radio->data_available();
+        uint8_t raw[256];
+        int raw_len = 0;
+        int rssi = 0;
+        float snr = 0.0f;
+        if (have_data) {
+            raw_len = radio->receive ? radio->receive(raw, sizeof(raw)) : 0;
+            rssi = radio->rssi ? radio->rssi() : 0;
+            snr  = radio->snr  ? radio->snr()  : 0.0f;
+        }
+        mesh_radio_unlock();
+        if (have_data) {
 
             if (raw_len > 0) {
                 uint32_t from = 0, to = 0, pkt_id = 0;
-                uint8_t  hop_limit = 0;
+                uint8_t  hop_limit  = 0;
+                bool     want_ack   = false;
+                int      channel_idx = -1;
                 int      portnum   = 0;
                 uint8_t  payload[240];
                 size_t   payload_len = 0;
@@ -105,20 +133,47 @@ static void mesh_task(void *arg)
                 // "no RF ever lands" (never fires) from "RF lands but won't
                 // decode" (fires with a real raw_len/rssi) — a wrong channel
                 // PSK or sync word looks identical to dead silence otherwise.
+                // A channel-hash-doesn't-match-anything-we-know packet also
+                // returns false here, but that's expected/normal (someone
+                // else's private room) — mesh_router_decode() itself only
+                // logs a warning for genuine decode failures, not that case.
                 bool decoded = mesh_router_decode(raw, (size_t)raw_len, &from, &to, &pkt_id, &hop_limit,
-                                        &portnum, payload, &payload_len, sizeof(payload) - 1);
+                                        &want_ack, &channel_idx, &portnum, payload, &payload_len, sizeof(payload) - 1);
                 if (!decoded) {
-                    ESP_LOGW(TAG, "rx: %d bytes received but failed to decode (rssi=%d snr=%.1f)",
+                    ESP_LOGD(TAG, "rx: %d bytes received but not decoded (rssi=%d snr=%.1f)",
                              raw_len, rssi, snr);
                 }
+                // Half-duplex radios can hear their own transmission echoed
+                // back (antenna reflection, or the RX re-arm landing before
+                // the TX's own tail has fully cleared) — without this check
+                // that showed up as "messaging myself" in MeshChat and a
+                // phantom self-entry in the node list. Real Meshtastic
+                // filters this the same way (NodeDB never adds the local
+                // node as a remote peer).
+                if (decoded && from == s_node_id) decoded = false;
+
                 if (decoded) {
                     if (!mesh_router_dedup_seen(from, pkt_id)) {
                         mesh_router_dedup_add(from, pkt_id);
-                        mesh_router_node_touch(from, (int8_t)rssi);
+                        mesh_router_node_touch(from, (int8_t)rssi, channel_idx);
 
-                        ESP_LOGI(TAG, "rx from=%08lX to=%08lX port=%d len=%u rssi=%d snr=%.1f",
-                                 (unsigned long)from, (unsigned long)to,
+                        ESP_LOGI(TAG, "rx from=%08lX to=%08lX ch=%d port=%d len=%u rssi=%d snr=%.1f",
+                                 (unsigned long)from, (unsigned long)to, channel_idx,
                                  portnum, (unsigned)payload_len, rssi, snr);
+
+                        // Implicit ACK — real Meshtastic firmware always
+                        // sends this back for a unicast packet with
+                        // want_ack set; without it, every real client
+                        // (phone app, another node's own screen) sits
+                        // waiting and eventually shows a delivery error,
+                        // even though we received and processed the
+                        // message fine. Never for broadcasts — only a
+                        // packet addressed specifically to us.
+                        if (to == s_node_id && want_ack) {
+                            mesh_tx_item_t ack;
+                            ack.len = mesh_router_encode_ack(ack.wire, sizeof(ack.wire), from, channel_idx, pkt_id);
+                            if (ack.len > 0) xQueueSend(s_tx_queue, &ack, 0);
+                        }
 
                         if (portnum == (int)meshtastic_PortNum_TEXT_MESSAGE_APP) {
                             payload[payload_len] = '\0';
@@ -139,7 +194,7 @@ static void mesh_task(void *arg)
                         }
 
                         for (int rcb = 0; rcb < MESH_MAX_RX_CB; rcb++) {
-                            if (s_rx_cbs[rcb]) s_rx_cbs[rcb](from, portnum, payload, payload_len);
+                            if (s_rx_cbs[rcb]) s_rx_cbs[rcb](from, to, channel_idx, portnum, payload, payload_len);
                         }
 
                         // Relay broadcast packets that still have hops remaining
@@ -159,8 +214,33 @@ static void mesh_task(void *arg)
             uint8_t wire[256];
             size_t  len = mesh_router_encode_nodeinfo(wire, sizeof(wire));
             if (len > 0 && radio && radio->send) {
+                mesh_radio_lock();
                 radio->send(wire, len);
+                mesh_radio_unlock();
                 ESP_LOGI(TAG, "nodeinfo broadcast id=%08lX", (unsigned long)s_node_id);
+            }
+        }
+
+        // ── Outgoing message queue ───────────────────────────────────────
+        // The actual transmit happens here, on this task, never on
+        // whatever caller queued it (mesh_manager_send_text() is called
+        // directly from a UI button press) — RadioLib's transmit() is a
+        // blocking call, and at this preset's SF11/BW250kHz it can easily
+        // take hundreds of ms of real airtime. Doing that synchronously on
+        // cupcake_task used to happen inside its own purr_kernel_ui_lock()-
+        // held lv_timer_handler() call, freezing the entire UI for the
+        // duration — confirmed live via the frame-time watchdog: a single
+        // send produced a 515ms "lv_timer_handler() took 515ms" warning.
+        // Draining the whole queue each pass (not just one item) keeps a
+        // burst of messages from backing up behind mesh_task()'s own 10ms
+        // poll cadence.
+        mesh_tx_item_t tx_item;
+        while (xQueueReceive(s_tx_queue, &tx_item, 0) == pdTRUE) {
+            if (radio && radio->send) {
+                mesh_radio_lock();
+                esp_err_t ret = radio->send(tx_item.wire, tx_item.len);
+                mesh_radio_unlock();
+                ESP_LOGI(TAG, "tx len=%u ok=%d", (unsigned)tx_item.len, ret == ESP_OK);
             }
         }
 
@@ -182,18 +262,42 @@ bool mesh_manager_is_alive(void)
     return (now_ms - s_last_heartbeat_ms) < MESH_WATCHDOG_STALE_MS;
 }
 
-bool mesh_manager_send_text(uint32_t to, const char *text)
+bool mesh_manager_send_text(uint32_t to, int channel_idx, const char *text)
 {
     if (!s_ready) return false;
-    uint8_t wire[256];
-    size_t  len = mesh_router_encode_text(wire, sizeof(wire), to, text);
-    if (len == 0) { ESP_LOGE(TAG, "encode failed"); return false; }
+    // Encoding (AES-CTR + memcpy) is cheap and doesn't touch the radio —
+    // safe to do right here on the caller's own task (a UI button press).
+    // The actual radio->send() does not happen here — it's queued for
+    // mesh_task() to perform, since RadioLib's transmit() blocks for real
+    // LoRa airtime (hundreds of ms at this preset) and doing that inline
+    // on a UI callback froze the whole screen for the duration. Returning
+    // true here means "queued for transmission", not "confirmed sent" —
+    // see meshtastic.h's doc comment.
+    mesh_tx_item_t item;
+    item.len = mesh_router_encode_text(item.wire, sizeof(item.wire), to, channel_idx, text);
+    if (item.len == 0) { ESP_LOGE(TAG, "encode failed"); return false; }
 
-    const catcall_radio_t *radio = purr_kernel_radio();
-    if (!radio || !radio->send) return false;
-    esp_err_t ret = radio->send(wire, len);
-    ESP_LOGI(TAG, "tx text to=%08lX len=%u ok=%d", (unsigned long)to, (unsigned)len, ret == ESP_OK);
-    return ret == ESP_OK;
+    if (xQueueSend(s_tx_queue, &item, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "tx queue full — message dropped");
+        return false;
+    }
+    return true;
+}
+
+int mesh_manager_channel_count(void) { return mesh_radio_channel_count(); }
+
+bool mesh_manager_channel_name(int idx, char *name_out, size_t name_max)
+{
+    const mesh_channel_t *ch = mesh_radio_channel_at(idx);
+    if (!ch || !name_out) return false;
+    strncpy(name_out, ch->name, name_max - 1);
+    name_out[name_max - 1] = '\0';
+    return true;
+}
+
+int mesh_manager_add_channel(const char *name, const uint8_t psk16[16])
+{
+    return mesh_radio_add_channel(name, psk16);
 }
 
 void mesh_manager_add_rx_callback(mesh_rx_cb_t cb) {
@@ -218,9 +322,10 @@ int mesh_manager_node_at(int idx, mesh_node_info_t *out)
 {
     const mesh_node_t *n = mesh_router_node_at(idx);
     if (!n || !out) return -1;
-    out->id       = n->id;
-    out->rssi     = n->rssi;
-    out->last_ms  = n->last_ms;
+    out->id          = n->id;
+    out->rssi        = n->rssi;
+    out->last_ms     = n->last_ms;
+    out->channel_idx = n->channel_idx;
     if (n->long_name[0]) {
         strncpy(out->long_name, n->long_name, sizeof(out->long_name) - 1);
         out->long_name[sizeof(out->long_name) - 1] = '\0';
@@ -240,6 +345,12 @@ int mesh_manager_init(void)
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     s_node_id = ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16)
               | ((uint32_t)mac[4] <<  8) |  (uint32_t)mac[5];
+
+    s_tx_queue = xQueueCreate(MESH_TX_QUEUE_DEPTH, sizeof(mesh_tx_item_t));
+    if (!s_tx_queue) {
+        ESP_LOGE(TAG, "failed to create tx queue");
+        return -1;
+    }
 
     // No NVS/flash/SD access anywhere in mesh_task()'s own call graph
     // (mesh_radio.c/mesh_router.c audited) — safe on a PSRAM-backed stack,
@@ -272,13 +383,19 @@ void mesh_manager_deinit(void)
 #else  // !CONFIG_PURR_FEATURE_MESHTASTIC — see this file's top-of-file comment
 
 bool     mesh_manager_is_alive(void)                            { return false; }
-bool     mesh_manager_send_text(uint32_t to, const char *text)  { (void)to; (void)text; return false; }
+bool     mesh_manager_send_text(uint32_t to, int channel_idx, const char *text)
+                                                                 { (void)to; (void)channel_idx; (void)text; return false; }
 void     mesh_manager_add_rx_callback(mesh_rx_cb_t cb)          { (void)cb; }
 void     mesh_manager_remove_rx_callback(mesh_rx_cb_t cb)       { (void)cb; }
 uint32_t mesh_manager_node_id(void)                             { return 0; }
 int      mesh_manager_node_count(void)                          { return 0; }
 bool     mesh_manager_ready(void)                                { return false; }
 int      mesh_manager_node_at(int idx, mesh_node_info_t *out)   { (void)idx; (void)out; return -1; }
+int      mesh_manager_channel_count(void)                       { return 0; }
+bool     mesh_manager_channel_name(int idx, char *name_out, size_t name_max)
+                                                                 { (void)idx; (void)name_out; (void)name_max; return false; }
+int      mesh_manager_add_channel(const char *name, const uint8_t psk16[16])
+                                                                 { (void)name; (void)psk16; return -1; }
 int      mesh_manager_init(void)                                { return 0; }
 void     mesh_manager_deinit(void)                               {}
 

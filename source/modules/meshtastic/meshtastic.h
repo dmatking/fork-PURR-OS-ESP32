@@ -19,7 +19,12 @@ extern "C" {
 
 // Callback fired on every successfully decoded + decrypted incoming packet.
 // portnum matches meshtastic_PortNum values (1=TEXT, 3=POSITION, 4=NODEINFO, ...).
-typedef void (*mesh_rx_cb_t)(uint32_t from_node, int portnum,
+// channel_idx is which known channel (mesh_manager_channel_name()) this
+// packet arrived on. to_node is the packet's destination — MESH_BROADCAST
+// for a room/channel message, or a specific node id (normally our own) for
+// a direct message; callers that care about routing a message to the
+// right room vs. the right DM window need this to tell the two apart.
+typedef void (*mesh_rx_cb_t)(uint32_t from_node, uint32_t to_node, int channel_idx, int portnum,
                               const uint8_t *payload, size_t len);
 
 // PURR_MOD_SYSTEM init()/deinit() — called by the kernel module loader.
@@ -33,11 +38,39 @@ void mesh_manager_deinit(void);
 // (unlike the rest of mesh_radio.h, which is internal to this module).
 #define MESH_BROADCAST 0xFFFFFFFFUL
 
-// Encrypts and sends a TEXT_MESSAGE_APP packet. `to` is a destination node
-// ID for a private direct message, or MESH_BROADCAST for the shared channel
-// everyone hears. Returns false if the radio isn't ready yet or encoding/
-// send failed.
-bool mesh_manager_send_text(uint32_t to, const char *text);
+// Encrypts a TEXT_MESSAGE_APP packet and queues it for transmission. `to`
+// is a destination node ID for a private direct message, or MESH_BROADCAST
+// for the shared channel everyone hears. `channel_idx` selects which
+// channel (room) to encode with — for a DM this should be the target
+// node's own mesh_node_info_t.channel_idx (the channel it was last heard
+// on), not necessarily the primary. Safe to call from any task, including
+// directly from a UI button press — encoding happens on the caller's own
+// task (cheap), but the actual radio transmit happens later, asynchronously,
+// on the mesh module's own task (RadioLib's transmit() is a blocking call
+// that can take hundreds of ms of real LoRa airtime, too slow to run inline
+// on whatever thread called this). Returns false if the radio isn't ready
+// yet, encoding failed, or the outgoing queue is full — true means
+// "queued", not "confirmed transmitted".
+bool mesh_manager_send_text(uint32_t to, int channel_idx, const char *text);
+
+// ── Channels (rooms) ──────────────────────────────────────────────────────────
+// Index 0 is always the fixed "LongFast" default channel — every device
+// speaks it out of the box, matching real Meshtastic. Additional channels
+// (up to MESH_MAX_CHANNELS, currently 8) are user-added rooms with their
+// own name+PSK, persisted across reboots.
+#define MESH_MAX_CHANNELS 8
+
+int  mesh_manager_channel_count(void);
+
+// Fills *name_out (NUL-terminated, truncated to name_max) for a known
+// channel index. Returns false if idx is out of range.
+bool mesh_manager_channel_name(int idx, char *name_out, size_t name_max);
+
+// Adds a new channel (room) with a 16-byte PSK. Returns the new channel's
+// index, or -1 if all slots are full or the computed on-air hash collides
+// with an existing channel (two channels would be indistinguishable on
+// decode — pick a different name or PSK).
+int mesh_manager_add_channel(const char *name, const uint8_t psk16[16]);
 
 // Register/unregister a callback for every incoming decoded packet (any
 // portnum) — up to MESH_MAX_RX_CB subscribers at once (e.g. MeshChat and a
@@ -63,6 +96,8 @@ typedef struct {
     char     short_name[8];
     int8_t   rssi;
     uint32_t last_ms;         // esp_timer_get_time()/1000 at last packet heard
+    int      channel_idx;     // channel this node was last heard on — pass
+                               // to mesh_manager_send_text() to DM them
 } mesh_node_info_t;
 
 // Enumerate known nodes by index (0..mesh_manager_node_count()-1). Returns

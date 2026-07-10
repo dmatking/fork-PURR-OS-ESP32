@@ -125,7 +125,8 @@ static bool dequeue_frame(uint8_t *out, size_t *out_len) {
 
 // ── Mesh RX → FromRadio ───────────────────────────────────────────────────────
 
-static void on_mesh_rx(uint32_t from_node, int portnum, const uint8_t *payload, size_t len) {
+static void on_mesh_rx(uint32_t from_node, uint32_t to_node, int channel_idx, int portnum, const uint8_t *payload, size_t len) {
+    (void)to_node; (void)channel_idx;  // see file header note — this bridge doesn't mirror channel/to context either
     meshtastic_FromRadio fr = meshtastic_FromRadio_init_zero;
     fr.which_payload_variant = meshtastic_FromRadio_packet_tag;
     fr.packet.from = from_node;
@@ -162,7 +163,7 @@ static void handle_toradio_write(const uint8_t *data, size_t len) {
     text[n] = '\0';
 
     uint32_t to = tr.packet.to ? tr.packet.to : (uint32_t)MESH_BROADCAST;
-    mesh_manager_send_text(to, text);
+    mesh_manager_send_text(to, 0, text);   // primary channel — see file header note
 }
 
 // ── GATT access callbacks (one per characteristic) ───────────────────────────

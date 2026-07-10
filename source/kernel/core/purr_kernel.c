@@ -881,6 +881,7 @@ uint64_t purr_kernel_uptime_ms(void) {
 static bool s_sd_available    = false;
 static bool s_wifi_connected  = false;
 static int  s_battery_percent = -1;   // -1 = unknown (no PMIC/fuel gauge found)
+static int  s_battery_voltage_mv = -1;   // -1 = unknown
 static bool s_lora_available  = false;
 static bool s_dev_mode        = false;   // off by default — see purr_kernel.h's doc comment
 // Default 1 minute, not 0 — a 0 timeout would make cupcake_ui.c's
@@ -893,6 +894,7 @@ static uint8_t s_screen_timeout_min = 1;
 void purr_kernel_set_sd_available(bool v)    { s_sd_available    = v; }
 void purr_kernel_set_wifi_connected(bool v)  { s_wifi_connected  = v; }
 void purr_kernel_set_battery_percent(int v)  { s_battery_percent = v; }
+void purr_kernel_set_battery_voltage_mv(int mv) { s_battery_voltage_mv = mv; }
 void purr_kernel_set_lora_available(bool v)  { s_lora_available  = v; }
 void purr_kernel_set_dev_mode(bool v)        { s_dev_mode        = v; }
 void purr_kernel_set_screen_timeout_min(uint8_t v) { s_screen_timeout_min = v; }
@@ -900,6 +902,7 @@ void purr_kernel_set_screen_timeout_min(uint8_t v) { s_screen_timeout_min = v; }
 bool purr_kernel_sd_available(void)    { return s_sd_available; }
 bool purr_kernel_wifi_connected(void)  { return s_wifi_connected; }
 int  purr_kernel_battery_percent(void) { return s_battery_percent; }
+int  purr_kernel_battery_voltage_mv(void) { return s_battery_voltage_mv; }
 bool purr_kernel_lora_available(void)  { return s_lora_available; }
 bool purr_kernel_dev_mode_enabled(void) { return s_dev_mode; }
 uint8_t purr_kernel_screen_timeout_min(void) { return s_screen_timeout_min; }

@@ -20,6 +20,7 @@ input       = "trackball"
 keyboard    = "bbq20"
 radio       = "sx1262_rl"
 gps         = "generic_nmea"
+battery     = "adc_battery"
 
 [radio]
 wifi        = true
@@ -67,6 +68,7 @@ wifi_mgr          = 2
 lua_runtime       = 2
 meshtastic        = 2
 gps/generic_nmea  = 3
+battery/adc_battery = 3
 apps/settings     = 3
 apps/terminal     = 3
 apps/fileman      = 3
@@ -109,6 +111,10 @@ lora_irq      = 45
 
 gps_tx        = 43
 gps_rx        = 44
+
+# adc_battery's fallback default already matches this (see its own
+# comment) — listed here for documentation only.
+battery_adc   = 4
 
 # sd_cs was previously 13, which collided with the real LoRa BUSY pin above —
 # corrected against LilyGo's TDECK_SDCARD_CS.

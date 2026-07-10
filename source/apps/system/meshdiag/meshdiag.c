@@ -113,7 +113,7 @@ static void on_send_test(purr_wid_t w, purr_event_t e, void *user) {
     (void)w; (void)e; (void)user;
     const char *text = purr_win_textarea_get(s_send_in);
     if (!text || !*text) text = "PURR OS meshdiag test";
-    bool ok = mesh_manager_send_text(MESH_BROADCAST, text);
+    bool ok = mesh_manager_send_text(MESH_BROADCAST, 0, text);   // primary channel test broadcast
     ESP_LOGI("meshdiag", "test send %s: \"%s\"", ok ? "OK" : "FAILED", text);
     refresh_stats();
 }

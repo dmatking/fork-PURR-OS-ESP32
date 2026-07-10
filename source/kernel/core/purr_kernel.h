@@ -129,6 +129,7 @@ uint64_t purr_kernel_uptime_ms(void);
 bool     purr_kernel_sd_available(void);
 bool     purr_kernel_wifi_connected(void);
 int      purr_kernel_battery_percent(void);  // -1 = unknown (no PMIC/fuel gauge)
+int      purr_kernel_battery_voltage_mv(void);  // -1 = unknown
 bool     purr_kernel_lora_available(void);
 void     purr_kernel_reboot(void);
 
@@ -136,6 +137,7 @@ void     purr_kernel_reboot(void);
 void     purr_kernel_set_sd_available(bool v);
 void     purr_kernel_set_wifi_connected(bool v);
 void     purr_kernel_set_battery_percent(int v);
+void     purr_kernel_set_battery_voltage_mv(int mv);
 void     purr_kernel_set_lora_available(bool v);
 
 // Developer Mode — off by default, toggled from Settings (persisted under

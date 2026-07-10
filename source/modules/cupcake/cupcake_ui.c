@@ -391,6 +391,7 @@ static lv_obj_t *s_icon_lora;
 static lv_obj_t *s_icon_mail;
 static lv_obj_t *s_icon_mail_badge;
 static lv_obj_t *s_icon_battery;
+static lv_obj_t *s_batt_voltage_lbl;
 static lv_obj_t *s_status_notif_box;
 static lv_obj_t *s_status_taskmgr_box;
 
@@ -578,6 +579,16 @@ static void ck_build_status_icons(uint16_t w)
     lv_label_set_text(s_icon_battery, LV_SYMBOL_BATTERY_FULL);
     lv_obj_set_pos(s_icon_battery, 6, 4);
 
+    // Raw voltage next to the icon — the icon alone only has 5 discrete
+    // states and no fuel gauge backs it (adc_battery.c's single-pin ADC
+    // reading + a generic LiPo curve is an approximation), so the number
+    // is the one actually trustworthy reading here.
+    s_batt_voltage_lbl = lv_label_create(lv_layer_top());
+    lv_obj_set_style_text_font(s_batt_voltage_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_batt_voltage_lbl, lv_color_make(0xA0, 0xA0, 0xA0), 0);
+    lv_label_set_text(s_batt_voltage_lbl, "");
+    lv_obj_set_pos(s_batt_voltage_lbl, 24, 4);
+
     s_icon_wifi = lv_label_create(lv_layer_top());
     lv_obj_set_style_text_font(s_icon_wifi, &lv_font_montserrat_14, 0);
     lv_label_set_text(s_icon_wifi, LV_SYMBOL_WIFI);
@@ -627,6 +638,12 @@ static void ck_refresh_status_icons(void)
     else                { sym = LV_SYMBOL_BATTERY_EMPTY; color = lv_color_make(0xE0, 0x40, 0x40); }
     lv_label_set_text(s_icon_battery, sym);
     lv_obj_set_style_text_color(s_icon_battery, color, 0);
+
+    int mv = purr_kernel_battery_voltage_mv();
+    char vbuf[16];
+    if (mv < 0) vbuf[0] = '\0';
+    else        snprintf(vbuf, sizeof(vbuf), "%d.%02dV", mv / 1000, (mv % 1000) / 10);
+    lv_label_set_text(s_batt_voltage_lbl, vbuf);
 }
 
 static void ck_refresh_status_notif_box(void)

@@ -95,21 +95,23 @@ void mesh_router_dedup_add(uint32_t from, uint32_t id)
 static mesh_node_t s_nodes[MAX_NODES];
 static int         s_nnode = 0;
 
-void mesh_router_node_touch(uint32_t id, int8_t rssi)
+void mesh_router_node_touch(uint32_t id, int8_t rssi, int channel_idx)
 {
     for (int i = 0; i < s_nnode; i++) {
         if (s_nodes[i].id == id) {
-            s_nodes[i].rssi    = rssi;
-            s_nodes[i].last_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+            s_nodes[i].rssi        = rssi;
+            s_nodes[i].last_ms     = (uint32_t)(esp_timer_get_time() / 1000ULL);
+            s_nodes[i].channel_idx = channel_idx;
             return;
         }
     }
     if (s_nnode < MAX_NODES) {
         // long_name/short_name start empty (static array, zero-initialized)
         // until a NodeInfo packet fills them in via node_set_name().
-        s_nodes[s_nnode].id      = id;
-        s_nodes[s_nnode].rssi    = rssi;
-        s_nodes[s_nnode].last_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        s_nodes[s_nnode].id          = id;
+        s_nodes[s_nnode].rssi        = rssi;
+        s_nodes[s_nnode].last_ms     = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        s_nodes[s_nnode].channel_idx = channel_idx;
         s_nnode++;
     }
 }
@@ -142,19 +144,21 @@ const mesh_node_t *mesh_router_node_at(int idx)
 // (NOT a protobuf-encoded MeshPacket — see this file's top comment).
 // Returns wire byte count, or 0 on failure.
 static size_t encode_data_packet(uint8_t *wire, size_t wire_max,
-                                  uint32_t to, uint8_t hop_limit, uint8_t channel_hash,
+                                  uint32_t to, uint8_t hop_limit, int channel_idx,
                                   const uint8_t *plain, size_t plain_len)
 {
     if (plain_len > 233) return 0;  // Meshtastic max Data payload
     if (MESH_HDR_LEN + plain_len > wire_max) return 0;
 
+    const mesh_channel_t *ch = mesh_radio_channel_at(channel_idx);
+    if (!ch) return 0;
+
     uint32_t from = s_node_id;
     uint32_t id   = s_packet_seq++;
 
-    uint8_t key16[16], iv[16], cipher[256];
-    mesh_radio_default_psk(key16);
+    uint8_t iv[16], cipher[256];
     mesh_radio_build_iv(iv, id, from);
-    if (!mesh_radio_aes_ctr(plain, cipher, plain_len, key16, iv)) return 0;
+    if (!mesh_radio_aes_ctr(plain, cipher, plain_len, ch->psk, iv)) return 0;
 
     uint8_t *p = wire;
     memcpy(p, &to,   4); p += 4;
@@ -165,7 +169,7 @@ static size_t encode_data_packet(uint8_t *wire, size_t wire_max,
     // in-flight packet's hop_limit without touching hop_start).
     *p++ = (uint8_t)((hop_limit & MESH_FLAG_HOP_LIMIT_MASK) |
                       ((hop_limit << MESH_FLAG_HOP_START_SHIFT) & MESH_FLAG_HOP_START_MASK));
-    *p++ = channel_hash;
+    *p++ = ch->hash;
     *p++ = 0;  // next_hop — no routing hints yet
     *p++ = 0;  // relay_node
     memcpy(p, cipher, plain_len);
@@ -173,7 +177,7 @@ static size_t encode_data_packet(uint8_t *wire, size_t wire_max,
     return MESH_HDR_LEN + plain_len;
 }
 
-size_t mesh_router_encode_text(uint8_t *wire, size_t wire_max, uint32_t to, const char *text)
+size_t mesh_router_encode_text(uint8_t *wire, size_t wire_max, uint32_t to, int channel_idx, const char *text)
 {
     meshtastic_Data d = meshtastic_Data_init_zero;
     d.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
@@ -187,7 +191,7 @@ size_t mesh_router_encode_text(uint8_t *wire, size_t wire_max, uint32_t to, cons
     if (!pb_encode(&os, meshtastic_Data_fields, &d)) return 0;
 
     return encode_data_packet(wire, wire_max, to,
-                               MESH_HOP_LIMIT, MESH_CHANNEL_HASH, plain, os.bytes_written);
+                               MESH_HOP_LIMIT, channel_idx, plain, os.bytes_written);
 }
 
 size_t mesh_router_encode_nodeinfo(uint8_t *wire, size_t wire_max)
@@ -211,8 +215,39 @@ size_t mesh_router_encode_nodeinfo(uint8_t *wire, size_t wire_max)
     pb_ostream_t ds = pb_ostream_from_buffer(plain, sizeof(plain));
     if (!pb_encode(&ds, meshtastic_Data_fields, &d)) return 0;
 
+    // Always the primary channel (0) — NodeInfo is this node's public
+    // identity announcement, not scoped to any one private room, matching
+    // this project's whole prior single-channel behavior exactly.
     return encode_data_packet(wire, wire_max, (uint32_t)MESH_BROADCAST,
-                               MESH_HOP_LIMIT, MESH_CHANNEL_HASH, plain, ds.bytes_written);
+                               MESH_HOP_LIMIT, 0, plain, ds.bytes_written);
+}
+
+size_t mesh_router_encode_ack(uint8_t *wire, size_t wire_max, uint32_t to, int channel_idx, uint32_t request_id)
+{
+    meshtastic_Routing routing = meshtastic_Routing_init_zero;
+    routing.which_variant = meshtastic_Routing_error_reason_tag;
+    routing.error_reason  = meshtastic_Routing_Error_NONE;
+
+    uint8_t routing_bytes[meshtastic_Routing_size];
+    pb_ostream_t rs = pb_ostream_from_buffer(routing_bytes, sizeof(routing_bytes));
+    if (!pb_encode(&rs, meshtastic_Routing_fields, &routing)) return 0;
+
+    meshtastic_Data d = meshtastic_Data_init_zero;
+    d.portnum    = meshtastic_PortNum_ROUTING_APP;
+    d.request_id = request_id;   // ties this ack back to the sender's original packet id
+    memcpy(d.payload.bytes, routing_bytes, rs.bytes_written);
+    d.payload.size = (pb_size_t)rs.bytes_written;
+
+    uint8_t plain[meshtastic_Data_size];
+    pb_ostream_t ds = pb_ostream_from_buffer(plain, sizeof(plain));
+    if (!pb_encode(&ds, meshtastic_Data_fields, &d)) return 0;
+
+    // Acks aren't broadcast and don't need to travel far — same hop_limit
+    // as everything else here, MESH_HOP_LIMIT is only 3 anyway. Must go
+    // out on the SAME channel the original packet arrived on, or the
+    // sender's own decode (a different PSK than ours) won't match it.
+    return encode_data_packet(wire, wire_max, to,
+                               MESH_HOP_LIMIT, channel_idx, plain, ds.bytes_written);
 }
 
 void mesh_router_relay(const uint8_t *raw, size_t raw_len)
@@ -240,8 +275,14 @@ void mesh_router_relay(const uint8_t *raw, size_t raw_len)
     uint32_t delay_ms = esp_random() % 500;
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
 
+    // Racing mesh_manager_send_text() (a different task) and mesh_task()'s
+    // own RX-poll loop otherwise — see mesh_radio_lock()'s doc comment.
     const catcall_radio_t *radio = purr_kernel_radio();
-    if (radio && radio->send) radio->send(relay_buf, raw_len);
+    if (radio && radio->send) {
+        mesh_radio_lock();
+        radio->send(relay_buf, raw_len);
+        mesh_radio_unlock();
+    }
 
     ESP_LOGI(TAG, "relay from=%08lX id=%lu hops_left=%u delay=%lums",
              (unsigned long)hdr_from, (unsigned long)hdr_id,
@@ -250,7 +291,7 @@ void mesh_router_relay(const uint8_t *raw, size_t raw_len)
 
 bool mesh_router_decode(const uint8_t *raw, size_t raw_len,
                          uint32_t *from, uint32_t *to, uint32_t *pkt_id,
-                         uint8_t *hop_limit, int *portnum,
+                         uint8_t *hop_limit, bool *want_ack, int *channel_idx, int *portnum,
                          uint8_t *payload, size_t *payload_len, size_t payload_max)
 {
     if (raw_len <= MESH_HDR_LEN) {
@@ -264,23 +305,33 @@ bool mesh_router_decode(const uint8_t *raw, size_t raw_len,
     memcpy(&hdr_from, raw + 4, 4);
     memcpy(&hdr_id,   raw + 8, 4);
     uint8_t flags = raw[12];
+    uint8_t hdr_channel_hash = raw[13];
 
     *from      = hdr_from;
     *to        = hdr_to;
     *pkt_id    = hdr_id;
     *hop_limit = flags & MESH_FLAG_HOP_LIMIT_MASK;
+    *want_ack  = (flags & MESH_FLAG_WANT_ACK_MASK) != 0;
+
+    // Try every channel we know rather than assuming the single hardcoded
+    // default — a packet on a channel we don't have configured is
+    // expected/normal (someone else's private room), not an error, so this
+    // isn't logged as a warning the way the failure paths below are.
+    int ch_idx = mesh_radio_channel_find_by_hash(hdr_channel_hash);
+    if (ch_idx < 0) return false;
+    *channel_idx = ch_idx;
+    const mesh_channel_t *ch = mesh_radio_channel_at(ch_idx);
 
     const uint8_t *enc = raw + MESH_HDR_LEN;
     size_t enc_len = raw_len - MESH_HDR_LEN;
-    uint8_t key16[16], iv[16], plain[256];
+    uint8_t iv[16], plain[256];
     if (enc_len > sizeof(plain)) {
         ESP_LOGW(TAG, "decode: from=%08lX id=%lu enc_len=%u exceeds plain buffer",
                  (unsigned long)hdr_from, (unsigned long)hdr_id, (unsigned)enc_len);
         return false;
     }
-    mesh_radio_default_psk(key16);
     mesh_radio_build_iv(iv, hdr_id, hdr_from);
-    if (!mesh_radio_aes_ctr(enc, plain, enc_len, key16, iv)) {
+    if (!mesh_radio_aes_ctr(enc, plain, enc_len, ch->psk, iv)) {
         ESP_LOGW(TAG, "decode: from=%08lX id=%lu AES-CTR call itself failed",
                  (unsigned long)hdr_from, (unsigned long)hdr_id);
         return false;
@@ -290,7 +341,7 @@ bool mesh_router_decode(const uint8_t *raw, size_t raw_len,
     pb_istream_t ds = pb_istream_from_buffer(plain, enc_len);
     if (!pb_decode(&ds, meshtastic_Data_fields, &d)) {
         ESP_LOGW(TAG, "decode: from=%08lX id=%lu channel=%u enc_len=%u inner Data pb_decode failed: %s",
-                 (unsigned long)hdr_from, (unsigned long)hdr_id, (unsigned)raw[13],
+                 (unsigned long)hdr_from, (unsigned long)hdr_id, (unsigned)hdr_channel_hash,
                  (unsigned)enc_len, PB_GET_ERROR(&ds));
         return false;
     }
