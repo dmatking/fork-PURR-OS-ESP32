@@ -4,5 +4,11 @@ dependencies:
     version: ">=8.3.0,<9.0.0"
   espressif/arduino-esp32:
     version: ">=3.0.0"
-  espressif/esp_tinyusb:
-    version: "^2.0.0"
+  # espressif/esp_tinyusb — pinned/dormant USB MSC work (source/modules/usb_msc,
+  # #if 0'd out at its only call site in kernel_tdp_boot.c) doesn't need this
+  # right now, and the dependency was actively breaking every plain-ESP32
+  # device build (cyd/cyd_s024c/cyd_s028r): esp_tinyusb ^2.0.0 only resolves
+  # to 2.2.1, which doesn't support the esp32 target at all, so CMake's
+  # component version solving failed outright at configure time — not a
+  # compile error, the build never even started. Re-add this (and re-enable
+  # the #if 0 block) together when USB MSC work actually resumes.

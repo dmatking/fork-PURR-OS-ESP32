@@ -18,30 +18,30 @@ radio       = ""
 gps         = ""
 
 [radio]
-# ESP32 has built-in WiFi + BT — no LoRa module on base CYD
+# ESP32 has built-in WiFi + BT — no LoRa module on base CYD.
+# bt — off for now (stripped-down minimal profile, matches every non-T-Deck
+# device): meshtastic/bt_mgr removed, WiFi kept. Also frees the DRAM budget
+# taskmgr/terminal/fileman/etc. were eating into on this PSRAM-less board.
 wifi        = true
-bt          = true
+bt          = false
 lora        = ""
 
 [modules]
 ui          = "miniwin"
 app_manager = "app_manager"
+lua         = "lua_runtime"
+wifi        = "wifi_mgr"
 
 [ui]
 theme       = "wce"
 
 [apps]
-# Base OS — staple apps always present
+# Stripped-down minimal profile — settings + driver manager + services only.
+# terminal/fileman/taskmgr/calculator dropped: this is a PSRAM-less, tightly
+# DRAM-budgeted board (see the [radio] comment above).
 settings    = true
-# about — a standalone app used to exist (see settings.c's build_about_text()
-# comment: "mirrors about.c's build_info()") but was folded into Settings'
-# own About tab during a rewrite; this device.pcat reference to it was never
-# cleaned up and broke the link (undefined reference to purr_module_about,
-# since the app itself no longer exists anywhere in the tree).
-# Core usable apps
-terminal    = true
-fileman     = true
-taskmgr     = true
+drivermgr   = true
+services    = true
 
 [flash]
 # Priority 1 — required, kernel panics without these
@@ -50,12 +50,13 @@ touch/xpt2046    = 1
 # Priority 2 — important UI + management layer
 miniwin          = 2
 app_manager      = 2
+driver_manager   = 2
+wifi_mgr         = 2
 lua_runtime      = 2
 # Priority 3 — base OS apps
 apps/settings    = 3
-apps/terminal    = 3
-apps/fileman     = 3
-apps/taskmgr     = 3
+apps/drivermgr   = 3
+apps/services    = 3
 
 [pins]
 display_cs    = 15
