@@ -16,6 +16,7 @@
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -911,6 +912,12 @@ void purr_kernel_reboot(void) {
     ESP_LOGW(TAG, "kernel reboot requested");
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_restart();
+}
+
+void purr_kernel_shutdown(void) {
+    ESP_LOGW(TAG, "kernel shutdown requested — entering deep sleep");
+    vTaskDelay(pdMS_TO_TICKS(100));
+    esp_deep_sleep_start();
 }
 
 // ── Notifications ─────────────────────────────────────────────────────────────

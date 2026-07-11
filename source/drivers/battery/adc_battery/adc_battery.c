@@ -11,6 +11,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -21,13 +22,18 @@
 
 static const char *TAG = "adc_battery";
 
-// GPIO4 / ADC1_CHANNEL_3 — confirmed against Meshtastic's own T-Deck
-// variant.h (`#define BATTERY_PIN 4`, `ADC1_GPIO4_CHANNEL`). Not
-// configurable via device.pcat's [pins] section today — see bbq20.c's
-// KB_BL_PIN comment for why (purr_device_glue.c's CONFIG_DRV_*_PIN
-// #defines are scoped to that one translation unit and never reach a
-// driver .c file); this fallback IS this device's real pin, not a
-// placeholder, since this driver only ships on tdeck_plus/tdeck.
+// GPIO4 / ADC1_CHANNEL_3, x2.11 — confirmed against Meshtastic's own
+// T-Deck variant.h (`#define BATTERY_PIN 4`, `ADC1_GPIO4_CHANNEL`). This
+// remains the default/fallback since it's this driver's original board
+// (T-Deck/T-Deck Plus) and most devices never call adc_battery_configure()
+// at all. See that function's comment for how a second board (confirmed:
+// Heltec V3, different pin/multiplier/an enable pin this board never
+// needed) overrides these at boot instead of adding more #ifndef configs
+// here — device.pcat's CONFIG_DRV_*_PIN glue macros are scoped to the
+// generated translation unit and never reach a driver .c file directly
+// (see bbq20.c's KB_BL_PIN comment for the same limitation), so a runtime
+// configure() call is this project's established pattern for this exact
+// problem (see sx1262_rl_configure()/ssd1306_configure()).
 #ifndef BATTERY_ADC_CHANNEL
 #define BATTERY_ADC_CHANNEL ADC_CHANNEL_3
 #endif
@@ -38,10 +44,79 @@ static const char *TAG = "adc_battery";
 
 #define BATTERY_POLL_MS (10 * 1000)
 
+static adc_channel_t             s_channel    = BATTERY_ADC_CHANNEL;
+static float                     s_multiplier = BATTERY_ADC_MULTIPLIER;
+static int                       s_ctrl_pin   = -1;   // -1 == no enable pin needed
+static adc_atten_t               s_atten      = ADC_ATTEN_DB_12;
 static adc_oneshot_unit_handle_t s_adc = NULL;
 static adc_cali_handle_t         s_cali = NULL;
 static bool                      s_cali_ok = false;
 static TaskHandle_t              s_task = NULL;
+
+// Overrides the T-Deck-shaped defaults above for a board whose battery
+// divider sits on a different pin/ratio, and — new requirement Heltec V3
+// introduced — behind a GPIO that must be driven to the correct level to
+// actually connect the divider to the ADC pin at all (confirmed against
+// Meshtastic's heltec_v3/variant.h: `ADC_CTRL` GPIO37 feeding `BATTERY_PIN`
+// GPIO1 / `ADC_CHANNEL_0`, multiplier `4.9 * 1.045`).
+//
+// The generic `ADC_CTRL_ENABLED LOW` macro in that variant.h is NOT what
+// Meshtastic's own Power.cpp actually uses for this specific board —
+// battery_adcEnable() has a HELTEC_V3-only branch that skips the fixed
+// level entirely: it reads ADC_CTRL as a floating input first (sensing
+// whatever this board revision's own external pull resistor already
+// holds it at), then drives the pin OUTPUT to the *inverse* of that
+// reading. Different Heltec V3 board revisions apparently wire the
+// enable transistor with opposite polarity, so a hardcoded LOW works on
+// some boards and silently reads ~0V (divider never connected) on
+// others — this auto-detect dance is how upstream copes with that.
+// Applied unconditionally whenever a ctrl_pin is configured, since only
+// Heltec V3 uses one today and this exactly mirrors upstream's handling
+// of it.
+//
+// Must be called before module_init() runs — i.e. from a device's
+// purr_device_init(), same timing purr_radio_init()'s Vext GPIO block
+// already uses, and for the same reason (this needs to be live before
+// module_init() ever touches the ADC channel). ctrl_pin is driven once
+// here and left low permanently, same "set it and forget it" treatment
+// Vext gets — this driver's 10s poll interval makes per-read toggling for
+// power savings not worth the added complexity.
+//
+// atten: an adc_atten_t ordinal (0=DB_0, 1=DB_2_5, 2=DB_6, 3=DB_12), not
+// a plain dB value — this board's default (DB_12) assumes the T-Deck's
+// low-impedance divider; a high-impedance divider (confirmed: Heltec V3,
+// per Meshtastic's own variant.h: "lower dB for high resistance voltage
+// divider") reads near-zero raw counts at DB_12 and needs DB_2_5 instead.
+void adc_battery_configure(int channel, int ctrl_pin, float multiplier, int atten)
+{
+    s_channel    = (adc_channel_t)channel;
+    s_multiplier = multiplier;
+    s_ctrl_pin   = ctrl_pin;
+    s_atten      = (adc_atten_t)atten;
+
+    if (s_ctrl_pin >= 0) {
+        gpio_config_t in_cfg = {
+            .pin_bit_mask = 1ULL << s_ctrl_pin,
+            .mode         = GPIO_MODE_INPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&in_cfg);
+        int floating_level = gpio_get_level(s_ctrl_pin);
+        int enable_level = floating_level ? 0 : 1;
+
+        gpio_config_t out_cfg = {
+            .pin_bit_mask = 1ULL << s_ctrl_pin,
+            .mode         = GPIO_MODE_OUTPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&out_cfg);
+        gpio_set_level(s_ctrl_pin, enable_level);
+    }
+}
 
 // Standard 1S LiPo open-circuit-voltage discharge curve — there's no fuel
 // gauge IC here to do real coulomb counting, so this is an approximation
@@ -69,19 +144,36 @@ static uint8_t voltage_to_percent(float mv)
     return 0;
 }
 
+// A single adc_oneshot_read() is noisy enough on its own that, run through
+// s_multiplier (5x+ on Heltec V3), it produces a real, measurable bias —
+// confirmed against an identical board+battery reading ~0.10V lower.
+// Meshtastic's own espAdcRead() (Power.cpp) never trusts one raw sample
+// either: it averages BATTERY_SENSE_SAMPLES (15) raw reads before handing
+// the result to calibration. Mirrored here for the same reason.
+#define BATTERY_SENSE_SAMPLES 15
+
 static void battery_poll_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        int raw = 0;
-        if (adc_oneshot_read(s_adc, BATTERY_ADC_CHANNEL, &raw) == ESP_OK) {
+        uint32_t raw_sum = 0;
+        int raw_count = 0;
+        for (int i = 0; i < BATTERY_SENSE_SAMPLES; i++) {
+            int val = 0;
+            if (adc_oneshot_read(s_adc, s_channel, &val) == ESP_OK) {
+                raw_sum += (uint32_t)val;
+                raw_count++;
+            }
+        }
+        if (raw_count > 0) {
+            int raw = (int)(raw_sum / (uint32_t)raw_count);
             int pin_mv = raw;
             if (s_cali_ok) adc_cali_raw_to_voltage(s_cali, raw, &pin_mv);
-            int batt_mv = (int)((float)pin_mv * BATTERY_ADC_MULTIPLIER);
+            int batt_mv = (int)((float)pin_mv * s_multiplier);
             purr_kernel_set_battery_voltage_mv(batt_mv);
             purr_kernel_set_battery_percent(voltage_to_percent((float)batt_mv));
         } else {
-            ESP_LOGW(TAG, "adc_oneshot_read failed");
+            ESP_LOGW(TAG, "adc_oneshot_read failed (all samples)");
         }
         vTaskDelay(pdMS_TO_TICKS(BATTERY_POLL_MS));
     }
@@ -97,17 +189,17 @@ static int module_init(void)
 
     adc_oneshot_chan_cfg_t chan_cfg = {
         .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten    = ADC_ATTEN_DB_12,   // full ~0-3.3V range — battery-divided input
+        .atten    = s_atten,
     };
-    if (adc_oneshot_config_channel(s_adc, BATTERY_ADC_CHANNEL, &chan_cfg) != ESP_OK) {
+    if (adc_oneshot_config_channel(s_adc, s_channel, &chan_cfg) != ESP_OK) {
         ESP_LOGE(TAG, "adc_oneshot_config_channel failed");
         return -1;
     }
 
     adc_cali_curve_fitting_config_t cali_cfg = {
         .unit_id  = ADC_UNIT_1,
-        .chan     = BATTERY_ADC_CHANNEL,
-        .atten    = ADC_ATTEN_DB_12,
+        .chan     = s_channel,
+        .atten    = s_atten,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
     // Calibration can fail on unfused/older-rev silicon — not fatal, just
@@ -117,8 +209,8 @@ static int module_init(void)
     if (!s_cali_ok) ESP_LOGW(TAG, "ADC calibration unavailable — using raw counts");
 
     xTaskCreate(battery_poll_task, "adc_battery", 3072, NULL, 2, &s_task);
-    ESP_LOGI(TAG, "battery ADC ready (GPIO4/CH3, x%.2f, cali=%d)",
-             (double)BATTERY_ADC_MULTIPLIER, s_cali_ok);
+    ESP_LOGI(TAG, "battery ADC ready (ch=%d ctrl_pin=%d, x%.3f, cali=%d)",
+             (int)s_channel, s_ctrl_pin, (double)s_multiplier, s_cali_ok);
     return 0;
 }
 

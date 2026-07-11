@@ -194,20 +194,31 @@ static inline esp_err_t flush_all(void)
 }
 
 // ── RGB565 → 1-bit conversion ─────────────────────────────────────────────────
-// Compute luminance from RGB565 (approximate BT.601 luma scaled to 0..255).
+// Compute luminance from RGB565 (BT.601 luma, scaled to 0..255).
 // R5G6B5: rrrrrggggggbbbbb
+//
+// Was previously computing `r*77 + g*38 + b*13` directly on the raw 5/6-bit
+// channel values and calling that "0..255" — it isn't: for pure white
+// (r=31,g=63,b=31) that expression is 5184, and 5184>>4 = 324, which
+// silently wraps to 68 once truncated to this function's uint8_t return
+// type. 68 is below SSD_LUMA_THRESHOLD (128), so white was being classified
+// as an *off* pixel — confirmed live as the reason nothing ever rendered on
+// real SSD1306 hardware, including a full-white test fill (every "on"
+// pixel this driver was ever asked to draw hit this same silent wrap).
+// Fixed by properly expanding each channel to 8 bits first (bit-replication,
+// not a raw scale-and-hope), then applying the standard integer BT.601
+// weights (77+150+29 = 256, so the final >>8 is an exact normalize, not an
+// approximation) — 255 in, 255 out, verified by construction.
 static inline uint8_t rgb565_luma(uint16_t px)
 {
-    uint8_t r = (uint8_t)((px >> 11) & 0x1F);
-    uint8_t g = (uint8_t)((px >>  5) & 0x3F);
-    uint8_t b = (uint8_t)( px        & 0x1F);
-    // Scale to 8-bit and apply luma weights (≈ 19/64 R + 38/64 G + 7/64 B ≈ 0.299 0.587 0.114)
-    uint32_t luma = (uint32_t)r * 77u      // R component (scaled from 5-bit: ×77/31 ≈ 2.5)
-                  + (uint32_t)g * 38u      // G component (scaled from 6-bit: ×38/63 ≈ 0.6)
-                  + (uint32_t)b * 13u;     // B component (scaled from 5-bit: ×13/31 ≈ 0.4)
-    // luma is in range 0..(31×77 + 63×38 + 31×13) = 0..4782
-    // normalise to 0..255: divide by ~18.75 (≈ >>4 then clamp)
-    return (uint8_t)(luma >> 4);  // 0..299 → clamp below
+    uint8_t r5 = (uint8_t)((px >> 11) & 0x1F);
+    uint8_t g6 = (uint8_t)((px >>  5) & 0x3F);
+    uint8_t b5 = (uint8_t)( px        & 0x1F);
+    uint8_t r8 = (uint8_t)((r5 << 3) | (r5 >> 2));
+    uint8_t g8 = (uint8_t)((g6 << 2) | (g6 >> 4));
+    uint8_t b8 = (uint8_t)((b5 << 3) | (b5 >> 2));
+    uint32_t luma = (uint32_t)r8 * 77u + (uint32_t)g8 * 150u + (uint32_t)b8 * 29u;
+    return (uint8_t)(luma >> 8);
 }
 
 // Write a single pixel into the framebuffer.

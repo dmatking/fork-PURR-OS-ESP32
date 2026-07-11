@@ -8,9 +8,13 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_timer.h"
+#include "esp_system.h"
 #include "../../kernel/core/purr_module.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "../../kernel/catcalls/catcall_display.h"
+#include "../../kernel/catcalls/catcall_input.h"
+#include "../../modules/meshtastic/meshtastic.h"
 
 static const char *TAG = "oled_ui";
 
@@ -20,7 +24,9 @@ static const char *TAG = "oled_ui";
 #define FONT_H       8
 #define COLS         (OLED_W / FONT_W)   // 21
 #define ROWS         (OLED_H / FONT_H)   // 8
-#define LOG_ROWS     5
+// Row budget on Log: title(1) + LoRa/GPS(1) + battery(1) + separator(1)
+// leaves 4 rows for the log itself, out of 8 total.
+#define LOG_ROWS     4
 
 // Minimal 6x8 font — printable ASCII 0x20–0x7E
 // Each character is 6 bytes (columns), rows packed MSB first
@@ -167,6 +173,274 @@ void oled_ui_log(const char *line) {
     s_log_lines[idx][COLS] = '\0';
 }
 
+// --- Message ring buffer (SCREEN_MESSAGES) -----------------------------------
+// Every received TEXT_MESSAGE_APP currently only fires a system notification
+// (purr_kernel_notify(), see meshtastic_module.c's RX handler) — nothing
+// ever showed up anywhere on the OLED itself. This is the same ring-buffer
+// shape as the boot log above, just fed from the mesh module's RX callback
+// instead of oled_ui_log().
+
+#define MSG_ROWS 5
+static char     s_msg_lines[MSG_ROWS][COLS + 1];
+static int      s_msg_head  = 0;
+static int      s_msg_count = 0;
+
+static void mesh_rx_for_oled(uint32_t from_node, uint32_t to_node, int channel_idx, int portnum,
+                              const uint8_t *payload, size_t len) {
+    (void)to_node; (void)channel_idx;
+    if (portnum != 1 /* meshtastic_PortNum_TEXT_MESSAGE_APP */) return;
+
+    char text[32];
+    size_t n = len < sizeof(text) - 1 ? len : sizeof(text) - 1;
+    memcpy(text, payload, n);
+    text[n] = '\0';
+
+    // Oversized on purpose — see draw_title_bar()'s buf comment for why.
+    char line[48];
+    snprintf(line, sizeof(line), "%08lX:%s", (unsigned long)from_node, text);
+
+    int idx = (s_msg_head + s_msg_count) % MSG_ROWS;
+    if (s_msg_count < MSG_ROWS) s_msg_count++;
+    else s_msg_head = (s_msg_head + 1) % MSG_ROWS;
+    strncpy(s_msg_lines[idx], line, COLS);
+    s_msg_lines[idx][COLS] = '\0';
+}
+
+// --- Screens ------------------------------------------------------------------
+// Single-PRG-button navigation (heltec_button driver): short press cycles
+// forward through these, long press jumps straight back to SCREEN_LOG.
+// Order/count here must match s_screen_names[] below.
+
+typedef enum { SCREEN_LOG = 0, SCREEN_INFO, SCREEN_ABOUT, SCREEN_SEND, SCREEN_NODES, SCREEN_MESSAGES, SCREEN_SHUTDOWN, SCREEN_COUNT } screen_t;
+
+static const char *s_screen_names[SCREEN_COUNT] = { "Log", "Info", "About", "Send", "Nodes", "Msgs", "Power" };
+
+static screen_t s_screen = SCREEN_LOG;
+
+// Row 0 title bar, shared by every screen — name plus a "[n/total]" page
+// indicator so a single button with no other feedback still tells you
+// where you are and that there's more to cycle through.
+static void draw_title_bar(const char *name) {
+    draw_hline(0, COL_WHITE);
+    // Buffer is bigger than COLS on purpose — GCC's format-truncation check
+    // can't prove %d stays single-digit even though SCREEN_COUNT is a tiny
+    // compile-time constant. draw_str() clips at OLED_W on its own, so any
+    // overflow past COLS just gets visually cut off, not written unsafely.
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%-*s[%d/%d]", COLS - 4, name, (int)s_screen + 1, SCREEN_COUNT);
+    draw_str(0, 0, buf, COL_BLACK, COL_WHITE);
+}
+
+static void render_log(void) {
+    draw_title_bar(s_screen_names[SCREEN_LOG]);
+
+    // Row 1: LoRa/mesh status is real now (meshtastic module wired in);
+    // GPS stays a placeholder — this board has no onboard GPS and none is
+    // attached, nothing to actually report yet.
+    // Oversized on purpose — see draw_title_bar()'s buf comment for why.
+    char status[48];
+    const char *lora = !mesh_manager_ready()   ? "starting"
+                      : !mesh_manager_is_alive() ? "stale"
+                      : "ready";
+    snprintf(status, sizeof(status), "LoRa:%s GPS:--", lora);
+    draw_str(0, FONT_H, status, COL_WHITE, COL_BLACK);
+
+    // Row 2: battery — purr_kernel_battery_*() is the plain push-based
+    // pattern every battery driver uses (no catcall, no NULL to check;
+    // -1 just means "no reading yet/no battery driver on this device").
+    // adc_battery needs its ~10s poll interval to produce a first real
+    // reading, so "reading..." right after boot is expected, not a bug.
+    int batt_mv  = purr_kernel_battery_voltage_mv();
+    int batt_pct = purr_kernel_battery_percent();
+    if (batt_mv >= 0) {
+        snprintf(status, sizeof(status), "Batt:%d.%02uV %d%%",
+                 batt_mv / 1000, (unsigned)((batt_mv % 1000) / 10), batt_pct);
+    } else {
+        snprintf(status, sizeof(status), "Batt: reading...");
+    }
+    draw_str(0, FONT_H * 2, status, COL_WHITE, COL_BLACK);
+
+    // Row 3: separator
+    draw_hline(FONT_H * 3, COL_WHITE);
+
+    // Rows 4–7: last log lines
+    for (int i = 0; i < LOG_ROWS; i++) {
+        int src = (s_log_head + i) % LOG_ROWS;
+        if (i >= s_log_count) break;
+        draw_str(0, FONT_H * (4 + i), s_log_lines[src], COL_WHITE, COL_BLACK);
+    }
+}
+
+static void render_info(void) {
+    draw_title_bar(s_screen_names[SCREEN_INFO]);
+
+    // PURR_KERNEL_VERSION (the "1.0.0-dpN" release string), not
+    // esp_app_get_description()->version — that one's an auto git-describe
+    // string tied to the nearest tag/commit/dirty-state, not the developer
+    // preview number, and doesn't move just because a release got bumped.
+    char line[48];
+    snprintf(line, sizeof(line), "Ver: %s", PURR_KERNEL_VERSION);
+    draw_str(0, FONT_H * 2, line, COL_WHITE, COL_BLACK);
+
+    int64_t up_s = esp_timer_get_time() / 1000000;
+    snprintf(line, sizeof(line), "Up: %lldh%02lldm%02llds",
+             (long long)(up_s / 3600), (long long)((up_s / 60) % 60), (long long)(up_s % 60));
+    draw_str(0, FONT_H * 3, line, COL_WHITE, COL_BLACK);
+
+    snprintf(line, sizeof(line), "Heap: %u KB", (unsigned)(esp_get_free_heap_size() / 1024));
+    draw_str(0, FONT_H * 4, line, COL_WHITE, COL_BLACK);
+}
+
+static void render_about(void) {
+    draw_title_bar(s_screen_names[SCREEN_ABOUT]);
+    draw_str(0, FONT_H * 2, "Heltec WiFi LoRa", COL_WHITE, COL_BLACK);
+    draw_str(0, FONT_H * 3, "32 V3", COL_WHITE, COL_BLACK);
+    draw_str(0, FONT_H * 4, "ESP32-S3 + SX1262", COL_WHITE, COL_BLACK);
+    draw_str(0, FONT_H * 6, "PURR OS", COL_WHITE, COL_BLACK);
+}
+
+// --- Send (basic predefined-message client) ----------------------------------
+// No keyboard on this board — canned messages picked with the same single
+// button, broadcast on the primary channel (MESH_BROADCAST/channel 0), same
+// as every other "send a text" path in this codebase. Editing this list is
+// just editing this array; there's no reason to make it configurable at
+// runtime for a board with no text input.
+static const char *s_canned_msgs[] = {
+    "Testing 1 2 3",
+    "On my way",
+    "All good here",
+    "Need help ASAP",
+    "Position sent",
+};
+#define CANNED_MSG_COUNT (sizeof(s_canned_msgs) / sizeof(s_canned_msgs[0]))
+
+static int     s_msg_idx     = 0;
+static int64_t s_sent_at_us  = 0;   // 0 == no "Sent!" confirmation showing
+#define SENT_FLASH_MS 1200
+
+// Send starts locked every time it's landed on (see handle_button_event()) —
+// a plain short press just continues normal screen-cycling like any other
+// screen; only a long press (while on Send) unlocks message-cycling. Keeps
+// "just scrolling through screens" from ever silently changing/sending a
+// canned message by accident.
+static bool s_send_unlocked = false;
+
+static void render_send(void) {
+    draw_title_bar(s_screen_names[SCREEN_SEND]);
+
+    if (!s_send_unlocked) {
+        draw_str(0, FONT_H * 2, "Locked", COL_WHITE, COL_BLACK);
+        draw_str(0, FONT_H * 3, "hold to unlock", COL_WHITE, COL_BLACK);
+        return;
+    }
+
+    char line[48];
+    snprintf(line, sizeof(line), "[%d/%u]", s_msg_idx + 1, (unsigned)CANNED_MSG_COUNT);
+    draw_str(0, FONT_H * 2, line, COL_WHITE, COL_BLACK);
+    draw_str(0, FONT_H * 3, s_canned_msgs[s_msg_idx], COL_WHITE, COL_BLACK);
+
+    bool showing_sent = s_sent_at_us != 0 &&
+        (esp_timer_get_time() - s_sent_at_us) < (int64_t)SENT_FLASH_MS * 1000;
+    if (showing_sent) {
+        draw_str(0, FONT_H * 5, "Sent!", COL_WHITE, COL_BLACK);
+    } else {
+        s_sent_at_us = 0;
+        draw_str(0, FONT_H * 5, mesh_manager_ready() ? "hold=send" : "mesh not ready",
+                 COL_WHITE, COL_BLACK);
+    }
+}
+
+// --- Nodes (known-node browser) -----------------------------------------------
+// Same locked/unlocked shape as Send (see s_send_unlocked's comment) with
+// one difference: locked Nodes isn't just inert, it passively auto-rotates
+// through the known-node table on its own every AUTO_ROTATE_MS — a "just
+// let it idle and glance at it" carousel — with "Locked" pinned to the
+// bottom row so it's clear short-press isn't driving that rotation. A long
+// press unlocks manual short-press-to-cycle control and stops the
+// auto-rotation.
+
+static int     s_node_idx         = 0;
+static bool    s_nodes_unlocked   = false;
+static int64_t s_node_last_auto_us = 0;
+#define AUTO_ROTATE_MS 7000   // "five to ten seconds" — splitting the difference
+
+static void render_nodes(void) {
+    draw_title_bar(s_screen_names[SCREEN_NODES]);
+
+    int count = mesh_manager_node_count();
+    if (count <= 0) {
+        draw_str(0, FONT_H * 2, "No nodes heard yet", COL_WHITE, COL_BLACK);
+        return;
+    }
+    if (s_node_idx >= count) s_node_idx = 0;  // table can shrink (Forget elsewhere)
+
+    int64_t now_us = esp_timer_get_time();
+    if (!s_nodes_unlocked) {
+        if (s_node_last_auto_us == 0) s_node_last_auto_us = now_us;  // first render: start the clock, don't jump yet
+        else if ((now_us - s_node_last_auto_us) >= (int64_t)AUTO_ROTATE_MS * 1000) {
+            s_node_idx = (s_node_idx + 1) % count;
+            s_node_last_auto_us = now_us;
+        }
+    }
+
+    mesh_node_info_t info;
+    if (mesh_manager_node_at(s_node_idx, &info) != 0) return;
+
+    char line[48];
+    snprintf(line, sizeof(line), "[%d/%d]", s_node_idx + 1, count);
+    draw_str(0, FONT_H * 2, line, COL_WHITE, COL_BLACK);
+
+    const char *name = info.long_name[0] ? info.long_name : "(unnamed)";
+    draw_str(0, FONT_H * 3, name, COL_WHITE, COL_BLACK);
+
+    snprintf(line, sizeof(line), "%08lX", (unsigned long)info.id);
+    draw_str(0, FONT_H * 4, line, COL_WHITE, COL_BLACK);
+
+    uint32_t age_s = ((uint32_t)(esp_timer_get_time() / 1000) - info.last_ms) / 1000;
+    snprintf(line, sizeof(line), "RSSI:%d  %lus ago", (int)info.rssi, (unsigned long)age_s);
+    draw_str(0, FONT_H * 5, line, COL_WHITE, COL_BLACK);
+
+    if (!s_nodes_unlocked) {
+        draw_str(0, FONT_H * 7, "Locked", COL_WHITE, COL_BLACK);
+    }
+}
+
+// --- Messages (recent received texts) -----------------------------------------
+
+static void render_messages(void) {
+    draw_title_bar(s_screen_names[SCREEN_MESSAGES]);
+
+    if (s_msg_count == 0) {
+        draw_str(0, FONT_H * 2, "No messages yet", COL_WHITE, COL_BLACK);
+        return;
+    }
+    for (int i = 0; i < MSG_ROWS; i++) {
+        if (i >= s_msg_count) break;
+        int src = (s_msg_head + i) % MSG_ROWS;
+        draw_str(0, FONT_H * (2 + i), s_msg_lines[src], COL_WHITE, COL_BLACK);
+    }
+}
+
+// --- Shutdown -------------------------------------------------------------
+// Same locked/unlocked/very-long-press-to-confirm shape as Send (see
+// s_send_unlocked's comment) — a real power-off deserves the same extra
+// intentionality as an actual radio transmission, not just a screen change.
+
+static bool s_shutdown_unlocked = false;
+
+static void render_shutdown(void) {
+    draw_title_bar(s_screen_names[SCREEN_SHUTDOWN]);
+
+    if (!s_shutdown_unlocked) {
+        draw_str(0, FONT_H * 2, "Locked", COL_WHITE, COL_BLACK);
+        draw_str(0, FONT_H * 3, "hold to unlock", COL_WHITE, COL_BLACK);
+        return;
+    }
+
+    draw_str(0, FONT_H * 2, "Shut down device?", COL_WHITE, COL_BLACK);
+    draw_str(0, FONT_H * 3, "hold to confirm", COL_WHITE, COL_BLACK);
+}
+
 // --- Render -----------------------------------------------------------------
 
 static void render(void) {
@@ -175,35 +449,139 @@ static void render(void) {
 
     memset(s_fb, 0, sizeof(s_fb));
 
-    // Row 0: title bar
-    draw_hline(0, COL_WHITE);
-    draw_str(0, 0, "PURR OS v0.12.0", COL_BLACK, COL_WHITE);
-
-    // Row 1: status (LoRa + GPS placeholder)
-    draw_str(0, FONT_H, "LoRa:-- GPS:--", COL_WHITE, COL_BLACK);
-
-    // Row 2: separator
-    draw_hline(FONT_H * 2, COL_WHITE);
-
-    // Rows 3–7: last log lines
-    for (int i = 0; i < LOG_ROWS; i++) {
-        int src = (s_log_head + i) % LOG_ROWS;
-        if (i >= s_log_count) break;
-        draw_str(0, FONT_H * (3 + i), s_log_lines[src], COL_WHITE, COL_BLACK);
+    switch (s_screen) {
+        case SCREEN_LOG:   render_log();   break;
+        case SCREEN_INFO:  render_info();  break;
+        case SCREEN_ABOUT: render_about(); break;
+        case SCREEN_SEND:  render_send();  break;
+        case SCREEN_NODES:    render_nodes();    break;
+        case SCREEN_MESSAGES: render_messages(); break;
+        case SCREEN_SHUTDOWN: render_shutdown(); break;
+        default: break;
     }
 
     disp->push_pixels(0, 0, OLED_W, OLED_H, s_fb);
+}
+
+// --- Input (heltec_button, optional) -----------------------------------------
+// required_catcalls stays CATCALL_FLAG_DISPLAY-only (see every other UI
+// module in this codebase — blackpurr, miniwin, pounce) and this polls
+// defensively instead: no input driver registered just means the OLED is
+// permanently on SCREEN_LOG, not a failed module load.
+//
+// catcall_input_t only reports KEY_DOWN/KEY_UP edges — short-vs-long-press
+// is deliberately not part of that contract (see catcall_input.h), so it's
+// timed here. Three tiers off one button:
+//   short (<LONG_PRESS_MS):      "next" — cycle screens, or cycle the
+//                                 canned-message list when already on Send.
+//   long (LONG_PRESS_MS..VERY):  "home" — jump back to SCREEN_LOG from
+//                                 anywhere, Send included (back out without
+//                                 sending).
+//   very long (>=VERY_LONG_MS):  on Send only, actually transmits the
+//                                 currently-shown message. Deliberately a
+//                                 third, longer-than-long-press tier rather
+//                                 than reusing plain long-press for send —
+//                                 sending a message is the one action here
+//                                 with a real-world side effect, worth extra
+//                                 intentionality a screen change doesn't
+//                                 need. Elsewhere it's just treated as home,
+//                                 same as an ordinary long press.
+// Matches trackball's click keycode (0x0028) so any future second consumer
+// doesn't need to invent another "confirm" code.
+#define BUTTON_KEYCODE     0x0028
+#define LONG_PRESS_MS      600
+#define VERY_LONG_PRESS_MS 3000
+
+static int64_t s_press_start_us = 0;
+static bool    s_press_down     = false;
+
+static void send_current_canned_msg(void) {
+    if (!mesh_manager_ready()) return;
+    if (mesh_manager_send_text(MESH_BROADCAST, 0, s_canned_msgs[s_msg_idx])) {
+        s_sent_at_us = esp_timer_get_time();
+    }
+}
+
+// Returns true if this event should trigger an immediate redraw.
+static bool handle_button_event(const input_event_t *ev) {
+    if (ev->keycode != BUTTON_KEYCODE) return false;
+
+    if (ev->type == INPUT_EVENT_KEY_DOWN) {
+        s_press_start_us = esp_timer_get_time();
+        s_press_down = true;
+        return false;
+    }
+    if (ev->type == INPUT_EVENT_KEY_UP && s_press_down) {
+        s_press_down = false;
+        int64_t held_ms = (esp_timer_get_time() - s_press_start_us) / 1000;
+        if (s_screen == SCREEN_SEND && s_send_unlocked && held_ms >= VERY_LONG_PRESS_MS) {
+            send_current_canned_msg();
+            s_send_unlocked = false;                                // require a fresh hold before the next send
+        } else if (s_screen == SCREEN_SHUTDOWN && s_shutdown_unlocked && held_ms >= VERY_LONG_PRESS_MS) {
+            purr_kernel_shutdown();                                 // does not return
+        } else if (s_screen == SCREEN_SEND && !s_send_unlocked && held_ms >= LONG_PRESS_MS) {
+            s_send_unlocked = true;                                 // long press on locked Send: unlock, don't leave
+        } else if (s_screen == SCREEN_NODES && !s_nodes_unlocked && held_ms >= LONG_PRESS_MS) {
+            s_nodes_unlocked = true;                                // long press on locked Nodes: unlock, stop auto-rotate
+        } else if (s_screen == SCREEN_SHUTDOWN && !s_shutdown_unlocked && held_ms >= LONG_PRESS_MS) {
+            s_shutdown_unlocked = true;                             // long press on locked Shutdown: unlock, don't leave
+        } else if (held_ms >= LONG_PRESS_MS) {
+            s_screen = SCREEN_LOG;                                  // long (or very-long elsewhere): home
+            s_send_unlocked = false;
+            s_nodes_unlocked = false;
+            s_shutdown_unlocked = false;
+            s_node_last_auto_us = 0;   // restart the auto-rotate clock clean next time it's locked again
+        } else if (s_screen == SCREEN_SEND && s_send_unlocked) {
+            s_msg_idx = (s_msg_idx + 1) % (int)CANNED_MSG_COUNT;     // short while unlocked: next message
+        } else if (s_screen == SCREEN_NODES && s_nodes_unlocked && mesh_manager_node_count() > 0) {
+            s_node_idx = (s_node_idx + 1) % mesh_manager_node_count(); // short while unlocked: next node
+        } else {
+            s_screen = (screen_t)((s_screen + 1) % SCREEN_COUNT);    // short elsewhere (incl. locked Send/Nodes/Shutdown): next screen
+            s_send_unlocked = false;
+            s_nodes_unlocked = false;
+            s_shutdown_unlocked = false;
+            s_node_last_auto_us = 0;   // restart the auto-rotate clock clean next time it's locked again
+        }
+        return true;
+    }
+    return false;
+}
+
+static void poll_buttons(bool *dirty) {
+    for (int i = 0; i < purr_kernel_input_count(); i++) {
+        const catcall_input_t *in = purr_kernel_input_at(i);
+        if (!in || !in->poll_event) continue;
+        input_event_t ev;
+        while (in->poll_event(&ev)) {
+            if (handle_button_event(&ev)) *dirty = true;
+        }
+    }
 }
 
 // --- Module lifecycle -------------------------------------------------------
 
 static bool s_running = false;
 
+// Poll cadence is short (button responsiveness) but the OLED bus only gets
+// pushed to on an actual screen change or every REDRAW_PERIOD_TICKS beyond
+// that — otherwise Info's uptime clock would never visibly tick, but every
+// poll iteration hammering push_pixels() would be needless bus traffic for
+// a screen that's genuinely static almost all the time.
+#define BUTTON_POLL_MS       30
+#define REDRAW_PERIOD_TICKS  (500 / BUTTON_POLL_MS)
+
 static void oled_ui_task(void *arg) {
     (void)arg;
+    int ticks_since_redraw = 0;
     while (s_running) {
-        render();
-        vTaskDelay(pdMS_TO_TICKS(500));
+        bool dirty = false;
+        poll_buttons(&dirty);
+        ticks_since_redraw++;
+        if (dirty || ticks_since_redraw >= REDRAW_PERIOD_TICKS) {
+            render();
+            ticks_since_redraw = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(BUTTON_POLL_MS));
     }
     vTaskDelete(NULL);
 }
@@ -218,8 +596,31 @@ static esp_err_t oled_ui_init(void) {
     memset(s_fb, 0, sizeof(s_fb));
     memset(s_log_lines, 0, sizeof(s_log_lines));
     s_log_head = 0; s_log_count = 0;
+    memset(s_msg_lines, 0, sizeof(s_msg_lines));
+    s_msg_head = 0; s_msg_count = 0;
+    s_screen = SCREEN_LOG;
+    s_press_down = false;
+    s_msg_idx = 0;
+    s_sent_at_us = 0;
+    s_send_unlocked = false;
+    s_node_idx = 0;
+    s_nodes_unlocked = false;
+    s_node_last_auto_us = 0;
+    s_shutdown_unlocked = false;
 
-    oled_ui_log("oled_ui ready");
+    // "PURR OS ready - DPn" instead of the generic "oled_ui ready" — this
+    // is the first thing on screen after boot, worth it saying what the
+    // product actually is rather than which internal module drew it.
+    // Derived from PURR_KERNEL_VERSION ("1.0.0-dpN") rather than a second
+    // hardcoded string, so this can't drift from the real build version.
+    {
+        char boot_msg[24];
+        const char *dp = strstr(PURR_KERNEL_VERSION, "-dp");
+        if (dp) snprintf(boot_msg, sizeof(boot_msg), "PURR OS ready - DP%s", dp + 3);
+        else    snprintf(boot_msg, sizeof(boot_msg), "PURR OS ready");
+        oled_ui_log(boot_msg);
+    }
+    mesh_manager_add_rx_callback(mesh_rx_for_oled);
 
     s_running = true;
     xTaskCreate(oled_ui_task, "oled_ui", 4096, NULL, 5, NULL);
@@ -229,6 +630,7 @@ static esp_err_t oled_ui_init(void) {
 }
 
 static void oled_ui_deinit(void) {
+    mesh_manager_remove_rx_callback(mesh_rx_for_oled);
     s_running = false;
     vTaskDelay(pdMS_TO_TICKS(600));
 }

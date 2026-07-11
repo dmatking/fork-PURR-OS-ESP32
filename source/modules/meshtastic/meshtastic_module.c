@@ -41,6 +41,10 @@ static uint32_t     s_node_id = 0;
 static bool          s_ready   = false;
 static mesh_rx_cb_t  s_rx_cbs[MESH_MAX_RX_CB];
 static TaskHandle_t  s_task    = NULL;
+// Which allocator actually backs s_task's stack — decided at init time
+// based on runtime PSRAM availability (see mesh_manager_init()'s comment).
+// mesh_manager_deinit() must delete the task with the matching function.
+static bool          s_task_uses_psram_stack = false;
 static TaskHandle_t  s_persist_task = NULL;
 
 // Outgoing packets are encoded synchronously (cheap: AES-CTR + a small
@@ -439,7 +443,29 @@ int mesh_manager_init(void)
     // (mesh_radio.c/mesh_router.c audited) — safe on a PSRAM-backed stack,
     // matching app_manager.c's launch_native()/launch_meow() pattern. Must
     // be paired with vTaskDeleteWithCaps() in mesh_manager_deinit() below.
-    BaseType_t ret = xTaskCreateWithCaps(mesh_task, "meshtastic", 8192, NULL, 4, &s_task, MALLOC_CAP_SPIRAM);
+    //
+    // PSRAM-less devices (Heltec V3's device.pcat: psram=false, confirmed —
+    // no "esp_psram: Found" line in its boot log, unlike tdeck_plus's)
+    // can't satisfy a MALLOC_CAP_SPIRAM request at all — xTaskCreateWithCaps
+    // would just fail outright. Fall back to a plain internal-RAM stack in
+    // that case; the "NVS-free call graph" auditing above is what actually
+    // makes a PSRAM stack safe, not a requirement — an internal-RAM stack
+    // is safe regardless (if anything, more so, since it doesn't share the
+    // cache-disable hazard PSRAM access has).
+    s_task_uses_psram_stack = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0;
+    // Pinned to core 1 on the plain-stack (PSRAM-less) fallback path only —
+    // matches blackpurr_module.c/kittenui_module.c's own established fix for
+    // the same class of problem: WiFi/BT run on core 0, and a task that
+    // isn't explicitly pinned can land there too and never get meaningfully
+    // scheduled against them. Confirmed live: without this, mesh_task()
+    // never printed even its very first log line (before touching NVS,
+    // radio, anything) on Heltec V3 — the first device this session to
+    // combine WiFi+BT+meshtastic on a non-PSRAM stack; tdeck_plus's
+    // existing PSRAM-caps path has bt=false and has never shown this, so
+    // it's left as-is rather than risking a change to something proven.
+    BaseType_t ret = s_task_uses_psram_stack
+        ? xTaskCreateWithCaps(mesh_task, "meshtastic", 8192, NULL, 4, &s_task, MALLOC_CAP_SPIRAM)
+        : xTaskCreatePinnedToCore(mesh_task, "meshtastic", 8192, NULL, 4, &s_task, 1);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "failed to create mesh task");
         return -1;
@@ -466,9 +492,15 @@ int mesh_manager_init(void)
 void mesh_manager_deinit(void)
 {
     mesh_ble_deinit();
-    // Must match the WithCaps variant used to create this task (PSRAM-backed
-    // stack, see mesh_manager_init() above).
-    if (s_task) { vTaskDeleteWithCaps(s_task); s_task = NULL; }
+    // Must match whichever allocator actually created this task's stack
+    // (see mesh_manager_init()'s comment — PSRAM-less devices fall back to
+    // a plain internal-RAM stack, which vTaskDeleteWithCaps() isn't the
+    // right call for).
+    if (s_task) {
+        if (s_task_uses_psram_stack) vTaskDeleteWithCaps(s_task);
+        else                         vTaskDelete(s_task);
+        s_task = NULL;
+    }
     if (s_persist_task) {
         // Plain internal-RAM task — safe to flush one last time right here
         // (this function runs on the kernel module loader's own task, not

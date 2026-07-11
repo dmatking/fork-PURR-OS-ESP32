@@ -14,18 +14,26 @@ spiffs_offset  = "0x690000"
 [drivers]
 display     = "ssd1306"
 touch       = ""
-input       = ""
-radio       = "sx1262"
+input       = "heltec_button"
+# sx1262_rl (RadioLib-backed), not the hand-rolled sx1262.c — needed for
+# real Meshtastic wire-protocol compatibility (exact chip bring-up
+# sequence, TCXO/DIO2 RF-switch handling), same swap tdeck_plus already
+# made. Both drivers' compiled-in default pins are identical (10/11/9/8/
+# 12/13/14) and already match this board's [pins] below, so this is a
+# drop-in swap — no new pin wiring needed.
+radio       = "sx1262_rl"
 gps         = ""
+battery     = "adc_battery"
 
 [radio]
 wifi        = true
 bt          = true
-lora        = "sx1262"
+lora        = "sx1262_rl"
 
 [modules]
 ui          = "oled_ui"
 app_manager = "app_manager"
+mesh        = "meshtastic"
 
 [ui]
 style       = "full"
@@ -39,12 +47,39 @@ fileman     = false
 calculator  = false
 
 [flash]
-display/ssd1306  = 1
-radio/sx1262     = 2
-oled_ui          = 2
-app_manager      = 2
+display/ssd1306      = 1
+input/heltec_button   = 1
+radio/sx1262_rl       = 2
+oled_ui               = 2
+app_manager           = 2
+meshtastic             = 2
+battery/adc_battery    = 3
 
 [pins]
+# Vext — separate power rail feeding the OLED (and possibly other onboard
+# peripherals on this board); active LOW. Confirmed against Espressif's
+# official arduino-esp32 board variant file for heltec_wifi_lora_32_V3
+# (pins_arduino.h: `static const uint8_t Vext = 36;`). Without this, the
+# OLED's I2C bus is unpowered/floating — writes don't visibly fail (no
+# error surfaced), the screen just never lights up. Driven by
+# purr_device_init() (see purrstrap's _generate_glue()), before any
+# peripheral driver's own init runs.
+vext_pin      = 36
+
+# Battery voltage divider — confirmed against Meshtastic's own
+# heltec_v3/variant.h: BATTERY_PIN=GPIO1 (ADC1_CHANNEL_0), ADC_CTRL=GPIO37
+# must be driven LOW to actually connect the divider to the ADC pin at all
+# (without it, readings are just floating-pin noise, not a hard failure —
+# easy to miss), multiplier = 4.9 * 1.045 (divider ratio * Meshtastic's own
+# undervoltage correction, same reasoning as the T-Deck's own multiplier).
+battery_adc_channel    = 0
+battery_adc_ctrl_pin   = 37
+battery_adc_multiplier = 5.1205
+# ESP32-S3's ADC under-reads badly (near-zero counts) on this board's
+# high-impedance divider at the driver's DB_12 default — Meshtastic's own
+# heltec_v3 variant.h uses DB_2_5 for exactly this reason.
+battery_adc_atten      = "2_5"
+
 display_sda   = 17
 display_scl   = 18
 display_rst   = 21

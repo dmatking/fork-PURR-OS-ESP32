@@ -18,7 +18,7 @@ extern "C" {
 
 // ── Version ───────────────────────────────────────────────────────────────────
 
-#define PURR_KERNEL_VERSION  "1.0.0-dp3"
+#define PURR_KERNEL_VERSION  "1.0.0-dp5"
 #define KITT_VERSION         "1.0.0"
 
 // ── Module loader ─────────────────────────────────────────────────────────────
@@ -132,6 +132,13 @@ int      purr_kernel_battery_percent(void);  // -1 = unknown (no PMIC/fuel gauge
 int      purr_kernel_battery_voltage_mv(void);  // -1 = unknown
 bool     purr_kernel_lora_available(void);
 void     purr_kernel_reboot(void);
+// True power-down, not a reboot — deep sleep with no wake source
+// configured, so the device stays off (minimal draw) until the physical
+// EN/reset button power-cycles it. No PMIC-level power cut on any current
+// board (none of the detected PMICs — IP5306/AXP2101/MAX17048 — have a
+// software power-off path wired up here), so this is the closest thing to
+// "off" available across every device uniformly.
+void     purr_kernel_shutdown(void);
 
 // Called by SD / WiFi / PMIC / LoRa drivers when their state changes
 void     purr_kernel_set_sd_available(bool v);

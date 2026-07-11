@@ -35,7 +35,7 @@ bt          = false
 lora        = "sx1262_rl"
 
 [modules]
-ui          = "cupcake"
+ui          = "miniwin"
 app_manager = "app_manager"
 # mesh — re-enabled for active Meshtastic diagnosis (was off, gated behind
 # CONFIG_PURR_FEATURE_MESHTASTIC, see CoreOS/main/Kconfig.projbuild).
@@ -61,6 +61,7 @@ display/st7789    = 1
 touch/gt911       = 1
 input/trackball   = 1
 cardstack         = 2
+miniwin           = 2
 app_manager       = 2
 radio/sx1262_rl   = 2
 driver_manager    = 2

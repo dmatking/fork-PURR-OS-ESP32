@@ -72,6 +72,7 @@ static size_t      s_chat_loglen[MAX_CHATS];
 static purr_win_t  s_chat_win[MAX_CHATS];
 static purr_wid_t  s_chat_out[MAX_CHATS];
 static purr_wid_t  s_chat_in[MAX_CHATS];
+static int         s_chat_scroll[MAX_CHATS];   // lines skipped from the top of the log — see render_chat_view()
 
 // ── Rooms (channel group chat) ───────────────────────────────────────────────
 
@@ -89,6 +90,7 @@ static size_t        s_room_loglen[MESH_MAX_CHANNELS];
 static purr_win_t   s_room_win[MESH_MAX_CHANNELS];
 static purr_wid_t   s_room_out[MESH_MAX_CHANNELS];
 static purr_wid_t   s_room_in[MESH_MAX_CHANNELS];
+static int          s_room_scroll[MESH_MAX_CHANNELS];   // lines skipped from the top of the log
 
 // ── Add Room window ──────────────────────────────────────────────────────────
 
@@ -264,9 +266,70 @@ static void log_append(char *buf, size_t *len, const char *text) {
     *len += tlen;
 }
 
+// ── Scrolling ────────────────────────────────────────────────────────────────
+// No backend exposes real textarea scrolling through the purr_win_* catcall
+// layer (MiniWin's own engine has the machinery — ui_text_box.c's
+// lines_to_scroll — but miniwin_win.c never wires it up; Cupcake's LVGL
+// textarea has no equivalent hook either). Rather than add new catcall/
+// engine plumbing for one app, this renders a scrolled-down "window" into
+// the log by re-calling the textarea_set() every backend already has,
+// skipping the first N lines of the underlying buffer — works identically
+// everywhere with zero engine changes. The textarea always draws from
+// whatever text it's given starting at its own top, so without this the
+// newest messages (appended at the END of the buffer) are exactly the ones
+// that get clipped off the bottom once a conversation overflows the box.
+#define CHAT_SCROLL_STEP 4   // lines revealed per "v" button press
+
+static int count_lines(const char *s) {
+    int n = 1;
+    for (; *s; s++) if (*s == '\n') n++;
+    return n;
+}
+
+static const char *skip_lines(const char *text, int n) {
+    const char *p = text;
+    while (n > 0 && *p) {
+        if (*p == '\n') n--;
+        p++;
+    }
+    return p;
+}
+
+static void render_chat_view(int idx) {
+    if (!s_chat_win[idx] || !s_chat_out[idx]) return;
+    int max_scroll = count_lines(s_chat_logs[idx]) - 1;
+    if (max_scroll < 0) max_scroll = 0;
+    if (s_chat_scroll[idx] > max_scroll) s_chat_scroll[idx] = max_scroll;
+    purr_win_textarea_set(s_chat_out[idx], skip_lines(s_chat_logs[idx], s_chat_scroll[idx]));
+}
+
+static void render_room_view(int idx) {
+    if (!s_room_win[idx] || !s_room_out[idx] || !s_room_logs[idx]) return;
+    int max_scroll = count_lines(s_room_logs[idx]) - 1;
+    if (max_scroll < 0) max_scroll = 0;
+    if (s_room_scroll[idx] > max_scroll) s_room_scroll[idx] = max_scroll;
+    purr_win_textarea_set(s_room_out[idx], skip_lines(s_room_logs[idx], s_room_scroll[idx]));
+}
+
+static void on_chat_scroll_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e;
+    int idx = (int)(intptr_t)user;
+    if (idx < 0 || idx >= MAX_CHATS) return;
+    s_chat_scroll[idx] += CHAT_SCROLL_STEP;
+    render_chat_view(idx);
+}
+
+static void on_room_scroll_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e;
+    int idx = (int)(intptr_t)user;
+    if (idx < 0 || idx >= MESH_MAX_CHANNELS) return;
+    s_room_scroll[idx] += CHAT_SCROLL_STEP;
+    render_room_view(idx);
+}
+
 static void chat_log_append(int idx, const char *text) {
     log_append(s_chat_logs[idx], &s_chat_loglen[idx], text);
-    if (s_chat_win[idx] && s_chat_out[idx]) purr_win_textarea_set(s_chat_out[idx], s_chat_logs[idx]);
+    render_chat_view(idx);
     char path[64];
     dm_path(s_buddy_ids[idx], path, sizeof(path));
     append_to_sd(path, text);
@@ -275,7 +338,7 @@ static void chat_log_append(int idx, const char *text) {
 static void room_log_append(int idx, const char *text) {
     if (!s_room_logs[idx]) return;
     log_append(s_room_logs[idx], &s_room_loglen[idx], text);
-    if (s_room_win[idx] && s_room_out[idx]) purr_win_textarea_set(s_room_out[idx], s_room_logs[idx]);
+    render_room_view(idx);
     char path[64];
     room_path(idx, path, sizeof(path));
     append_to_sd(path, text);
@@ -315,10 +378,13 @@ static void open_chat(int idx) {
 
     s_chat_win[idx] = purr_win_create(s_buddy_labels[idx]);
     s_chat_out[idx] = purr_win_textarea(s_chat_win[idx], 100, 75);
-    s_chat_in[idx]  = purr_win_textarea(s_chat_win[idx], 80, 10);
+    purr_wid_t row = purr_win_row(s_chat_win[idx], 4);
+    s_chat_in[idx]  = purr_win_textarea(s_chat_win[idx], 60, 10);
     purr_win_button(s_chat_win[idx], "Send", on_chat_send, (void *)(intptr_t)idx);
+    purr_win_button(s_chat_win[idx], "v", on_chat_scroll_click, (void *)(intptr_t)idx);
+    purr_win_layout_end(row);
 
-    purr_win_textarea_set(s_chat_out[idx], s_chat_logs[idx]);
+    render_chat_view(idx);
     purr_win_textarea_focus(s_chat_in[idx]);
     // win_show() first — see terminal.c's terminal_init() for why (Cupcake's
     // win_show() raises the window above whatever kb_show() just showed).
@@ -371,10 +437,13 @@ static void open_room(int idx) {
 
     s_room_win[idx] = purr_win_create(s_room_names[idx]);
     s_room_out[idx] = purr_win_textarea(s_room_win[idx], 100, 75);
-    s_room_in[idx]  = purr_win_textarea(s_room_win[idx], 80, 10);
+    purr_wid_t row = purr_win_row(s_room_win[idx], 4);
+    s_room_in[idx]  = purr_win_textarea(s_room_win[idx], 60, 10);
     purr_win_button(s_room_win[idx], "Send", on_room_send, (void *)(intptr_t)idx);
+    purr_win_button(s_room_win[idx], "v", on_room_scroll_click, (void *)(intptr_t)idx);
+    purr_win_layout_end(row);
 
-    purr_win_textarea_set(s_room_out[idx], s_room_logs[idx]);
+    render_room_view(idx);
     purr_win_textarea_focus(s_room_in[idx]);
     // win_show() first — see terminal.c's terminal_init() for why (Cupcake's
     // win_show() raises the window above whatever kb_show() just showed).

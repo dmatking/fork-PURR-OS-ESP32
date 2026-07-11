@@ -175,6 +175,7 @@ void mw_user_root_message_function(const mw_message_t *message)
 
 #if defined(CONFIG_PURR_MINIWIN_DESKTOP_WINCE) && !defined(CONFIG_PURR_UI_WINCE_SHELL)
 #include "miniwin_wince_desktop.h"
+#include "miniwin_lock.h"
 #endif
 
 // miniwin_task() itself is shared by both desktop styles (icon-grid and
@@ -202,6 +203,10 @@ static void miniwin_task(void *arg)
     // Init trackball cursor overlay
     miniwin_cursor_init(disp_w, disp_h);
 
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+    miniwin_lock_init();
+#endif
+
 #ifndef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
     // Desktop boots empty with app icons (drawn in mw_user_root_paint_function).
     // Launcher now opens on demand: Enter key with nothing focused, or tapping
@@ -218,12 +223,27 @@ static void miniwin_task(void *arg)
     // MiniWin message pump
     TickType_t last_status_redraw = xTaskGetTickCount();
 #ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+#define STATUS_ROTATE_TICKS 4
+    int status_ticks = 0;
     // WinCE desktop draws its own background + taskbar in mw_user_init()'s
-    // window (see miniwin_wince_desktop.c); only the taskbar's RAM readout
-    // needs a periodic repaint, targeting that window instead of root.
-    mw_util_rect_t status_rect = { (int16_t)(disp_w - 50), (int16_t)(disp_h - 20), 48, 18 };
+    // windows (see miniwin_wince_desktop.c); only the taskbar's RAM readout
+    // needs a periodic repaint, targeting that window instead of root. Not
+    // a fixed rect — the taskbar+menu window resizes/repositions itself
+    // live when the Start Menu opens, so wce_status_rect() has to be
+    // recomputed fresh each tick instead of captured once here.
 #else
     mw_util_rect_t status_rect = { 0, 0, (int16_t)disp_w, STATUS_BAR_H };
+#endif
+
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+    // Lock-screen footer's own slow, deliberate refresh — deliberately NOT
+    // the same 1s cadence as the unlocked RAM/battery corner. The lock
+    // overlay otherwise only ever repaints on a real state transition (see
+    // on_lock_transition()); this is the one intentional exception, and
+    // it's scoped to just the footer rect so it can't reintroduce a
+    // whole-screen redraw-every-second.
+#define LOCK_INFO_REFRESH_MS 8000
+    TickType_t last_lock_info = xTaskGetTickCount();
 #endif
 
     while (1) {
@@ -260,11 +280,41 @@ static void miniwin_task(void *arg)
             last_status_redraw = now;
             purr_kernel_ui_breadcrumb("status_repaint");
 #ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
-            mw_paint_window_client_rect(wce_desktop_handle(), &status_rect);
+            miniwin_lock_check_idle();
+            // While locked, the overlay owns the screen and repaints itself
+            // exactly once per real state change — on_lock_transition()'s
+            // immediate mw_paint_window_client() when it fires, and the
+            // dismiss handlers' own repaint on unlock. This periodic tick is
+            // only for the unlocked RAM/battery corner rotation; skip it
+            // entirely while locked instead of redundantly repainting a
+            // static overlay every second.
+            if (!miniwin_lock_is_locked()) {
+                // Taskbar corner rotates RAM/battery every STATUS_ROTATE_TICKS
+                // repaints (~4s at this 1s cadence) — see wce_desktop_toggle_status().
+                if (++status_ticks >= STATUS_ROTATE_TICKS) {
+                    status_ticks = 0;
+                    wce_desktop_toggle_status();
+                }
+                mw_util_rect_t status_rect;
+                wce_status_rect(&status_rect);
+                mw_paint_window_client_rect(wce_taskbar_handle(), &status_rect);
+            }
 #else
             mw_paint_window_client_rect(MW_ROOT_WINDOW_HANDLE, &status_rect);
 #endif
         }
+
+#ifdef CONFIG_PURR_MINIWIN_DESKTOP_WINCE
+        if (miniwin_lock_is_locked() && (now - last_lock_info) >= pdMS_TO_TICKS(LOCK_INFO_REFRESH_MS)) {
+            last_lock_info = now;
+            mw_util_rect_t info_r;
+            wce_lock_info_rect(&info_r);
+            mw_paint_window_client_rect(wce_lock_handle(), &info_r);
+        } else if (!miniwin_lock_is_locked()) {
+            last_lock_info = now;   // stay caught up so the footer doesn't repaint stale on the next lock
+        }
+#endif
+
         purr_kernel_ui_breadcrumb("unlock");
         purr_kernel_ui_unlock();
         purr_kernel_ui_breadcrumb("idle");

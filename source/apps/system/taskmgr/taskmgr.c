@@ -13,6 +13,8 @@
 
 #include <string.h>
 #include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "purr_win.h"
 #include "purr_kernel.h"
 #include "purr_module.h"
@@ -89,13 +91,21 @@ static void on_kill_click(purr_wid_t w, purr_event_t e, void *user) {
     refresh_task_list();
 }
 
+static void on_shutdown_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    if (s_status_lbl) purr_win_label_set(s_status_lbl, "Shutting down...");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    purr_kernel_shutdown();
+}
+
 static int taskmgr_init(void) {
     s_win = purr_win_create("Task Manager");
     s_status_lbl = purr_win_label(s_win, "");
 
     purr_wid_t row = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "Refresh", on_refresh_click, NULL);
-    purr_win_button(s_win, "Kill",    on_kill_click, NULL);
+    purr_win_button(s_win, "Refresh",  on_refresh_click, NULL);
+    purr_win_button(s_win, "Kill",     on_kill_click, NULL);
+    purr_win_button(s_win, "Shutdown", on_shutdown_click, NULL);
     purr_win_layout_end(row);
 
     s_list = purr_win_list(s_win, 100, 90);
