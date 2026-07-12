@@ -28,8 +28,16 @@ static const char *s_scan_paths[] = {
     NULL
 };
 
-static app_entry_t s_apps[MAX_APPS];
-static int         s_app_count = 0;
+// PSRAM-backed instead of a plain static array — app_entry_t's path[256]/
+// error[96]/name[48] make this ~26KB for MAX_APPS=64 entries, which was the
+// single largest static consumer of this board's scarce internal SRAM after
+// Cupcake's display buffers and this file's own static launch stacks (see
+// the memory-pressure investigation this was found in). Pure data, no DMA/
+// ISR access, so PSRAM is safe — allocated once in app_manager_init(),
+// never freed (lives for the device's whole runtime, same as a static would
+// have).
+static app_entry_t *s_apps;
+static int          s_app_count = 0;
 
 // app_manager_on_window_created() (see below) needs to know which app is
 // currently inside its synchronous init() call, to attribute a
@@ -165,7 +173,10 @@ typedef struct {
     bool                     static_stack;
 } app_task_ctx_t;
 
-static app_task_ctx_t s_ctxs[MAX_APPS];
+// Also PSRAM-backed (see s_apps' matching comment) — small per-entry
+// (pointers/handles/one bool), but no reason to leave even ~1KB behind on
+// internal SRAM when it's just as safe in PSRAM.
+static app_task_ctx_t *s_ctxs;
 
 // ── Static stack pool for apps that touch NVS/flash directly ────────────────
 // See launch_native()'s comment for the full story: settings/fileman must run
@@ -407,6 +418,7 @@ static int launch_meow(app_entry_t *app, int idx)
         return -1;
     }
 
+    app->mem_free_at_launch = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     ESP_LOGI(TAG, "launch .meow: %s (%u bytes preloaded to PSRAM)", app->path, (unsigned)nread);
 
     ctx->static_stack = false;
@@ -516,9 +528,10 @@ static int launch_native(app_entry_t *app, int idx)
         return -1;
     }
 
+    app->mem_free_at_launch = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     ESP_LOGI(TAG, "launch .%s: %s (pre-linked module) — free heap: internal=%u largest_internal_block=%u",
              tier_name(app->tier), app->name,
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)app->mem_free_at_launch,
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
     // Stack size: .claw apps get more stack (kernel access). Root-caused live:
@@ -718,6 +731,20 @@ void app_manager_stop(int idx)
         ctx->mod->deinit();
     }
 
+    // Fallback window cleanup: a native app's own deinit() (e.g.
+    // taskmgr_deinit()) already destroys app->window itself, in which case
+    // this is a harmless no-op (get_win() on an already-freed handle
+    // returns NULL, so the backend's win_destroy() just no-ops). But
+    // lua_runtime's deinit() is shared across every .meow/.hiss/.kitten app
+    // and has no per-app window to destroy — without this, closing a Lua
+    // app via Back left its window orphaned on screen forever. This is the
+    // one place that's guaranteed to run after every app's task has fully
+    // stopped, regardless of tier, so it's the right spot for the net.
+    if (app->window) {
+        purr_win_destroy(app->window);
+        app->window = 0;
+    }
+
     if (hung) purr_crash_guard_mark_hang(app->name, "TASK UNRESPONSIVE");
     else      purr_crash_guard_mark_stop(app->name, /*ok=*/true, NULL);
 
@@ -837,10 +864,60 @@ static void autorun_kitten(void)
     }
 }
 
+// Approximates "which running app is costing the most memory" without real
+// per-task heap accounting (nothing in ESP-IDF tracks allocations by owner
+// out of the box, and wrapping every malloc/free to add that was judged not
+// worth the risk/complexity here) — each app's mem_free_at_launch (stamped
+// in launch_native()/launch_meow() above) is how much internal SRAM was
+// free the moment it started; whichever running app's launch-time reading
+// minus the CURRENT reading is largest has coincided with the biggest drop
+// since it started, making it the prime suspect. Registered with
+// purr_kernel_set_mem_pressure_cb() below — see that function's doc comment
+// in purr_kernel.h for why this is a callback rather than purr_kernel.c
+// calling app_manager directly (layering: kernel core doesn't know
+// app_manager exists, same reasoning as the window-created-cb hook).
+static bool app_manager_kill_worst_offender(void)
+{
+    uint32_t now_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    int     worst_idx  = -1;
+    int32_t worst_drop = 0;   // only ever kill an app that looks *worse* than at its own launch
+
+    for (int i = 0; i < s_app_count; i++) {
+        if (s_apps[i].state != APP_STATE_RUNNING) continue;
+        int32_t drop = (int32_t)s_apps[i].mem_free_at_launch - (int32_t)now_free;
+        if (drop > worst_drop) {
+            worst_drop = drop;
+            worst_idx  = i;
+        }
+    }
+
+    // Nothing running, or every running app's launch-time reading is no
+    // better than now (the pressure isn't attributable to any of them —
+    // could be a kernel/driver-level leak instead) — correctly leave this
+    // to the watchdog's next-tier escalation (a full restart) rather than
+    // killing an app that's probably innocent.
+    if (worst_idx < 0) return false;
+
+    ESP_LOGW(TAG, "memory watchdog: stopping '%s' (~%d bytes consumed since launch, worst of %d running)",
+             s_apps[worst_idx].name, (int)worst_drop, s_app_count);
+    purr_kernel_notify("App stopped", s_apps[worst_idx].name, "memory watchdog");
+    app_manager_stop(worst_idx);
+    return true;
+}
+
 int app_manager_init(void)
 {
-    memset(s_ctxs, 0, sizeof(s_ctxs));
+    s_apps = heap_caps_malloc(sizeof(app_entry_t) * MAX_APPS, MALLOC_CAP_SPIRAM);
+    s_ctxs = heap_caps_malloc(sizeof(app_task_ctx_t) * MAX_APPS, MALLOC_CAP_SPIRAM);
+    if (!s_apps || !s_ctxs) {
+        ESP_LOGE(TAG, "PSRAM alloc failed for s_apps/s_ctxs (%u + %u bytes)",
+                 (unsigned)(sizeof(app_entry_t) * MAX_APPS), (unsigned)(sizeof(app_task_ctx_t) * MAX_APPS));
+        return -1;
+    }
+    memset(s_apps, 0, sizeof(app_entry_t) * MAX_APPS);
+    memset(s_ctxs, 0, sizeof(app_task_ctx_t) * MAX_APPS);
     purr_kernel_set_window_created_cb(app_manager_on_window_created);
+    purr_kernel_set_mem_pressure_cb(app_manager_kill_worst_offender);
     app_manager_scan();
     autorun_kitten();
     ESP_LOGI(TAG, "init complete");
@@ -864,7 +941,7 @@ PURR_MODULE_REGISTER(app_manager) = {
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_SYSTEM,
     .name              = "app_manager",
-    .version           = "1.0.0",
+    .version           = "1.0.1",
     .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = 0,

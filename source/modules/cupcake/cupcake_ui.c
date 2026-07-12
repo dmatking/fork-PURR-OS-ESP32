@@ -1,15 +1,26 @@
-// cupcake_ui.c — Android 1.5 ("Cupcake")-style launcher: a wallpaper-only
-// home screen with a bottom dock (favorites + All Apps), and a full-screen
-// all-apps drawer opened from the dock's center button. No pinned icon grid
-// on the home screen itself — that's deliberate, so a wallpaper stays fully
-// visible instead of being covered by shortcuts.
+// cupcake_ui.c — "Lollipop": an Android 5-7 era companion UI built on top of
+// Cupcake's existing status bar, HAL, and window management. Two separate
+// bottom rows, not one: a persistent 3-button nav bar (Back/Home/Recents,
+// see build_lp_navbar()) pinned to lv_layer_top() so it renders over every
+// app window, not just the home screen — and, sitting just above it, a
+// home-screen-only favorites row (2 apps, an all-apps launcher button, 2
+// more apps — see build_lp_home_dock()) that disappears along with the rest
+// of the home screen once an app opens, same as Cupcake's old dock did.
+// Home leaves the foreground app running and hidden; Back closes it
+// outright (no in-app back-navigation stack exists to unwind first, so
+// closing is the only thing left for it to do). Recents opens a staggered
+// card-carousel overview of running apps (see lp_recents_open() near the
+// Running Apps panel) — Back/Home both dismiss it first if it's open,
+// before falling through to their normal foreground-app behavior.
 //
 // Status bar + drag-down notification panel below is forked near-verbatim
 // from cardstack_ui.c (renamed with a ck_/CK_ prefix) — confirmed while
 // planning this that it depends only on LVGL, lv_layer_top(), and generic
 // purr_kernel_*() accessors, nothing card-stack-specific. Not ported: the
 // home card's baked "PURR OS DP1" strip — this launcher's own home screen
-// doesn't need a redundant one.
+// doesn't need a redundant one. Kept as-is for Lollipop per explicit
+// instruction — the status bar carries over unchanged, only the bottom
+// navigation is new.
 
 #include "cupcake.h"
 #include "../../kernel/core/purr_kernel.h"
@@ -25,28 +36,32 @@
 
 static const char *TAG = "cupcake_ui";
 
-// CUPCAKE_STATUS_PEEK_H is defined in cupcake.h — cupcake_win.c needs it too,
-// to keep app windows (and their close buttons) clear of the status hotzone.
+// CUPCAKE_STATUS_PEEK_H and CUPCAKE_NAVBAR_H are defined in cupcake.h —
+// cupcake_win.c needs both too, to keep app windows (and their close
+// buttons) clear of the status hotzone and nav bar.
 #define CUPCAKE_STATUS_EXPANDED_H 220
-#define MAX_DOCK_FAV      4
-#define MAX_DRAWER_TILES  64
-#define DOCK_H            56
-// Sized for exactly 2 columns x 2 visible rows on a 320x(240-22) screen —
-// drawer width 320 / 2 cols with SPACE_EVENLY gaps, and page_h (~186,
-// h - 32px title bar) / 2 rows likewise — the rest of the app list scrolls
-// vertically below the first 2x2 page instead of horizontally paging.
-#define TILE_W            136
-#define TILE_H            80
+#define MAX_LAUNCHER_TILES 64
+// Icon-only, no name label underneath — "small squares", deliberately
+// smaller than Cupcake's old 136x80 icon+label drawer tiles they replace.
+#define LP_LAUNCHER_TILE   64
+#define LP_NAVBTN_SIZE     32
+
+// Home-screen-only favorites row (2 apps, apps-launcher button, 2 more apps)
+// pinned directly above the persistent nav bar — NOT part of the nav bar
+// itself, so it's covered/hidden along with the rest of the home screen the
+// moment an app opens, same as Cupcake's old dock was.
+#define MAX_HOME_DOCK_FAV       4
+#define LP_HOME_DOCK_H          48
+#define LP_HOME_DOCK_FAV_SIZE   36
+#define LP_HOME_DOCK_CENTER_SIZE 44
 
 // All bundled icon assets are 48x48 source images — these are the actual
 // on-screen sizes we want, applied via lv_img_set_zoom() (256 = 100%),
 // since the container size alone doesn't rescale an lv_img's source bitmap.
-#define ICON_PX_TILE 28
-#define ICON_PX_DOCK 24
-#define ICON_PX_DOCK_CENTER 28
+#define ICON_PX_LAUNCHER    40
+#define ICON_PX_HOME_DOCK   24
+#define ICON_PX_HOME_DOCK_CENTER 28
 #define ICON_ZOOM(px) (uint16_t)(((px) * 256) / 48)
-#define DOCK_FAV_BTN_SIZE    36
-#define DOCK_CENTER_BTN_SIZE 44
 
 // ── Icon lookup ──────────────────────────────────────────────────────────────
 
@@ -86,6 +101,77 @@ static lv_color_t cupcake_tint_color(const char *name, uint8_t base)
 
 // ── Tile builders ────────────────────────────────────────────────────────────
 
+// Which app_manager index is currently in the foreground (its window shown,
+// not minimized) — -1 means the home screen is showing, nothing open. No
+// public API exists to ask a window's own visibility state (purr_win.h has
+// no purr_win_is_visible()), so this is tracked locally here instead,
+// updated at every place an app window gets shown/restored (launch_or_
+// restore() below, and ck_taskmgr_open_cb()) and cleared by the nav bar's
+// Home/Back handlers when they hide or close it. Used by those same
+// handlers to know which app "leave without closing" or "close" applies to.
+static int s_lp_foreground_idx = -1;
+
+// ── Nav bar auto-hide ────────────────────────────────────────────────────────
+// Visible permanently on the home screen; auto-hides the instant an app
+// opens, reachable again only via an upward swipe on the (always-present,
+// invisible) hotzone at the bottom edge — see build_lp_navbar_hotzone().
+// A swipe-revealed bar re-hides itself after LP_NAVBAR_REVEAL_MS if left
+// alone; deadline of 0 means "no pending auto-hide" (home screen, or an
+// app just opened and hasn't been swiped-up on yet).
+#define LP_NAVBAR_REVEAL_MS 5000
+static lv_obj_t *s_lp_navbar;
+static uint64_t  s_lp_navbar_hide_deadline_ms = 0;
+
+// temporary=true (swipe-up reveal while in an app) arms the auto-hide
+// countdown; temporary=false (returning to the home screen) leaves the bar
+// up indefinitely instead.
+static void lp_show_navbar(bool temporary)
+{
+    if (s_lp_navbar) lv_obj_clear_flag(s_lp_navbar, LV_OBJ_FLAG_HIDDEN);
+    s_lp_navbar_hide_deadline_ms = temporary ? (purr_kernel_uptime_ms() + LP_NAVBAR_REVEAL_MS) : 0;
+}
+
+static void lp_hide_navbar(void)
+{
+    // Settings' "keep bars visible" toggle — see purr_kernel.h's doc
+    // comment. Guarding here (rather than at every call site) covers the
+    // deadline-tick auto-hide AND every explicit hide-on-app-open call
+    // uniformly, and self-heals: flipping the toggle on while an app is
+    // already foregrounded just means the next hide attempt silently no-ops
+    // instead of requiring an extra "re-show now" path.
+    if (purr_kernel_navbar_always_visible()) { lp_show_navbar(false); return; }
+    if (s_lp_navbar) lv_obj_add_flag(s_lp_navbar, LV_OBJ_FLAG_HIDDEN);
+    s_lp_navbar_hide_deadline_ms = 0;
+}
+
+// ── Status bar overlay ───────────────────────────────────────────────────────
+// Same permanent-on-home-screen / auto-hide-while-in-an-app treatment as the
+// nav bar above, but the reveal gesture is NOT a new swipe zone — it's
+// whichever existing top hotzone the user is already touching to open the
+// Notifications/Running-Apps drag-down panel (see ck_hotzone_*_pressed_cb()
+// and ck_panel_drag_event_cb(), further down). Deliberately NOT reusing the
+// nav bar's "own invisible hotzone, always present" trick here: app windows
+// already start below CUPCAKE_STATUS_PEEK_H specifically so their title-bar
+// close/minimize buttons stay clear of the status hotzones' touch region
+// (see cupcake_win.c's mw_win_create()-equivalent comment) — moving that
+// edge up to reclaim the full pixel height would put those buttons right
+// back under a touch zone that has to stay live to catch a reveal swipe,
+// breaking them. Piggybacking on the panel-open gesture instead means the
+// status icons only ever need to become visible when that same hotzone
+// region is already being interacted with for an unrelated reason, so
+// nothing about window layout has to change.
+#define LP_STATUS_REVEAL_MS 5000
+static uint64_t s_lp_status_hide_deadline_ms = 0;
+static void lp_show_status(bool temporary);
+static void lp_hide_status(void);
+
+// Recents card carousel — implementation lives further down (near the
+// Running Apps panel it shares data/tint logic with), forward-declared here
+// so the nav bar's Back/Home/Recents handlers just below can reach it.
+static void lp_recents_open(void);
+static void lp_recents_close(void);
+static bool lp_recents_is_open(void);
+
 // If the app is already running (and has a tracked window — see
 // app_manager.c's window-created hook), tapping its icon again should
 // restore that window instead of doing nothing: app_manager_launch_idx()
@@ -99,46 +185,87 @@ static void launch_or_restore(int idx)
     } else {
         app_manager_launch_idx(idx);
     }
+    s_lp_foreground_idx = idx;
+    lp_hide_navbar();
+    lp_hide_status();
 }
 
-static void home_tile_click_cb(lv_event_t *e)
+static lv_obj_t *s_lp_launcher;
+
+// Closes the launcher first, then launches/restores — matches the old
+// drawer's behavior (tile tap dismisses the overlay, not just opens the app).
+static void lp_launcher_tile_click_cb(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    ESP_LOGI(TAG, "launching app idx=%d", idx);
+    ESP_LOGI(TAG, "launching app idx=%d (from Lollipop launcher)", idx);
+    if (s_lp_launcher) lv_obj_add_flag(s_lp_launcher, LV_OBJ_FLAG_HIDDEN);
     launch_or_restore(idx);
 }
 
-static lv_obj_t *s_drawer;
-
-static void drawer_tile_click_cb(lv_event_t *e)
-{
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    ESP_LOGI(TAG, "launching app idx=%d (from drawer)", idx);
-    if (s_drawer) lv_obj_add_flag(s_drawer, LV_OBJ_FLAG_HIDDEN);
-    launch_or_restore(idx);
-}
-
-static void drawer_close_click_cb(lv_event_t *e)
+static void lp_launcher_close_click_cb(lv_event_t *e)
 {
     (void)e;
-    if (s_drawer) lv_obj_add_flag(s_drawer, LV_OBJ_FLAG_HIDDEN);
+    if (s_lp_launcher) lv_obj_add_flag(s_lp_launcher, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void dock_center_click_cb(lv_event_t *e)
+// Opens the small-square all-apps launcher — the button that triggers this
+// used to live in the nav bar, now lives in the home screen's own dock row
+// instead (see build_lp_home_dock()), but the launcher itself is unchanged.
+static void lp_apps_launcher_click_cb(lv_event_t *e)
 {
     (void)e;
-    if (s_drawer) {
-        lv_obj_clear_flag(s_drawer, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(s_drawer);
+    if (s_lp_launcher) {
+        lv_obj_clear_flag(s_lp_launcher, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_lp_launcher);
     }
 }
 
-// Icon + name label, used by the drawer's scrollable grid.
-static void build_app_tile(lv_obj_t *parent, int app_idx, const char *name, lv_event_cb_t click_cb)
+// Home: "leave the app without closing it" — hides the foreground app's
+// window (same as its own Minimize button) and returns to the home screen.
+// s_lp_foreground_idx < 0 means the home screen is already showing; no-op.
+static void lp_navbar_home_click_cb(lv_event_t *e)
+{
+    (void)e;
+    if (lp_recents_is_open()) lp_recents_close();
+    if (s_lp_foreground_idx < 0) return;
+    const app_entry_t *app = app_manager_get(s_lp_foreground_idx);
+    if (app && app->window) purr_win_hide(app->window);
+    s_lp_foreground_idx = -1;
+    lp_show_navbar(false);
+    lp_show_status(false);
+}
+
+// Back: no in-app back-navigation stack exists yet, so the only thing left
+// to do is close the foreground app outright (distinct from Home, which
+// only hides it) — app_manager_stop() is the same call the Running Apps
+// panel's own Kill button already uses. No-op on the home screen already.
+static void lp_navbar_back_click_cb(lv_event_t *e)
+{
+    (void)e;
+    // Recents counts as "a screen" for Back to dismiss first, same as
+    // Android's own back stack would — matches Home's identical guard above.
+    if (lp_recents_is_open()) { lp_recents_close(); return; }
+    if (s_lp_foreground_idx < 0) return;
+    app_manager_stop(s_lp_foreground_idx);
+    s_lp_foreground_idx = -1;
+    lp_show_navbar(false);
+    lp_show_status(false);
+}
+
+static void lp_navbar_recents_click_cb(lv_event_t *e)
+{
+    (void)e;
+    lp_recents_open();
+}
+
+// Icon-only square tile, used by the Lollipop launcher's scrollable grid —
+// deliberately no name label (see LP_LAUNCHER_TILE's comment: "small
+// squares", the thing distinguishing this from Cupcake's old drawer tiles).
+static void build_lp_launcher_tile(lv_obj_t *parent, int app_idx, const char *name, lv_event_cb_t click_cb)
 {
     lv_obj_t *tile = lv_obj_create(parent);
     lv_obj_remove_style_all(tile);
-    lv_obj_set_size(tile, TILE_W, TILE_H);
+    lv_obj_set_size(tile, LP_LAUNCHER_TILE, LP_LAUNCHER_TILE);
     lv_obj_set_style_radius(tile, 10, 0);
     lv_obj_set_style_bg_color(tile, cupcake_tint_color(name, 0x18), 0);
     lv_obj_set_style_bg_opa(tile, LV_OPA_60, 0); // lets a wallpaper show through behind icons
@@ -148,25 +275,40 @@ static void build_app_tile(lv_obj_t *parent, int app_idx, const char *name, lv_e
 
     lv_obj_t *icon = lv_img_create(tile);
     lv_img_set_src(icon, icon_for_app(name));
-    lv_img_set_zoom(icon, ICON_ZOOM(ICON_PX_TILE));
-    lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 4);
+    lv_img_set_zoom(icon, ICON_ZOOM(ICON_PX_LAUNCHER));
+    lv_obj_center(icon);
     lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *lbl = lv_label_create(tile);
-    lv_label_set_text(lbl, name);
-    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(lbl, TILE_W);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(lbl, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 }
 
-// Icon-only round button, used by the dock (favorites + the center
-// all-apps launcher) — too short for a name label underneath.
-static lv_obj_t *build_icon_button(lv_obj_t *parent, int app_idx, const lv_img_dsc_t *icon,
-                                    lv_event_cb_t click_cb, lv_color_t bg,
-                                    lv_coord_t size, lv_coord_t icon_px)
+// Round button with a centered LVGL built-in symbol glyph (LV_SYMBOL_*),
+// used by the nav bar's three buttons — no custom bitmap icon assets exist
+// yet for "back"/"apps grid"/"recents" concepts, unlike actual app icons.
+static lv_obj_t *build_lp_navbtn(lv_obj_t *parent, const char *symbol, lv_event_cb_t click_cb)
+{
+    lv_obj_t *btn = lv_obj_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, LP_NAVBTN_SIZE, LP_NAVBTN_SIZE);
+    lv_obj_set_style_radius(btn, (lv_coord_t)(LP_NAVBTN_SIZE / 2), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_make(0x30, 0x30, 0x30), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_70, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, click_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, symbol);
+    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    lv_obj_center(lbl);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    return btn;
+}
+
+// Round button with a centered app-icon bitmap — used by the home dock row
+// (favorites + the all-apps launcher button), which needs real app icons
+// rather than the nav bar's LVGL symbol glyphs.
+static lv_obj_t *build_lp_dock_icon(lv_obj_t *parent, int app_idx, const lv_img_dsc_t *icon,
+                                     lv_event_cb_t click_cb, lv_color_t bg,
+                                     lv_coord_t size, lv_coord_t icon_px)
 {
     lv_obj_t *btn = lv_obj_create(parent);
     lv_obj_remove_style_all(btn);
@@ -184,6 +326,13 @@ static lv_obj_t *build_icon_button(lv_obj_t *parent, int app_idx, const lv_img_d
     lv_obj_center(img);
     lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
     return btn;
+}
+
+static void lp_dock_fav_click_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    ESP_LOGI(TAG, "launching app idx=%d (from home dock)", idx);
+    launch_or_restore(idx);
 }
 
 // ── Wallpaper ────────────────────────────────────────────────────────────────
@@ -220,6 +369,14 @@ static bool load_wallpaper_from_sd(const char *path, lv_img_dsc_t *out, uint16_t
     return true;
 }
 
+// Baked into SPIFFS at build time — purrstrap.py's build_flash_image()
+// stages every source/assets/wallpapers/*.rgb565 file into /flash/
+// wallpapers/ unconditionally (not gated by [flash] like modules/apps,
+// since it's a plain asset, not a module). load_wallpaper_from_sd() is
+// generic fopen/fread underneath, so it works unmodified against this
+// SPIFFS path exactly the same way it does against an SD card one.
+#define LP_BUNDLED_WALLPAPER_PATH "/flash/wallpapers/wallpaper.rgb565"
+
 static bool load_wallpaper_choice(lv_img_dsc_t *out, uint16_t w, uint16_t h)
 {
     char path[WALLPAPER_PATH_LEN] = "default";
@@ -229,44 +386,65 @@ static bool load_wallpaper_choice(lv_img_dsc_t *out, uint16_t w, uint16_t h)
         nvs_get_str(hnd, "wallpaper", path, &len);
         nvs_close(hnd);
     }
-    if (strcmp(path, "default") == 0) return false;
+    if (strcmp(path, "default") == 0) {
+        // Try the bundled wallpaper first — falls through to the plain
+        // gradient (via this returning false) if it's missing, e.g. a
+        // build with no wallpaper.rgb565 present at all.
+        return load_wallpaper_from_sd(LP_BUNDLED_WALLPAPER_PATH, out, w, h);
+    }
     return load_wallpaper_from_sd(path, out, w, h);
 }
 
-// ── Home screen + dock ───────────────────────────────────────────────────────
+// ── Home screen ──────────────────────────────────────────────────────────────
+// No dock anymore — shortcuts live in the Lollipop nav bar's launcher now
+// (see below), so the home screen is wallpaper-only.
 
 static lv_obj_t *s_home_screen;
-static lv_obj_t *s_dock;
 
-static void build_dock(lv_obj_t *parent, uint16_t w)
+// Favorites row pinned to the bottom of the home screen's own content area
+// (already clear of both the status bar and nav bar — see cupcake_ui_init()'s
+// body_h) — 2 apps, the all-apps launcher button, 2 more apps, "first N in
+// registry order" same as Cupcake's old dock (no separate favorites concept
+// exists yet). A child of s_home_screen, NOT lv_layer_top() like the nav
+// bar — this row is meant to disappear along with the rest of the home
+// screen the instant an app opens, unlike the persistent nav bar below it.
+static void build_lp_home_dock(lv_obj_t *parent, uint16_t w)
 {
-    s_dock = lv_obj_create(parent);
-    lv_obj_remove_style_all(s_dock);
-    lv_obj_set_size(s_dock, w, DOCK_H);
-    lv_obj_align(s_dock, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(s_dock, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s_dock, LV_OPA_50, 0);
-    lv_obj_clear_flag(s_dock, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_layout(s_dock, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(s_dock, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(s_dock, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *dock = lv_obj_create(parent);
+    lv_obj_remove_style_all(dock);
+    lv_obj_set_size(dock, w, LP_HOME_DOCK_H);
+    // -CUPCAKE_NAVBAR_H, not 0 — the home screen is genuinely full height
+    // now (cupcake_ui_init() no longer reserves nav bar space for it), so a
+    // plain bottom-align here would land this row directly on top of the
+    // nav bar's own footprint instead of sitting above it as intended.
+    lv_obj_align(dock, LV_ALIGN_BOTTOM_MID, 0, -CUPCAKE_NAVBAR_H);
+    lv_obj_set_style_bg_color(dock, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(dock, LV_OPA_50, 0);
+    lv_obj_clear_flag(dock, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_layout(dock, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(dock, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(dock, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // Favorites grouped together on the left, All Apps button on its own at
-    // the right — "first N apps in registry order" (no separate favorites
-    // concept yet). The dock is the only place shortcuts live now — the home
-    // screen itself stays clear so a wallpaper isn't covered by an icon grid.
     int n = app_manager_count();
-    int fav_n = (n < MAX_DOCK_FAV) ? n : MAX_DOCK_FAV;
+    int fav_n = (n < MAX_HOME_DOCK_FAV) ? n : MAX_HOME_DOCK_FAV;
+    int left_n = fav_n / 2;   // 2 of the 4 land left of center, the rest right
 
-    for (int i = 0; i < fav_n; i++) {
+    for (int i = 0; i < left_n; i++) {
         const app_entry_t *app = app_manager_get(i);
         if (!app) continue;
-        build_icon_button(s_dock, i, icon_for_app(app->name), home_tile_click_cb,
-                           cupcake_tint_color(app->name, 0x18), DOCK_FAV_BTN_SIZE, ICON_PX_DOCK);
+        build_lp_dock_icon(dock, i, icon_for_app(app->name), lp_dock_fav_click_cb,
+                            cupcake_tint_color(app->name, 0x18), LP_HOME_DOCK_FAV_SIZE, ICON_PX_HOME_DOCK);
     }
 
-    build_icon_button(s_dock, -1, BP_ICON_ALL_APPS_48, dock_center_click_cb,
-                       lv_color_make(0x40, 0x40, 0x40), DOCK_CENTER_BTN_SIZE, ICON_PX_DOCK_CENTER);
+    build_lp_dock_icon(dock, -1, BP_ICON_ALL_APPS_48, lp_apps_launcher_click_cb,
+                        lv_color_make(0x40, 0x40, 0x40), LP_HOME_DOCK_CENTER_SIZE, ICON_PX_HOME_DOCK_CENTER);
+
+    for (int i = left_n; i < fav_n; i++) {
+        const app_entry_t *app = app_manager_get(i);
+        if (!app) continue;
+        build_lp_dock_icon(dock, i, icon_for_app(app->name), lp_dock_fav_click_cb,
+                            cupcake_tint_color(app->name, 0x18), LP_HOME_DOCK_FAV_SIZE, ICON_PX_HOME_DOCK);
+    }
 }
 
 static void build_home_screen(uint16_t w, uint16_t h)
@@ -274,7 +452,7 @@ static void build_home_screen(uint16_t w, uint16_t h)
     s_home_screen = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(s_home_screen);
     lv_obj_set_size(s_home_screen, w, h);
-    lv_obj_set_pos(s_home_screen, 0, CUPCAKE_STATUS_PEEK_H);
+    lv_obj_set_pos(s_home_screen, 0, 0);
     lv_obj_clear_flag(s_home_screen, LV_OBJ_FLAG_SCROLLABLE);
 
     if (load_wallpaper_choice(&s_wallpaper_img, w, h)) {
@@ -289,27 +467,140 @@ static void build_home_screen(uint16_t w, uint16_t h)
         lv_obj_set_style_bg_opa(s_home_screen, LV_OPA_COVER, 0);
     }
 
-    // No pinned icon grid on the home screen — shortcuts live in the dock
-    // only now, so a wallpaper stays fully visible above it.
-    build_dock(s_home_screen, w);
+    build_lp_home_dock(s_home_screen, w);
 }
 
-// ── App drawer (full-screen overlay) ────────────────────────────────────────
+// ── Lollipop nav bar (Back / Home / Recents) ────────────────────────────────
+// Lives on lv_layer_top(), same trick the status bar above already uses —
+// LVGL always hit-tests/paints that layer above lv_scr_act()'s whole tree
+// regardless of z-order, which is what makes this bar persistent over every
+// app window instead of only showing on the home screen like the old dock.
+// No favorites/running-app icons in the bar itself yet, on request — just
+// the three buttons. Back and Recents are stubs (see their click handlers).
 
-static lv_obj_t *s_drawer_grid;
-
-static void build_drawer(uint16_t w, uint16_t h)
+// Home's icon is a plain filled circle, not a symbol glyph — matches real
+// Android 5.0's minimalist 3-button nav (Home was literally just a circle,
+// not a house), and distinguishes it from Back/Recents' text-glyph buttons.
+static lv_obj_t *build_lp_home_navbtn(lv_obj_t *parent, lv_event_cb_t click_cb)
 {
-    s_drawer = lv_obj_create(lv_scr_act());
-    lv_obj_remove_style_all(s_drawer);
-    lv_obj_set_size(s_drawer, w, h);
-    lv_obj_set_pos(s_drawer, 0, CUPCAKE_STATUS_PEEK_H);
-    lv_obj_set_style_bg_color(s_drawer, lv_color_make(0x18, 0x18, 0x18), 0);
-    lv_obj_set_style_bg_opa(s_drawer, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(s_drawer, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_drawer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *btn = lv_obj_create(parent);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, LP_NAVBTN_SIZE, LP_NAVBTN_SIZE);
+    lv_obj_set_style_radius(btn, (lv_coord_t)(LP_NAVBTN_SIZE / 2), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_make(0x30, 0x30, 0x30), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_70, 0);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, click_cb, LV_EVENT_CLICKED, NULL);
 
-    lv_obj_t *title_bar = lv_obj_create(s_drawer);
+    lv_coord_t dot = (lv_coord_t)(LP_NAVBTN_SIZE / 2);
+    lv_obj_t *circle = lv_obj_create(btn);
+    lv_obj_remove_style_all(circle);
+    lv_obj_set_size(circle, dot, dot);
+    lv_obj_set_style_radius(circle, (lv_coord_t)(dot / 2), 0);
+    lv_obj_set_style_bg_color(circle, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(circle, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(circle, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(circle, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_center(circle);
+    return btn;
+}
+
+// Invisible strip at the very bottom edge, created BEFORE the bar (so it
+// sits behind it in layer_top's z-order) and never hidden — the bar's
+// buttons intercept touches normally while it's shown, but once
+// lp_hide_navbar() hides the bar, this is the only thing left in that
+// screen region to catch the upward swipe that brings it back. Only counts
+// as a reveal swipe while an app is actually in the foreground; on the home
+// screen the bar is already permanently visible, nothing to reveal.
+//
+// Deliberately much shorter than CUPCAKE_NAVBAR_H, not the bar's full
+// height — confirmed live: a full-height always-clickable hotzone became an
+// "invisible wall" once the bar hid, silently swallowing every tap an app
+// made in that screen region (LVGL still gave it hit-test priority even
+// though it renders nothing) instead of passing them through to the app
+// underneath. A swipe only needs to *start* inside this strip — LVGL keeps
+// tracking PRESSED/RELEASED on whichever object the touch began on even as
+// the finger moves well outside its bounds — so shrinking it doesn't affect
+// swipe detection at all, only how much of the screen it can block.
+#define LP_NAVBAR_HOTZONE_H 10
+static lv_coord_t s_lp_swipe_press_y0;
+
+static void lp_navbar_hotzone_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_indev_get_act();
+    if (!indev) return;
+
+    if (code == LV_EVENT_PRESSED) {
+        lv_point_t pt;
+        lv_indev_get_point(indev, &pt);
+        s_lp_swipe_press_y0 = pt.y;
+    } else if (code == LV_EVENT_RELEASED) {
+        lv_point_t pt;
+        lv_indev_get_point(indev, &pt);
+        lv_coord_t dy = (lv_coord_t)(s_lp_swipe_press_y0 - pt.y); // positive = moved up
+        if (dy >= 12 && s_lp_foreground_idx >= 0) lp_show_navbar(true);
+    }
+}
+
+static void build_lp_navbar_hotzone(uint16_t w)
+{
+    lv_obj_t *zone = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(zone);
+    lv_obj_set_size(zone, w, LP_NAVBAR_HOTZONE_H);
+    lv_obj_align(zone, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_opa(zone, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(zone, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(zone, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(zone, lp_navbar_hotzone_event_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(zone, lp_navbar_hotzone_event_cb, LV_EVENT_RELEASED, NULL);
+}
+
+static void build_lp_navbar(uint16_t w)
+{
+    // Must be created first — see build_lp_navbar_hotzone()'s comment for
+    // why the z-order (hotzone behind, bar in front) matters here.
+    build_lp_navbar_hotzone(w);
+
+    s_lp_navbar = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_lp_navbar);
+    lv_obj_set_size(s_lp_navbar, w, CUPCAKE_NAVBAR_H);
+    lv_obj_align(s_lp_navbar, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(s_lp_navbar, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_lp_navbar, LV_OPA_50, 0);
+    lv_obj_clear_flag(s_lp_navbar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_layout(s_lp_navbar, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(s_lp_navbar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_lp_navbar, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    build_lp_navbtn(s_lp_navbar, LV_SYMBOL_LEFT, lp_navbar_back_click_cb);
+    build_lp_home_navbtn(s_lp_navbar, lp_navbar_home_click_cb);
+    build_lp_navbtn(s_lp_navbar, LV_SYMBOL_STOP, lp_navbar_recents_click_cb);
+}
+
+// ── Lollipop launcher (full-screen overlay, small-square tiles) ────────────
+// Opened from the nav bar's center button. Same 2-column-at-a-time-visible,
+// scroll-for-more grid shape Cupcake's old drawer used, just with smaller
+// icon-only LP_LAUNCHER_TILE squares instead of the old 136x80 icon+label
+// ones — more columns fit per row as a result (comfortably 4 on a 320px-wide
+// screen instead of 2), pure layout consequence of the smaller tile, not a
+// separately hardcoded column count anywhere below.
+
+static lv_obj_t *s_lp_launcher_grid;
+
+static void build_lp_launcher(uint16_t w, uint16_t h)
+{
+    s_lp_launcher = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(s_lp_launcher);
+    lv_obj_set_size(s_lp_launcher, w, h);
+    lv_obj_set_pos(s_lp_launcher, 0, 0);
+    lv_obj_set_style_bg_color(s_lp_launcher, lv_color_make(0x18, 0x18, 0x18), 0);
+    lv_obj_set_style_bg_opa(s_lp_launcher, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_lp_launcher, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_lp_launcher, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *title_bar = lv_obj_create(s_lp_launcher);
     lv_obj_remove_style_all(title_bar);
     lv_obj_set_size(title_bar, w, 32);
     lv_obj_set_pos(title_bar, 0, 0);
@@ -326,41 +617,37 @@ static void build_drawer(uint16_t w, uint16_t h)
     lv_label_set_text(close_btn, LV_SYMBOL_CLOSE);
     lv_obj_align(close_btn, LV_ALIGN_RIGHT_MID, -8, 0);
     lv_obj_add_flag(close_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(close_btn, drawer_close_click_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(close_btn, lp_launcher_close_click_cb, LV_EVENT_CLICKED, NULL);
 
-    // Fixed 2-column grid that scrolls vertically for anything past the
-    // first 2x2 page, instead of horizontally paging in groups of 6 — tiles
-    // are built directly into s_drawer_grid, no per-page wrapper container.
     lv_coord_t page_h = (lv_coord_t)(h - 32);
 
-    s_drawer_grid = lv_obj_create(s_drawer);
-    lv_obj_remove_style_all(s_drawer_grid);
-    lv_obj_set_size(s_drawer_grid, w, page_h);
-    lv_obj_set_pos(s_drawer_grid, 0, 32);
-    lv_obj_set_style_bg_opa(s_drawer_grid, LV_OPA_TRANSP, 0);
-    lv_obj_set_scroll_dir(s_drawer_grid, LV_DIR_VER);
-    lv_obj_clear_flag(s_drawer_grid, LV_OBJ_FLAG_SCROLL_ELASTIC);
-    lv_obj_set_layout(s_drawer_grid, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(s_drawer_grid, LV_FLEX_FLOW_ROW_WRAP);
-    // SPACE_EVENLY's gap comes from *leftover* space in the container — with
-    // more than 4 apps (7 here: settings/terminal/fileman/calculator/hwtest/
-    // drivermgr/meshchat) the grid overflows page_h and there's no leftover
-    // to distribute, so the row gap collapsed to 0 and rows rendered flush
-    // against each other, looking like overlapping tiles. Fixed pad_row/
-    // pad_column gaps hold regardless of overflow; START packs rows from
-    // the top instead of trying to spread them across the (insufficient) space.
-    lv_obj_set_flex_align(s_drawer_grid, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_all(s_drawer_grid, 8, 0);
-    lv_obj_set_style_pad_row(s_drawer_grid, 10, 0);
-    lv_obj_set_style_pad_column(s_drawer_grid, 10, 0);
+    s_lp_launcher_grid = lv_obj_create(s_lp_launcher);
+    lv_obj_remove_style_all(s_lp_launcher_grid);
+    lv_obj_set_size(s_lp_launcher_grid, w, page_h);
+    lv_obj_set_pos(s_lp_launcher_grid, 0, 32);
+    lv_obj_set_style_bg_opa(s_lp_launcher_grid, LV_OPA_TRANSP, 0);
+    lv_obj_set_scroll_dir(s_lp_launcher_grid, LV_DIR_VER);
+    lv_obj_clear_flag(s_lp_launcher_grid, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_set_layout(s_lp_launcher_grid, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(s_lp_launcher_grid, LV_FLEX_FLOW_ROW_WRAP);
+    // SPACE_EVENLY's gap comes from *leftover* space in the container — past
+    // the first couple of rows there's no leftover left to distribute, so
+    // the row gap collapses to 0 and rows render flush against each other
+    // (confirmed live on the old drawer this was ported from). Fixed
+    // pad_row/pad_column gaps hold regardless of overflow; START packs rows
+    // from the top instead of trying to spread them across insufficient space.
+    lv_obj_set_flex_align(s_lp_launcher_grid, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_all(s_lp_launcher_grid, 8, 0);
+    lv_obj_set_style_pad_row(s_lp_launcher_grid, 10, 0);
+    lv_obj_set_style_pad_column(s_lp_launcher_grid, 10, 0);
 
     int n = app_manager_count();
-    if (n > MAX_DRAWER_TILES) n = MAX_DRAWER_TILES;
+    if (n > MAX_LAUNCHER_TILES) n = MAX_LAUNCHER_TILES;
 
     for (int i = 0; i < n; i++) {
         const app_entry_t *app = app_manager_get(i);
         if (!app) continue;
-        build_app_tile(s_drawer_grid, i, app->name, drawer_tile_click_cb);
+        build_lp_launcher_tile(s_lp_launcher_grid, i, app->name, lp_launcher_tile_click_cb);
     }
 }
 
@@ -398,6 +685,42 @@ static lv_obj_t *s_status_taskmgr_box;
 static lv_obj_t *s_lock_screen;
 static bool      s_locked = false;
 
+// Actual implementation of the forward-declared lp_show_status()/lp_hide_
+// status() from earlier — deferred to here since they need the icon handles
+// above to exist first. temporary=true arms the same kind of auto-hide
+// countdown as the nav bar; temporary=false (home screen) leaves them up.
+static void lp_show_status(bool temporary)
+{
+    lv_obj_t *icons[] = { s_icon_wifi, s_icon_lora, s_icon_mail, s_icon_mail_badge,
+                           s_icon_battery, s_batt_voltage_lbl };
+    for (size_t i = 0; i < sizeof(icons) / sizeof(icons[0]); i++) {
+        if (icons[i]) lv_obj_clear_flag(icons[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    // The panels themselves also need showing, not just the icon labels
+    // floating on top of them — each has its own opaque black background,
+    // and at rest (CK_STATUS_PEEK) is positioned so its bottom PEEK_H
+    // sliver is always on-screen. Confirmed live: hiding only the icons
+    // left that solid black strip behind regardless.
+    if (s_notif_panel.panel) lv_obj_clear_flag(s_notif_panel.panel, LV_OBJ_FLAG_HIDDEN);
+    if (s_quick_panel.panel) lv_obj_clear_flag(s_quick_panel.panel, LV_OBJ_FLAG_HIDDEN);
+    s_lp_status_hide_deadline_ms = temporary ? (purr_kernel_uptime_ms() + LP_STATUS_REVEAL_MS) : 0;
+}
+
+static void lp_hide_status(void)
+{
+    // Settings' "keep bars visible" toggle — see lp_hide_navbar()'s matching
+    // guard/comment above.
+    if (purr_kernel_navbar_always_visible()) { lp_show_status(false); return; }
+    lv_obj_t *icons[] = { s_icon_wifi, s_icon_lora, s_icon_mail, s_icon_mail_badge,
+                           s_icon_battery, s_batt_voltage_lbl };
+    for (size_t i = 0; i < sizeof(icons) / sizeof(icons[0]); i++) {
+        if (icons[i]) lv_obj_add_flag(icons[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_notif_panel.panel) lv_obj_add_flag(s_notif_panel.panel, LV_OBJ_FLAG_HIDDEN);
+    if (s_quick_panel.panel) lv_obj_add_flag(s_quick_panel.panel, LV_OBJ_FLAG_HIDDEN);
+    s_lp_status_hide_deadline_ms = 0;
+}
+
 static lv_coord_t ck_panel_y_for_state(ck_status_state_t s)
 {
     switch (s) {
@@ -411,8 +734,19 @@ static void ck_panel_set_state(ck_panel_t *p, ck_status_state_t s)
 {
     p->state = s;
     lv_obj_set_y(p->panel, ck_panel_y_for_state(s));
-    if (s == CK_STATUS_EXPANDED) lv_obj_clear_flag(p->handle, LV_OBJ_FLAG_HIDDEN);
-    else                          lv_obj_add_flag(p->handle, LV_OBJ_FLAG_HIDDEN);
+    if (s == CK_STATUS_EXPANDED) {
+        lv_obj_clear_flag(p->handle, LV_OBJ_FLAG_HIDDEN);
+        // Reveal (and keep up, no countdown) while a panel is actually open
+        // and presumably being read — see lp_show_status()'s doc comment
+        // for why this piggybacks on the panel gesture at all.
+        lp_show_status(false);
+    } else {
+        lv_obj_add_flag(p->handle, LV_OBJ_FLAG_HIDDEN);
+        // Collapsing back to peek: arm the same auto-hide countdown the nav
+        // bar uses if an app is in the foreground; on the home screen,
+        // status stays permanently visible like everywhere else.
+        lp_show_status(s_lp_foreground_idx >= 0);
+    }
 }
 
 // Shared drag handler for both panels and both hotzones — which panel it's
@@ -425,6 +759,13 @@ static void ck_panel_drag_event_cb(lv_event_t *e)
     if (!indev) return;
 
     if (code == LV_EVENT_PRESSED) {
+        // Reveal immediately so the panel is actually visible while being
+        // dragged, not just once ck_panel_set_state() fires on release —
+        // temporary=true here is harmless even if the drag ends up
+        // collapsing back to PEEK, since RELEASED below always calls
+        // ck_panel_set_state() right after, which sets the correct
+        // countdown-vs-permanent state for wherever the drag actually ends.
+        lp_show_status(true);
         lv_point_t pt;
         lv_indev_get_point(indev, &pt);
         p->press_y0 = pt.y;
@@ -493,8 +834,8 @@ static void ck_build_panel(ck_panel_t *p, uint16_t w, const char *title, lv_obj_
     lv_obj_set_size(box, (lv_coord_t)(w - 8), 160);
     lv_obj_set_pos(box, 4, CUPCAKE_STATUS_PEEK_H + 18);
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
-    // Scrollable + vertical-only, same fix as the "All Apps" drawer grid
-    // (build_drawer()'s s_drawer_grid) — this box's row count tracks live
+    // Scrollable + vertical-only, same fix as the "All Apps" launcher grid
+    // (build_lp_launcher()'s s_lp_launcher_grid) — this box's row count tracks live
     // data (notification count / running-app count) with no upper bound, and
     // with scrolling cleared plus remove_style_all()'s default clipping gone,
     // rows past the fixed 160px height used to bleed out unclipped into the
@@ -624,8 +965,17 @@ static void ck_refresh_status_icons(void)
     lv_obj_set_style_text_color(s_icon_wifi, purr_kernel_wifi_connected() ? CK_ICON_ON : CK_ICON_OFF, 0);
     lv_obj_set_style_text_color(s_icon_lora, purr_kernel_lora_available() ? CK_ICON_ON : CK_ICON_OFF, 0);
 
-    if (purr_kernel_notify_count() > 0) lv_obj_clear_flag(s_icon_mail_badge, LV_OBJ_FLAG_HIDDEN);
-    else                                 lv_obj_add_flag(s_icon_mail_badge, LV_OBJ_FLAG_HIDDEN);
+    // Skip touching the badge while the whole status row is auto-hidden
+    // (lp_hide_status(), in-app) — s_icon_wifi's own hidden state doubles as
+    // "is the row currently supposed to be visible at all", since every
+    // icon (including this badge) is always toggled together by lp_show_
+    // status()/lp_hide_status(). Without this guard, a real unread
+    // notification would unconditionally re-show just the badge on the very
+    // next tick even while everything else stayed correctly hidden.
+    if (!lv_obj_has_flag(s_icon_wifi, LV_OBJ_FLAG_HIDDEN)) {
+        if (purr_kernel_notify_count() > 0) lv_obj_clear_flag(s_icon_mail_badge, LV_OBJ_FLAG_HIDDEN);
+        else                                 lv_obj_add_flag(s_icon_mail_badge, LV_OBJ_FLAG_HIDDEN);
+    }
 
     int pct = purr_kernel_battery_percent();
     const char *sym;
@@ -680,16 +1030,24 @@ static void ck_taskmgr_kill_cb(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     app_manager_stop(idx);
+    if (idx == s_lp_foreground_idx) {
+        s_lp_foreground_idx = -1;
+        lp_show_navbar(false);
+        lp_show_status(false);
+    }
 }
 
-// Full "return to home screen" — hides the drawer (if open) and every
+// Full "return to home screen" — hides the launcher (if open) and every
 // currently-visible running app's window, then collapses this panel.
 // Apps keep running (this only hides their windows, same as Minimize) — it's
 // a navigation shortcut, not a kill-all.
 static void ck_taskmgr_home_cb(lv_event_t *e)
 {
     (void)e;
-    if (s_drawer) lv_obj_add_flag(s_drawer, LV_OBJ_FLAG_HIDDEN);
+    if (s_lp_launcher) lv_obj_add_flag(s_lp_launcher, LV_OBJ_FLAG_HIDDEN);
+    s_lp_foreground_idx = -1;
+    lp_show_navbar(false);
+    lp_show_status(false);
     int n = app_manager_count();
     for (int i = 0; i < n; i++) {
         const app_entry_t *app = app_manager_get(i);
@@ -705,6 +1063,9 @@ static void ck_taskmgr_open_cb(lv_event_t *e)
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     const app_entry_t *app = app_manager_get(idx);
     if (app && app->window) purr_win_show(app->window);
+    s_lp_foreground_idx = idx;
+    lp_hide_navbar();
+    lp_hide_status();
 }
 
 static void ck_refresh_status_taskmgr(void)
@@ -749,6 +1110,182 @@ static void ck_refresh_status_taskmgr(void)
         lv_obj_set_style_text_color(lbl, lv_color_make(0x80, 0x80, 0x80), 0);
         lv_label_set_text(lbl, "No running apps");
     }
+}
+
+// ── Recents (card carousel) ─────────────────────────────────────────────────
+// Deliberately NOT Cardstack's own scroll-snap-one-at-a-time carousel
+// (cardstack_ui.c) — per spec this is a staggered/layered deck instead: a
+// single running app's card takes up ~2/3 of the screen; two or more shrink
+// and overlap so adjacent cards visibly peek out above/below the current
+// one, scrollable like a physical stack. No live window thumbnails exist
+// (purr_win.h has no such capability), so each card is a tinted placeholder
+// — same cupcake_tint_color()/icon_for_app() identity Lollipop's launcher
+// tiles and home dock already use, just bigger. Built lazily on first open
+// and cleaned+refilled on every subsequent one (ck_refresh_status_taskmgr()'s
+// same pattern just above), since the running-app list can change between
+// opens.
+static lv_obj_t *s_lp_recents_backdrop = NULL;
+static lv_obj_t *s_lp_recents_scroll   = NULL;
+
+static bool lp_recents_is_open(void)
+{
+    return s_lp_recents_backdrop && !lv_obj_has_flag(s_lp_recents_backdrop, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void lp_recents_close(void)
+{
+    if (s_lp_recents_backdrop) lv_obj_add_flag(s_lp_recents_backdrop, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Tapping a card opens that app and dismisses Recents — same open logic as
+// the Running Apps panel's own Open button (ck_taskmgr_open_cb).
+static void lp_recents_card_open_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    const app_entry_t *app = app_manager_get(idx);
+    if (app && app->window) purr_win_show(app->window);
+    s_lp_foreground_idx = idx;
+    lp_hide_navbar();
+    lp_hide_status();
+    lp_recents_close();
+}
+
+// The kill (X) button is its own clickable child — LVGL only fires a
+// widget's own registered callback for the object that actually caught the
+// touch, not its ancestors too (no LV_OBJ_FLAG_EVENT_BUBBLE set anywhere
+// here), so tapping it never also triggers the card's open handler above.
+static void lp_recents_card_kill_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    app_manager_stop(idx);
+    if (idx == s_lp_foreground_idx) {
+        s_lp_foreground_idx = -1;
+        lp_show_navbar(false);
+        lp_show_status(false);
+    }
+    lp_recents_close();
+}
+
+// Tapping the dimmed backdrop, or empty space between/around the cards,
+// dismisses Recents without picking anything — same "tap outside to
+// cancel" gesture the WiFi-password dialog's Cancel button serves in
+// settings.c, just gesture-driven instead of a dedicated button here.
+static void lp_recents_backdrop_click_cb(lv_event_t *e)
+{
+    (void)e;
+    lp_recents_close();
+}
+
+static void lp_recents_open(void)
+{
+    uint16_t w = cupcake_hal_width();
+    uint16_t h = cupcake_hal_height();
+
+    if (!s_lp_recents_backdrop) {
+        s_lp_recents_backdrop = lv_obj_create(lv_layer_top());
+        lv_obj_remove_style_all(s_lp_recents_backdrop);
+        lv_obj_set_size(s_lp_recents_backdrop, w, h);
+        lv_obj_set_pos(s_lp_recents_backdrop, 0, 0);
+        lv_obj_set_style_bg_color(s_lp_recents_backdrop, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(s_lp_recents_backdrop, LV_OPA_70, 0);
+        lv_obj_clear_flag(s_lp_recents_backdrop, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_lp_recents_backdrop, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_lp_recents_backdrop, lp_recents_backdrop_click_cb, LV_EVENT_CLICKED, NULL);
+
+        // Left clickable (default) so an empty tap within it also bubbles
+        // to a real CLICKED on itself (closing Recents) when no card
+        // catches it, same reasoning as the backdrop above — and so it can
+        // still receive the vertical drag that drives scrolling.
+        s_lp_recents_scroll = lv_obj_create(s_lp_recents_backdrop);
+        lv_obj_remove_style_all(s_lp_recents_scroll);
+        lv_obj_set_size(s_lp_recents_scroll, w, h - CUPCAKE_NAVBAR_H);
+        lv_obj_set_pos(s_lp_recents_scroll, 0, 0);
+        lv_obj_set_style_bg_opa(s_lp_recents_scroll, LV_OPA_TRANSP, 0);
+        lv_obj_set_scroll_dir(s_lp_recents_scroll, LV_DIR_VER);
+        lv_obj_set_scrollbar_mode(s_lp_recents_scroll, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_add_event_cb(s_lp_recents_scroll, lp_recents_backdrop_click_cb, LV_EVENT_CLICKED, NULL);
+    }
+
+    lv_obj_clean(s_lp_recents_scroll);
+
+    int n = app_manager_count();
+    int running = 0;
+    for (int i = 0; i < n; i++) {
+        const app_entry_t *app = app_manager_get(i);
+        if (app && app->state == APP_STATE_RUNNING) running++;
+    }
+
+    uint16_t avail_h = h - CUPCAKE_NAVBAR_H;
+    uint16_t card_w  = (uint16_t)((w * 85) / 100);
+
+    if (running == 0) {
+        lv_obj_t *lbl = lv_label_create(s_lp_recents_scroll);
+        lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+        lv_label_set_text(lbl, "No running apps");
+        lv_obj_center(lbl);
+    } else {
+        // A lone card gets ~2/3 of the available height, centered. Two or
+        // more shrink to 45% each and overlap by 55% of their own height
+        // (i.e. a 45%-tall sliver of every card behind the front one still
+        // peeks out) — approximates the "three cards layered at different
+        // heights" stack from the spec while staying scrollable for any
+        // count beyond what fits on screen at once.
+        uint16_t card_h = (running == 1) ? (uint16_t)((avail_h * 2) / 3)
+                                          : (uint16_t)((avail_h * 45) / 100);
+        uint16_t step      = (running == 1) ? 0 : (uint16_t)((card_h * 45) / 100);
+        uint16_t content_h = (uint16_t)(card_h + (running > 1 ? (running - 1) * step : 0));
+        uint16_t top_pad   = (content_h < avail_h) ? (uint16_t)((avail_h - content_h) / 2) : 0;
+
+        int shown = 0;
+        for (int i = 0; i < n; i++) {
+            const app_entry_t *app = app_manager_get(i);
+            if (!app || app->state != APP_STATE_RUNNING) continue;
+
+            lv_obj_t *card = lv_obj_create(s_lp_recents_scroll);
+            lv_obj_remove_style_all(card);
+            lv_obj_set_size(card, card_w, card_h);
+            lv_obj_set_pos(card, (w - card_w) / 2, top_pad + shown * step);
+            lv_obj_set_style_radius(card, 16, 0);
+            lv_obj_set_style_bg_color(card, cupcake_tint_color(app->name, 0x30), 0);
+            lv_obj_set_style_bg_opa(card, LV_OPA_80, 0);
+            lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(card, lp_recents_card_open_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+            lv_obj_t *icon = lv_img_create(card);
+            lv_img_set_src(icon, icon_for_app(app->name));
+            lv_img_set_zoom(icon, ICON_ZOOM(40));
+            lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 14);
+            lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+
+            lv_obj_t *lbl = lv_label_create(card);
+            lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+            lv_label_set_text(lbl, app->name);
+            lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 60);
+            lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+
+            lv_obj_t *kill_btn = lv_btn_create(card);
+            lv_obj_set_size(kill_btn, 28, 28);
+            lv_obj_align(kill_btn, LV_ALIGN_TOP_RIGHT, -8, 8);
+            lv_obj_t *kill_lbl = lv_label_create(kill_btn);
+            lv_label_set_text(kill_lbl, LV_SYMBOL_CLOSE);
+            lv_obj_center(kill_lbl);
+            lv_obj_add_event_cb(kill_btn, lp_recents_card_kill_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+            shown++;
+        }
+    }
+
+    lv_obj_clear_flag(s_lp_recents_backdrop, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_lp_recents_backdrop);
+    // Recents is itself a system-level overview, same as the home screen —
+    // stays up like the home screen's own bars do (lp_show_navbar(false)/
+    // lp_show_status(false), the "permanent" — not auto-hide — call), and
+    // needs re-raising above the backdrop it might now sit behind since the
+    // backdrop was just (re)moved to the front above.
+    if (s_lp_navbar) lv_obj_move_foreground(s_lp_navbar);
+    lp_show_navbar(false);
+    lp_show_status(false);
 }
 
 // ── Lock screen ──────────────────────────────────────────────────────────────
@@ -838,16 +1375,22 @@ void cupcake_ui_init(void)
 {
     uint16_t w = cupcake_hal_width();
     uint16_t h = cupcake_hal_height();
-    uint16_t body_h = (uint16_t)(h - CUPCAKE_STATUS_PEEK_H);
-
-    build_home_screen(w, body_h);
-    build_drawer(w, body_h);
+    // Both the status bar (top) and Lollipop nav bar (bottom) are separate
+    // lv_layer_top() overlays — same reasoning as app windows going full
+    // screen: they draw over content, they don't need content to make room
+    // for them. Home screen/launcher/wallpaper get the true full (w,h) now;
+    // build_lp_home_dock() separately offsets itself clear of the nav bar's
+    // own footprint specifically, since that's the one row that actually
+    // needs to avoid sitting directly underneath it.
+    build_home_screen(w, h);
+    build_lp_launcher(w, h);
+    build_lp_navbar(w);
 
     ck_build_status_panels(w);
     ck_build_status_icons(w);
     ck_build_lock_screen(w, h);
 
-    ESP_LOGI(TAG, "cupcake home screen built (%d total apps)", app_manager_count());
+    ESP_LOGI(TAG, "Lollipop home screen built (%d total apps)", app_manager_count());
 }
 
 void cupcake_ui_tick(void)
@@ -856,4 +1399,17 @@ void cupcake_ui_tick(void)
     ck_refresh_status_taskmgr();
     ck_refresh_status_icons();
     ck_lock_check_idle();
+
+    // Re-hide a swipe-revealed nav bar once its countdown expires — deadline
+    // 0 means "no pending auto-hide" (home screen, or an app just opened
+    // and the bar hasn't been swiped up on since), so this is a no-op then.
+    if (s_lp_navbar_hide_deadline_ms != 0 && purr_kernel_uptime_ms() >= s_lp_navbar_hide_deadline_ms) {
+        lp_hide_navbar();
+    }
+    // Same idea for the status row's own countdown, armed separately (see
+    // ck_panel_set_state()) whenever a drag-down panel collapses back to
+    // peek while an app is in the foreground.
+    if (s_lp_status_hide_deadline_ms != 0 && purr_kernel_uptime_ms() >= s_lp_status_hide_deadline_ms) {
+        lp_hide_status();
+    }
 }

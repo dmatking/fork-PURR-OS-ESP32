@@ -18,7 +18,7 @@ extern "C" {
 
 // ── Version ───────────────────────────────────────────────────────────────────
 
-#define PURR_KERNEL_VERSION  "1.0.0-dp5"
+#define PURR_KERNEL_VERSION  "1.0.0-dp6"
 #define KITT_VERSION         "1.0.0"
 
 // ── Module loader ─────────────────────────────────────────────────────────────
@@ -156,6 +156,15 @@ void     purr_kernel_set_lora_available(bool v);
 bool     purr_kernel_dev_mode_enabled(void);
 void     purr_kernel_set_dev_mode(bool v);
 
+// Lollipop nav bar + status bar "always visible" override — off by default
+// (auto-hide, the normal Lollipop behavior), toggled from Settings
+// (persisted under "purr_settings", synced here on settings' own init(),
+// same pattern as Developer Mode above). cupcake_ui.c's lp_hide_navbar()/
+// lp_hide_status() both no-op while this is true, so the bars simply never
+// auto-hide; no other UI backend reads this yet.
+bool     purr_kernel_navbar_always_visible(void);
+void     purr_kernel_set_navbar_always_visible(bool v);
+
 // Screen idle timeout, minutes — off by default until Settings loads the
 // persisted value (same "purr_settings" NVS namespace, synced on
 // settings' own init()), defaulting to 1 minute in the meantime. Only
@@ -232,6 +241,20 @@ void purr_kernel_set_window_created_cb(purr_window_created_cb_t cb);
 
 // Called by purr_win_create() — not meant to be called directly by apps.
 void purr_kernel_notify_window_created(purr_win_t win);
+
+// ── Memory-pressure watchdog ────────────────────────────────────────────────
+// Same registration pattern as purr_kernel_set_window_created_cb() above —
+// purr_kernel.c's health_watchdog_task() (already polling every
+// HEALTH_WATCHDOG_POLL_MS for UI-hang detection) tracks internal-RAM percent
+// used and calls this at the "kill the worst offender" threshold, without
+// needing to know app_manager exists or how it picks which app to blame.
+// app_manager is the (single) consumer, registering during its own init.
+// Returns true if it actually stopped an app (so the watchdog knows whether
+// to expect memory back, vs. escalating straight to a full restart because
+// there was nothing left to kill).
+typedef bool (*purr_mem_pressure_cb_t)(void);
+
+void purr_kernel_set_mem_pressure_cb(purr_mem_pressure_cb_t cb);
 
 // ── Boot readiness ────────────────────────────────────────────────────────────
 // Set once by the specialized kernel boot, after every static module/app has

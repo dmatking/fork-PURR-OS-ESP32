@@ -52,6 +52,12 @@ typedef struct {
     char        error[96];       // populated on APP_STATE_ERROR
     purr_win_t  window;          // set automatically when the app calls purr_win_create();
                                   // 0 if it hasn't (yet), or never will
+    // Internal-RAM free bytes at the moment this app was launched (0 while
+    // idle/stopped) — see app_manager_kill_worst_offender()'s doc comment
+    // in app_manager.c for why this exists: approximates "how much has this
+    // app cost since it started" (mem_free_at_launch minus the current free
+    // reading) without needing real per-task heap accounting.
+    uint32_t    mem_free_at_launch;
 } app_entry_t;
 
 // ── Public API ────────────────────────────────────────────────────────────────

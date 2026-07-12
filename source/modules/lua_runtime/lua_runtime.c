@@ -27,6 +27,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -66,24 +67,124 @@ static void register_system_module(lua_State *L) {
 // "restricted" tier distinction here (that's app_manager.c's .meow/.paws/
 // .claw file-extension tiering, applied at the file-manager/app-scan level,
 // not re-implemented inside the VM).
+//
+// fopen()/fread()/fwrite() must never run directly on meow_task's own
+// stack — meow_task is deliberately PSRAM-backed (see launch_meow()'s
+// comment in app_manager.c), and a PSRAM-stacked task touching flash briefly
+// disables the cache that makes PSRAM reachable at all, confirmed live
+// elsewhere in this codebase to crash with
+// esp_task_stack_is_sane_cache_disabled() (the same reason settings/fileman
+// get their own dedicated static internal-RAM stacks in app_manager.c).
+// Rather than giving meow_task itself a static stack — which would cost
+// every .meow script the same tight internal-DRAM budget regardless of
+// whether it ever touches sd.* — a small dedicated worker task with a
+// static internal-RAM stack does the actual I/O, and lua_sd_read()/
+// lua_sd_write() just hand it the request and block until it's done. Only
+// one Lua VM runs at a time (this file's top comment), so a single-slot
+// request/response pair with no extra locking is safe.
+// Internal SRAM on this board is under heavy static pressure (three of
+// these dedicated static stacks plus Cupcake's ~37KB of LVGL display
+// buffers leave only a few KB free at boot — see app_manager.c's own
+// settings/fileman static stacks for the matching constraint), so unlike
+// those two — whose native_task() runs a whole app's init(), including
+// building its LVGL UI through purr_win.h — this one only ever runs
+// lua_io_task()'s narrow fopen()/fread()/fwrite()/malloc() body, nothing
+// deeper. 4096 instead of blindly matching their 8192. lua_io_task() logs a
+// warning itself if the real high-water mark ever gets uncomfortably close
+// to this, so an unsafe cut here won't fail silently.
+#define LUA_IO_STACK_SIZE 4096
+static StackType_t   s_lua_io_stack[LUA_IO_STACK_SIZE];
+static StaticTask_t  s_lua_io_tcb;
+static TaskHandle_t  s_lua_io_task     = NULL;
+static SemaphoreHandle_t s_lua_io_req_sem  = NULL;
+static SemaphoreHandle_t s_lua_io_resp_sem = NULL;
+
+typedef struct {
+    bool        is_write;
+    const char *path;
+    const char *write_data;
+    size_t      write_len;
+    char       *read_buf;
+    size_t      read_len;
+    bool        ok;
+} lua_io_req_t;
+
+static lua_io_req_t s_lua_io_req;
+
+static void lua_io_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        xSemaphoreTake(s_lua_io_req_sem, portMAX_DELAY);
+        lua_io_req_t *r = &s_lua_io_req;
+        if (r->is_write) {
+            FILE *f = fopen(r->path, "wb");
+            if (!f) {
+                r->ok = false;
+            } else {
+                size_t nwritten = fwrite(r->write_data, 1, r->write_len, f);
+                fclose(f);
+                r->ok = (nwritten == r->write_len);
+            }
+        } else {
+            r->read_buf = NULL;
+            r->read_len = 0;
+            FILE *f = fopen(r->path, "rb");
+            if (!f) {
+                r->ok = false;
+            } else {
+                fseek(f, 0, SEEK_END);
+                long size = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                char *buf = (size >= 0) ? (char *)malloc((size_t)size + 1) : NULL;
+                if (!buf) {
+                    fclose(f);
+                    r->ok = false;
+                } else {
+                    r->read_len = fread(buf, 1, (size_t)size, f);
+                    fclose(f);
+                    r->read_buf = buf;
+                    r->ok = true;
+                }
+            }
+        }
+
+        // uxTaskGetStackHighWaterMark() reports the lowest free-stack point
+        // ever seen on this task, in bytes (ESP-IDF's StackType_t is
+        // byte-sized) — checked after every op rather than trusting
+        // LUA_IO_STACK_SIZE's cut from 8192 down to 4096 blindly. 512 bytes
+        // of headroom is the same rough safety margin app_manager.c's own
+        // static-stack tasks operate with.
+        UBaseType_t hw = uxTaskGetStackHighWaterMark(NULL);
+        if (hw < 512) {
+            ESP_LOGW(TAG, "lua_io stack low: %u bytes free (LUA_IO_STACK_SIZE may need raising)", (unsigned)hw);
+        }
+
+        xSemaphoreGive(s_lua_io_resp_sem);
+    }
+}
+
+// Lazily starts the I/O worker on first sd.* call ever and leaves it running
+// for the lifetime of the device — cheap (one static stack, one task) and
+// avoids re-creating it on every script launch the way s_L itself is.
+static void lua_io_ensure_started(void) {
+    if (s_lua_io_task) return;
+    s_lua_io_req_sem  = xSemaphoreCreateBinary();
+    s_lua_io_resp_sem = xSemaphoreCreateBinary();
+    s_lua_io_task = xTaskCreateStatic(lua_io_task, "lua_io", LUA_IO_STACK_SIZE,
+                                       NULL, 4, s_lua_io_stack, &s_lua_io_tcb);
+}
 
 static int lua_sd_read(lua_State *L) {
     const char *path = luaL_checkstring(L, 1);
-    FILE *f = fopen(path, "rb");
-    if (!f) { lua_pushnil(L); lua_pushstring(L, "file not found"); return 2; }
+    lua_io_ensure_started();
+    s_lua_io_req.is_write = false;
+    s_lua_io_req.path     = path;
+    xSemaphoreGive(s_lua_io_req_sem);
+    xSemaphoreTake(s_lua_io_resp_sem, portMAX_DELAY);
 
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (size < 0) { fclose(f); lua_pushnil(L); lua_pushstring(L, "stat failed"); return 2; }
-
-    char *buf = (char *)malloc((size_t)size + 1);
-    if (!buf) { fclose(f); lua_pushnil(L); lua_pushstring(L, "out of memory"); return 2; }
-
-    size_t nread = fread(buf, 1, (size_t)size, f);
-    fclose(f);
-    lua_pushlstring(L, buf, nread);
-    free(buf);
+    if (!s_lua_io_req.ok) { lua_pushnil(L); lua_pushstring(L, "file not found"); return 2; }
+    lua_pushlstring(L, s_lua_io_req.read_buf, s_lua_io_req.read_len);
+    free(s_lua_io_req.read_buf);
     return 1;
 }
 
@@ -92,12 +193,17 @@ static int lua_sd_write(lua_State *L) {
     size_t len;
     const char *data = luaL_checklstring(L, 2, &len);
 
-    FILE *f = fopen(path, "wb");
-    if (!f) { lua_pushboolean(L, 0); lua_pushstring(L, "cannot open file"); return 2; }
-    size_t nwritten = fwrite(data, 1, len, f);
-    fclose(f);
-    lua_pushboolean(L, nwritten == len);
-    return 1;
+    lua_io_ensure_started();
+    s_lua_io_req.is_write    = true;
+    s_lua_io_req.path        = path;
+    s_lua_io_req.write_data  = data;
+    s_lua_io_req.write_len   = len;
+    xSemaphoreGive(s_lua_io_req_sem);
+    xSemaphoreTake(s_lua_io_resp_sem, portMAX_DELAY);
+
+    lua_pushboolean(L, s_lua_io_req.ok);
+    if (!s_lua_io_req.ok) lua_pushstring(L, "cannot open file");
+    return s_lua_io_req.ok ? 1 : 2;
 }
 
 static void register_sd_module(lua_State *L) {
@@ -576,7 +682,7 @@ PURR_MODULE_REGISTER(lua_runtime) = {
     .module_type       = PURR_MOD_SYSTEM,
     .load_priority     = PURR_PRIORITY_IMPORTANT,
     .name              = "lua_runtime",
-    .version           = "1.0.0",
+    .version           = "1.0.1",
     .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = 0,

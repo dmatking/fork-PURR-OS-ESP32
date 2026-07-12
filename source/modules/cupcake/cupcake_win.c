@@ -39,6 +39,15 @@ static int s_layout_owner_win[MAX_WIDS];
 // Optional extra callback fired when a window's native close button is
 // clicked (see win_on_close in catcall_ui.h) — app_manager uses this to
 // actually stop the app on Close, distinct from Minimize which just hides.
+// Registration (ck_win_on_close() below) has to stay a valid catcall
+// implementation regardless — app_manager.c calls purr_win_on_close()
+// generically for every window on every UI backend, MiniWin's own title-bar
+// close icon still relies on this exact mechanism firing — but nothing in
+// this file ever invokes a stored callback anymore now that Cupcake's own
+// per-window close button is gone (ck_win_create() no longer creates one;
+// the Lollipop nav bar's Back button calls app_manager_stop() directly
+// instead, bypassing this hook entirely). Left in place as inert-but-
+// necessary infrastructure, not dead code to clean up.
 typedef struct { purr_win_cb_t cb; void *user; } close_hook_t;
 static close_hook_t s_close_hooks[MAX_WINS];
 
@@ -123,54 +132,32 @@ static void ta_event_cb(lv_event_t *e) {
     if (ctx && ctx->cb) ctx->cb(ctx->wid, PURR_EVENT_CHANGED, ctx->user);
 }
 
-// Minimize just hides the window — the app keeps running in the background,
-// same as what Close used to do before app_manager started listening for it.
-static void minimize_btn_event_cb(lv_event_t *e) {
-    purr_win_t h = (purr_win_t)(intptr_t)lv_event_get_user_data(e);
-    lv_obj_t *win = get_win(h);
-    if (win) lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
-}
-
-// Close hides too, but also fires the registered win_on_close hook (if any)
-// — app_manager wires this to app_manager_stop(), so Close now actually
-// stops the app instead of just hiding it.
-static void close_btn_event_cb(lv_event_t *e) {
-    purr_win_t h = (purr_win_t)(intptr_t)lv_event_get_user_data(e);
-    lv_obj_t *win = get_win(h);
-    if (win) lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
-    if (h >= 1 && h <= MAX_WINS && s_close_hooks[h - 1].cb) {
-        s_close_hooks[h - 1].cb(h, PURR_EVENT_CLICKED, s_close_hooks[h - 1].user);
-    }
-}
-
 // ── Window ────────────────────────────────────────────────────────────────────
+// No title bar, no per-window minimize/close buttons — the Lollipop nav bar
+// (cupcake_ui.c) now owns both of those system-wide: Home minimizes the
+// foreground app, Back closes it (app_manager_stop(), same call app_manager_
+// on_win_close() below already makes when a window closes some other way).
+// header_height=0 in lv_win_create() below means lv_win reserves no header
+// row at all, so the whole window is content — true full screen, and no
+// button row left to conflict with the status bar's drag hotzone at the top
+// (that hotzone has to stay touch-live even while visually hidden, to catch
+// its own reveal gesture — a real title-bar button sitting under it would
+// have been unreachable, which is exactly why windows used to start below
+// PEEK_H instead of at y=0).
 
 static purr_win_t ck_win_create(const char *title) {
     lv_obj_t *scr = lv_scr_act();
-    lv_obj_t *win = lv_win_create(scr, 32);
+    lv_obj_t *win = lv_win_create(scr, 0);
     ESP_LOGI(TAG, "win_create '%s': scr=%p win=%p scr_children_before=%d core=%d",
              title, (void *)scr, (void *)win, (int)lv_obj_get_child_cnt(scr), xPortGetCoreID());
-    lv_win_add_title(win, title);
 
-    // Allocated early so button callbacks get the purr_win_t handle (not the
-    // raw lv_obj_t*) as user-data — close_btn_event_cb needs the handle to
-    // look up s_close_hooks.
     purr_win_t handle = alloc_win(win);
 
-    lv_obj_t *min_btn = lv_win_add_btn(win, LV_SYMBOL_MINUS, 32);
-    lv_obj_add_event_cb(min_btn, minimize_btn_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)handle);
-
-    lv_obj_t *close_btn = lv_win_add_btn(win, LV_SYMBOL_CLOSE, 32);
-    lv_obj_add_event_cb(close_btn, close_btn_event_cb, LV_EVENT_CLICKED, (void *)(intptr_t)handle);
-
-    // Keep the window (and its close/minimize buttons, in the title row)
-    // entirely below the status bar's drag hotzone — that hotzone lives on
-    // lv_layer_top(), which LVGL always hit-tests above lv_scr_act()'s tree
-    // regardless of z-order, so a full-screen window at (0,0) permanently
-    // lost its buttons to the hotzone's y=0..PEEK_H band.
-    lv_obj_set_size(win, cupcake_hal_width(),
-                     (lv_coord_t)(cupcake_hal_height() - CUPCAKE_STATUS_PEEK_H));
-    lv_obj_set_pos(win, 0, CUPCAKE_STATUS_PEEK_H);
+    // Genuinely full screen now — no status bar / nav bar space reserved.
+    // Both are lv_layer_top() overlays that auto-hide while an app is
+    // foreground (see cupcake_ui.c), so nothing permanent is lost underneath.
+    lv_obj_set_size(win, cupcake_hal_width(), cupcake_hal_height());
+    lv_obj_set_pos(win, 0, 0);
     lv_obj_add_flag(win, LV_OBJ_FLAG_HIDDEN);
 
     // See cardstack_win.c's cw_win_create for why the content area needs an

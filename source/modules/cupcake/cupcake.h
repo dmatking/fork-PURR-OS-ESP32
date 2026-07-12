@@ -19,6 +19,13 @@ extern "C" {
 // (which must keep app windows, and their close buttons, entirely below it).
 #define CUPCAKE_STATUS_PEEK_H 22
 
+// Height of the Lollipop nav bar (Back/Apps/Recents) pinned to the bottom of
+// the screen — lives on lv_layer_top() (see cupcake_ui.c's build_lp_navbar())
+// so it renders above every app window regardless of z-order, same trick the
+// status bar above already uses. Shared with cupcake_win.c so app windows
+// (and anything they dock to their own bottom edge) stay clear of it.
+#define CUPCAKE_NAVBAR_H 40
+
 int      cupcake_hal_init(void);
 uint16_t cupcake_hal_width(void);
 uint16_t cupcake_hal_height(void);

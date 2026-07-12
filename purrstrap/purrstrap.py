@@ -378,6 +378,28 @@ def build_flash_image(device, pcat_cfg, out_dir, spiffs_size_kb=512):
         shutil.rmtree(staging_dir)
     os.makedirs(os.path.join(staging_dir, "apps"), exist_ok=True)
 
+    # Bundled wallpapers (source/assets/wallpapers/*.rgb565) — not part of
+    # the [flash] manifest system above (they're assets, not a module/
+    # driver/app), so staged unconditionally here instead. Mounted at
+    # /flash/wallpapers/ at runtime; cupcake_ui.c's load_wallpaper_choice()
+    # falls back to this for its "default" wallpaper before giving up and
+    # drawing the plain gradient.
+    wallpapers_src = os.path.join(REPO_DIR, "source", "assets", "wallpapers")
+    wallpapers_dst = os.path.join(staging_dir, "wallpapers")
+    staged_wallpapers = 0
+    if os.path.isdir(wallpapers_src):
+        for fname in sorted(os.listdir(wallpapers_src)):
+            if not fname.endswith(".rgb565"):
+                continue
+            os.makedirs(wallpapers_dst, exist_ok=True)
+            src_path = os.path.join(wallpapers_src, fname)
+            shutil.copy2(src_path, os.path.join(wallpapers_dst, fname))
+            size_kb = os.path.getsize(src_path) // 1024
+            print(f"  {C_GRN}[OK]{C_RST}  wallpapers/{fname:<26}  {size_kb} KB")
+            staged_wallpapers += 1
+    if staged_wallpapers:
+        info(f"staged {staged_wallpapers} wallpaper(s) into spiffs_staging/wallpapers/")
+
     staged = 0
 
     for slug, priority in sorted(flash_entries, key=lambda x: x[1]):

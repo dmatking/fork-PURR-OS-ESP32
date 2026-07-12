@@ -166,6 +166,12 @@ void purr_kernel_notify_window_created(purr_win_t win) {
     if (s_window_created_cb) s_window_created_cb(win);
 }
 
+static purr_mem_pressure_cb_t s_mem_pressure_cb = NULL;
+
+void purr_kernel_set_mem_pressure_cb(purr_mem_pressure_cb_t cb) {
+    s_mem_pressure_cb = cb;
+}
+
 static void (*s_panic_usb_share_cb)(void) = NULL;
 
 void purr_kernel_set_panic_usb_share_cb(void (*cb)(void)) {
@@ -764,7 +770,19 @@ static int collect_dir_recursive(const char *dir, scan_entry_t *entries, int max
 
 int purr_kernel_scan_modules(const char *flash_dir, const char *sd_fallback_dir)
 {
-    static scan_entry_t entries[MAX_SCAN_ENTRIES];
+    // scan_entry_t's path[512] makes this 64-entry array ~34KB — by far the
+    // single biggest static consumer of this board's already-scarce internal
+    // SRAM (see the memory-pressure investigation this was found in), for a
+    // function only ever called 2-3 times total, at boot, from boot.c/
+    // kernel_*_boot.c. A PSRAM allocation scoped to this call recovers all
+    // ~34KB for the rest of the device's runtime instead of reserving it
+    // permanently as a `static` would.
+    scan_entry_t *entries = heap_caps_malloc(sizeof(scan_entry_t) * MAX_SCAN_ENTRIES, MALLOC_CAP_SPIRAM);
+    if (!entries) {
+        ESP_LOGE(TAG, "scan %s: PSRAM alloc failed for %d scan_entry_t (%u bytes)",
+                 flash_dir, MAX_SCAN_ENTRIES, (unsigned)(sizeof(scan_entry_t) * MAX_SCAN_ENTRIES));
+        return 0;
+    }
     int count = 0;
 
     count = collect_dir_recursive(flash_dir, entries, MAX_SCAN_ENTRIES, 0);
@@ -835,6 +853,7 @@ int purr_kernel_scan_modules(const char *flash_dir, const char *sd_fallback_dir)
     }
 
     ESP_LOGI(TAG, "scan %s: %d/%d modules loaded", flash_dir, loaded, count);
+    heap_caps_free(entries);
     return loaded;
 }
 
@@ -885,6 +904,7 @@ static int  s_battery_percent = -1;   // -1 = unknown (no PMIC/fuel gauge found)
 static int  s_battery_voltage_mv = -1;   // -1 = unknown
 static bool s_lora_available  = false;
 static bool s_dev_mode        = false;   // off by default — see purr_kernel.h's doc comment
+static bool s_navbar_always_visible = false;   // off by default — see purr_kernel.h's doc comment
 // Default 1 minute, not 0 — a 0 timeout would make cupcake_ui.c's
 // "elapsed_ms >= timeout_min * 60000" idle check true on every tick,
 // locking the screen in a permanent loop. Settings overwrites this from
@@ -898,6 +918,7 @@ void purr_kernel_set_battery_percent(int v)  { s_battery_percent = v; }
 void purr_kernel_set_battery_voltage_mv(int mv) { s_battery_voltage_mv = mv; }
 void purr_kernel_set_lora_available(bool v)  { s_lora_available  = v; }
 void purr_kernel_set_dev_mode(bool v)        { s_dev_mode        = v; }
+void purr_kernel_set_navbar_always_visible(bool v) { s_navbar_always_visible = v; }
 void purr_kernel_set_screen_timeout_min(uint8_t v) { s_screen_timeout_min = v; }
 
 bool purr_kernel_sd_available(void)    { return s_sd_available; }
@@ -906,6 +927,7 @@ int  purr_kernel_battery_percent(void) { return s_battery_percent; }
 int  purr_kernel_battery_voltage_mv(void) { return s_battery_voltage_mv; }
 bool purr_kernel_lora_available(void)  { return s_lora_available; }
 bool purr_kernel_dev_mode_enabled(void) { return s_dev_mode; }
+bool purr_kernel_navbar_always_visible(void) { return s_navbar_always_visible; }
 uint8_t purr_kernel_screen_timeout_min(void) { return s_screen_timeout_min; }
 
 void purr_kernel_reboot(void) {
@@ -980,8 +1002,30 @@ static TaskHandle_t      s_health_watchdog_task = NULL;
 // health_watchdog_task() below and purr_crash_guard.h for the full design.
 static uint64_t s_ui_last_heartbeat_ms = 0;
 
+// Memory-pressure watchdog state — see MEM_WARN_PCT's doc comment below.
+static bool     s_mem_warn_active   = false;   // sticky: only notify on the rising edge
+static uint64_t s_last_mem_kill_ms  = 0;       // 0 = never — MEM_KILL_COOLDOWN_MS gate
+
 #define HEALTH_WATCHDOG_POLL_MS 2000UL
 #define UI_HANG_THRESHOLD_MS    6000UL   // ~3 missed polls
+
+// ── Memory-pressure thresholds ──────────────────────────────────────────────
+// Percent of internal SRAM (MALLOC_CAP_INTERNAL) in use, checked every
+// HEALTH_WATCHDOG_POLL_MS alongside the UI-hang check above. Escalating
+// ladder — matches PURR OS's own pre-rewrite design (see "PURR OS Layout
+// OLD.md"'s "Memory Management Thresholds" table), adapted to this kernel's
+// actual capabilities: no real per-app heap accounting exists here (would
+// need wrapping every malloc/free), so instead of enforcing a per-app
+// declared budget, MEM_KILL_PCT delegates to whatever's registered via
+// purr_kernel_set_mem_pressure_cb() (app_manager's
+// app_manager_kill_worst_offender(), which approximates "worst offender" via
+// each app's free-memory-at-launch snapshot) to pick a specific app to stop.
+// Exact percentages are a starting point, not a tuned/measured target —
+// adjust freely.
+#define MEM_WARN_PCT      84   // log + notify only
+#define MEM_KILL_PCT      90   // ask the registered callback to stop the worst offender
+#define MEM_CRITICAL_PCT  97   // still critical after a kill attempt (or nothing to kill) — reboot
+#define MEM_KILL_COOLDOWN_MS 10000UL   // don't attempt another kill within this long of the last one
 
 static void health_watchdog_task(void *arg);
 
@@ -1077,6 +1121,54 @@ static void health_watchdog_task(void *arg)
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned long long)purr_kernel_uptime_ms());
+
+        // ── Memory-pressure watchdog ─────────────────────────────────────
+        // heap_caps_get_info() (not just get_free_size()) so percent-used is
+        // computed against this heap's own actual total capacity rather
+        // than a hardcoded constant that could drift across boards/builds.
+        {
+            uint64_t now_wd = purr_kernel_uptime_ms();
+            multi_heap_info_t info;
+            heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
+            size_t total = info.total_free_bytes + info.total_allocated_bytes;
+            uint8_t pct_used = total ? (uint8_t)((100ULL * info.total_allocated_bytes) / total) : 0;
+
+            if (pct_used >= MEM_CRITICAL_PCT) {
+                // Give a registered kill-worst-offender callback one shot
+                // first (same cooldown-gated call as the KILL_PCT tier
+                // below) — only reboot outright if that either isn't
+                // registered, has nothing left to kill, or didn't help.
+                bool killed = false;
+                if (s_mem_pressure_cb && (now_wd - s_last_mem_kill_ms) >= MEM_KILL_COOLDOWN_MS) {
+                    s_last_mem_kill_ms = now_wd;
+                    killed = s_mem_pressure_cb();
+                }
+                if (killed) {
+                    heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
+                    total = info.total_free_bytes + info.total_allocated_bytes;
+                    pct_used = total ? (uint8_t)((100ULL * info.total_allocated_bytes) / total) : 0;
+                }
+                if (pct_used >= MEM_CRITICAL_PCT) {
+                    ESP_LOGE(TAG, "memory watchdog: %u%% internal SRAM used (critical) — restarting", pct_used);
+                    purr_kernel_reboot();
+                    // never returns
+                }
+            } else if (pct_used >= MEM_KILL_PCT) {
+                if (s_mem_pressure_cb && (now_wd - s_last_mem_kill_ms) >= MEM_KILL_COOLDOWN_MS) {
+                    s_last_mem_kill_ms = now_wd;
+                    ESP_LOGW(TAG, "memory watchdog: %u%% internal SRAM used — stopping worst offender", pct_used);
+                    s_mem_pressure_cb();
+                }
+            } else if (pct_used >= MEM_WARN_PCT) {
+                if (!s_mem_warn_active) {
+                    s_mem_warn_active = true;
+                    ESP_LOGW(TAG, "memory watchdog: %u%% internal SRAM used", pct_used);
+                    purr_kernel_notify("Low memory", "System memory running low", "kernel");
+                }
+            } else {
+                s_mem_warn_active = false;   // dropped back below MEM_WARN_PCT — re-arm the notify
+            }
+        }
 
         for (int i = 0; i < s_health_count; i++) {
             health_entry_t *h = &s_health[i];

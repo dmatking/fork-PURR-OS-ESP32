@@ -17,12 +17,25 @@
 static const char *TAG = "cupcake_hal";
 
 #ifndef CUPCAKE_BUF_LINES
-#define CUPCAKE_BUF_LINES 20
+#define CUPCAKE_BUF_LINES 80
 #endif
 #define CUPCAKE_BUF_WIDTH 480
 
-static lv_color_t s_buf1[CUPCAKE_BUF_WIDTH * CUPCAKE_BUF_LINES];
-static lv_color_t s_buf2[CUPCAKE_BUF_WIDTH * CUPCAKE_BUF_LINES];
+// PSRAM-backed instead of static internal-RAM arrays — at the old 20 lines
+// these were ~37.5KB combined (480*20*2 bytes each), the single largest
+// static consumer of this board's scarce internal SRAM (see the memory-
+// pressure investigation this was found in). Pure pixel data pushed out to
+// the panel over SPI DMA, nothing that needs internal RAM specifically —
+// st7789.c's spi_bus_initialize() already runs with SPI_DMA_CH_AUTO, and
+// ESP32-S3's GDMA can DMA directly out of PSRAM (unlike the original
+// ESP32). MALLOC_CAP_DMA alongside MALLOC_CAP_SPIRAM is what tells
+// heap_caps_malloc() to actually satisfy both — plain MALLOC_CAP_SPIRAM
+// alone doesn't guarantee a DMA-usable allocation. Freeing that ~37.5KB
+// also made room to grow CUPCAKE_BUF_LINES 4x (20 -> 80), which directly
+// cuts the number of flush_cb()/SPI-transfer round-trips per full-screen
+// redraw.
+static lv_color_t *s_buf1;
+static lv_color_t *s_buf2;
 
 static lv_disp_draw_buf_t s_draw_buf;
 static lv_disp_drv_t      s_disp_drv;
@@ -168,6 +181,14 @@ int cupcake_hal_init(void)
     ESP_LOGI(TAG, "display: %ux%u", s_disp_w, s_disp_h);
 
     lv_init();
+
+    size_t buf_bytes = sizeof(lv_color_t) * CUPCAKE_BUF_WIDTH * CUPCAKE_BUF_LINES;
+    s_buf1 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    s_buf2 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    if (!s_buf1 || !s_buf2) {
+        ESP_LOGE(TAG, "PSRAM DMA alloc failed for display buffers (2x %u bytes)", (unsigned)buf_bytes);
+        return -1;
+    }
 
     lv_disp_draw_buf_init(&s_draw_buf, s_buf1, s_buf2, s_disp_w * CUPCAKE_BUF_LINES);
 

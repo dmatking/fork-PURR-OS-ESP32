@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <dirent.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -32,8 +33,26 @@
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-static purr_win_t  s_win       = 0;
-static purr_wid_t  s_status    = 0;   // bottom status label
+static purr_win_t  s_win       = 0;   // top-level window — just the category picker
+
+// Category sub-windows, each built lazily on first tap and cached/reused
+// afterward — same pattern the WiFi/BT windows below already established.
+// Every one of these (and WiFi/BT) gets an explicit "< Back" button as its
+// first widget (see on_subwin_back()) since none of them have any window
+// chrome — under Lollipop, purr_win_on_close()'s close-icon hook never
+// fires (see cupcake_win.c's s_close_hooks doc comment), and the nav bar's
+// own Back button only ever reaches the *app's* original window
+// (app_manager.c's app->window, set once from settings_init()'s own
+// purr_win_create() call) — without their own Back button, any of these
+// would be permanently unreachable/undismissable once opened.
+static purr_win_t  s_general_win        = 0;
+static purr_wid_t  s_general_status_lbl = 0;
+static purr_win_t  s_display_win        = 0;
+static purr_wid_t  s_display_status_lbl = 0;
+static purr_win_t  s_customization_win        = 0;
+static purr_wid_t  s_customization_status_lbl = 0;
+static purr_win_t  s_connectivity_win = 0;
+
 static purr_wid_t  s_brightness_lbl = 0;
 static purr_wid_t  s_screen_timeout_lbl = 0;
 
@@ -43,6 +62,9 @@ static char        s_theme[16]  = "wce";
 
 static purr_wid_t  s_dev_mode_lbl = 0;
 static uint8_t     s_dev_mode     = 0;   // 0/1 — see purr_kernel.h's doc comment
+
+static purr_wid_t  s_navbar_visible_lbl     = 0;
+static uint8_t     s_navbar_always_visible  = 0;   // 0/1 — see purr_kernel.h's doc comment
 
 static purr_wid_t  s_about_lbl = 0;
 
@@ -107,6 +129,7 @@ static void nvs_load(void) {
     nvs_get_u8(h, "brightness", &s_brightness);
     nvs_get_u8(h, "screen_timeout", &s_screen_timeout_min);
     nvs_get_u8(h, "dev_mode", &s_dev_mode);
+    nvs_get_u8(h, "navbar_always_visible", &s_navbar_always_visible);
     nvs_close(h);
     // Sync into the kernel-global cupcake_ui.c's idle check actually reads
     // — nvs_get_u8() only touched our own local copy above. Without this,
@@ -116,8 +139,26 @@ static void nvs_load(void) {
     purr_kernel_set_screen_timeout_min(s_screen_timeout_min);
 }
 
-static void set_status(const char *msg) {
-    purr_win_label_set(s_status, msg);
+static void set_general_status(const char *msg) {
+    if (s_general_status_lbl) purr_win_label_set(s_general_status_lbl, msg);
+}
+static void set_display_status(const char *msg) {
+    if (s_display_status_lbl) purr_win_label_set(s_display_status_lbl, msg);
+}
+static void set_customization_status(const char *msg) {
+    if (s_customization_status_lbl) purr_win_label_set(s_customization_status_lbl, msg);
+}
+
+// Shared by every category/WiFi/BT sub-window — see their doc comment
+// above for why each one needs this. purr_win_t is a plain uint32_t handle
+// (catcall_ui.h), so it round-trips through the callback's void* user
+// pointer without needing per-window wrapper state.
+static void on_subwin_back(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w; (void)e;
+    purr_win_hide((purr_win_t)(uintptr_t)u);
+}
+static void add_back_button(purr_win_t win) {
+    purr_win_button(win, "< Back", on_subwin_back, (void *)(uintptr_t)win);
 }
 
 // ── Theme buttons ─────────────────────────────────────────────────────────────
@@ -128,7 +169,7 @@ static void apply_theme_nvs(const char *id) {
 
     char msg[48];
     snprintf(msg, sizeof(msg), "Theme set to '%s' — reboot to apply.", id);
-    set_status(msg);
+    set_customization_status(msg);
 }
 
 static void on_theme_wce(purr_wid_t w, purr_event_t e, void *u)  { (void)w;(void)e;(void)u; apply_theme_nvs("wce");  }
@@ -144,7 +185,7 @@ static void set_brightness(uint8_t level) {
     char buf[32];
     snprintf(buf, sizeof(buf), "Brightness: %d%%", (level * 100) / 255);
     purr_win_label_set(s_brightness_lbl, buf);
-    set_status("Brightness updated.");
+    set_display_status("Brightness updated.");
 }
 
 static void on_bright_high(purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_brightness(255); }
@@ -164,7 +205,7 @@ static void set_screen_timeout(uint8_t minutes) {
     char buf[32];
     snprintf(buf, sizeof(buf), "Screen timeout: %d min", minutes);
     purr_win_label_set(s_screen_timeout_lbl, buf);
-    set_status("Screen timeout updated.");
+    set_display_status("Screen timeout updated.");
 }
 
 static void on_timeout_1(purr_wid_t w, purr_event_t e, void *u) { (void)w;(void)e;(void)u; set_screen_timeout(1); }
@@ -212,7 +253,7 @@ static void on_wallpaper_select(purr_wid_t w, purr_event_t e, void *u) {
     nvs_save_str("wallpaper", s_wallpaper_paths[idx]);
     char msg[WALLPAPER_PATH_LEN + 64];
     snprintf(msg, sizeof(msg), "Wallpaper set to '%s' — reboot to apply.", s_wallpaper_paths[idx]);
-    set_status(msg);
+    set_customization_status(msg);
 }
 
 // ── WiFi ──────────────────────────────────────────────────────────────────────
@@ -287,9 +328,9 @@ static void on_wifi_select(purr_wid_t w, purr_event_t e, void *u) {
 
 static void on_wifi_scan(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
-    set_status("Scanning...");
+    set_wifi_status("Scanning...");
     int n = wifi_mgr_scan();
-    if (n < 0) { set_status("WiFi scan failed."); return; }
+    if (n < 0) { set_wifi_status("WiFi scan failed."); return; }
     if (n > MAX_WIFI_RESULTS) n = MAX_WIFI_RESULTS;
     s_wifi_count = n;
 
@@ -303,7 +344,7 @@ static void on_wifi_scan(purr_wid_t w, purr_event_t e, void *u) {
         s_wifi_label_ptrs[i] = s_wifi_labels[i];
     }
     purr_win_list_set_items(s_wifi_list, s_wifi_label_ptrs, s_wifi_count);
-    set_status("Scan complete — tap a network to connect.");
+    set_wifi_status("Scan complete — tap a network to connect.");
 }
 
 static void on_wifi_disconnect(purr_wid_t w, purr_event_t e, void *u) {
@@ -326,6 +367,7 @@ static void on_wifi_settings_open(purr_wid_t w, purr_event_t e, void *u) {
 
     s_wifi_win = purr_win_create("WiFi Settings");
     purr_win_on_close(s_wifi_win, on_wifi_win_close, NULL);
+    add_back_button(s_wifi_win);
 
     purr_win_label(s_wifi_win, "Networks");
     s_wifi_list = purr_win_list(s_wifi_win, 90, 60);
@@ -414,6 +456,7 @@ static void on_bt_settings_open(purr_wid_t w, purr_event_t e, void *u) {
 
     s_bt_win = purr_win_create("Bluetooth Settings");
     purr_win_on_close(s_bt_win, on_bt_win_close, NULL);
+    add_back_button(s_bt_win);
 
     purr_win_label(s_bt_win, "Devices (BLE)");
     s_bt_list = purr_win_list(s_bt_win, 90, 60);
@@ -443,22 +486,39 @@ static void on_dev_mode_toggle(purr_wid_t w, purr_event_t e, void *u) {
     purr_kernel_set_dev_mode(s_dev_mode != 0);
     nvs_save_u8("dev_mode", s_dev_mode);
     purr_win_label_set(s_dev_mode_lbl, s_dev_mode ? "Developer Mode: ON" : "Developer Mode: OFF");
-    set_status(s_dev_mode ? "Developer Mode enabled — unsigned .hiss scripts allowed."
-                           : "Developer Mode disabled — unsigned .hiss scripts blocked.");
+    set_general_status(s_dev_mode ? "Developer Mode enabled — unsigned .hiss scripts allowed."
+                                   : "Developer Mode disabled — unsigned .hiss scripts blocked.");
+}
+
+// ── Lollipop nav/status bar ─────────────────────────────────────────────────────
+// Overrides the Lollipop nav bar + status bar's normal auto-hide-while-in-
+// an-app behavior — see purr_kernel_set_navbar_always_visible()'s doc
+// comment in purr_kernel.h. Off by default (auto-hide), persisted like
+// Developer Mode above.
+
+static void on_navbar_visible_toggle(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    s_navbar_always_visible = s_navbar_always_visible ? 0 : 1;
+    purr_kernel_set_navbar_always_visible(s_navbar_always_visible != 0);
+    nvs_save_u8("navbar_always_visible", s_navbar_always_visible);
+    purr_win_label_set(s_navbar_visible_lbl,
+        s_navbar_always_visible ? "Keep bars visible: ON" : "Keep bars visible: OFF");
+    set_display_status(s_navbar_always_visible ? "Nav/status bars stay visible in apps."
+                                                : "Nav/status bars auto-hide in apps.");
 }
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
 static void on_sd_refresh(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
-    set_status(purr_kernel_sd_available() ? "SD card: present." : "SD card: not mounted.");
+    set_general_status(purr_kernel_sd_available() ? "SD card: present." : "SD card: not mounted.");
 }
 
 // ── Reboot ────────────────────────────────────────────────────────────────────
 
 static void on_reboot(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
-    set_status("Rebooting...");
+    set_general_status("Rebooting...");
     vTaskDelay(pdMS_TO_TICKS(500));
     purr_kernel_reboot();
 }
@@ -509,95 +569,153 @@ static void build_about_text(char *buf, size_t sz) {
 #undef APPEND
 }
 
+// ── Category windows ─────────────────────────────────────────────────────────
+// Each built lazily on first tap and cached/reused afterward, same pattern
+// as the WiFi/BT windows above — see add_back_button()'s doc comment for why
+// each needs its own "< Back" button. Grouping: General (storage/developer/
+// system/about — the catch-all for things that don't fit elsewhere),
+// Display (brightness/timeout/bar visibility), Customization (theme/
+// wallpaper), Connectivity (WiFi/BT, each still its own nested window).
+
+static void on_open_general(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_general_win) { purr_win_show(s_general_win); return; }
+
+    s_general_win = purr_win_create("General");
+    add_back_button(s_general_win);
+
+    purr_win_label(s_general_win, "Storage");
+    purr_wid_t sr = purr_win_row(s_general_win, 4);
+    purr_win_button(s_general_win, "SD Status", on_sd_refresh, NULL);
+    purr_win_layout_end(sr);
+
+    purr_win_label(s_general_win, "Developer");
+    char dev_str[32];
+    snprintf(dev_str, sizeof(dev_str), "Developer Mode: %s", s_dev_mode ? "ON" : "OFF");
+    s_dev_mode_lbl = purr_win_label(s_general_win, dev_str);
+    purr_wid_t devr = purr_win_row(s_general_win, 4);
+    purr_win_button(s_general_win, "Toggle", on_dev_mode_toggle, NULL);
+    purr_win_layout_end(devr);
+
+    purr_win_label(s_general_win, "System");
+    purr_wid_t sys = purr_win_row(s_general_win, 4);
+    purr_win_button(s_general_win, "Reboot", on_reboot, NULL);
+    purr_win_layout_end(sys);
+
+    purr_win_label(s_general_win, "About");
+    char about_buf[512];
+    build_about_text(about_buf, sizeof(about_buf));
+    s_about_lbl = purr_win_label(s_general_win, about_buf);
+
+    s_general_status_lbl = purr_win_label(s_general_win, "Ready.");
+    purr_win_show(s_general_win);
+}
+
+static void on_open_display(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_display_win) { purr_win_show(s_display_win); return; }
+
+    s_display_win = purr_win_create("Display");
+    add_back_button(s_display_win);
+
+    char bright_str[32];
+    snprintf(bright_str, sizeof(bright_str), "Brightness: %d%%", (s_brightness * 100) / 255);
+    s_brightness_lbl = purr_win_label(s_display_win, bright_str);
+    purr_wid_t br = purr_win_row(s_display_win, 4);
+    purr_win_button(s_display_win, "Low",  on_bright_low,  NULL);
+    purr_win_button(s_display_win, "Mid",  on_bright_mid,  NULL);
+    purr_win_button(s_display_win, "High", on_bright_high, NULL);
+    purr_win_layout_end(br);
+
+    char timeout_str[32];
+    snprintf(timeout_str, sizeof(timeout_str), "Screen timeout: %d min", s_screen_timeout_min);
+    s_screen_timeout_lbl = purr_win_label(s_display_win, timeout_str);
+    purr_wid_t tor = purr_win_row(s_display_win, 4);
+    purr_win_button(s_display_win, "1 min", on_timeout_1, NULL);
+    purr_win_button(s_display_win, "3 min", on_timeout_3, NULL);
+    purr_win_button(s_display_win, "5 min", on_timeout_5, NULL);
+    purr_win_layout_end(tor);
+
+    char navbar_str[32];
+    snprintf(navbar_str, sizeof(navbar_str), "Keep bars visible: %s", s_navbar_always_visible ? "ON" : "OFF");
+    s_navbar_visible_lbl = purr_win_label(s_display_win, navbar_str);
+    purr_wid_t nvr = purr_win_row(s_display_win, 4);
+    purr_win_button(s_display_win, "Toggle", on_navbar_visible_toggle, NULL);
+    purr_win_layout_end(nvr);
+
+    s_display_status_lbl = purr_win_label(s_display_win, "Ready.");
+    purr_win_show(s_display_win);
+}
+
+static void on_open_customization(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_customization_win) { purr_win_show(s_customization_win); return; }
+
+    s_customization_win = purr_win_create("Customization");
+    add_back_button(s_customization_win);
+
+    purr_win_label(s_customization_win, "Theme");
+    purr_wid_t tr = purr_win_row(s_customization_win, 4);
+    purr_win_button(s_customization_win, "WCE Classic", on_theme_wce,  NULL);
+    purr_win_button(s_customization_win, "Dark",        on_theme_dark, NULL);
+    purr_win_layout_end(tr);
+
+    char theme_str[40];
+    snprintf(theme_str, sizeof(theme_str), "Active: %s", s_theme);
+    purr_win_label(s_customization_win, theme_str);
+
+    purr_win_label(s_customization_win, "Wallpaper");
+    s_wallpaper_list = purr_win_list(s_customization_win, 90, 30);
+    purr_win_list_on_select(s_wallpaper_list, on_wallpaper_select, NULL);
+    refresh_wallpaper_list();
+
+    s_customization_status_lbl = purr_win_label(s_customization_win, "Ready.");
+    purr_win_show(s_customization_win);
+}
+
+static void on_open_connectivity(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_connectivity_win) { purr_win_show(s_connectivity_win); return; }
+
+    s_connectivity_win = purr_win_create("Connectivity");
+    add_back_button(s_connectivity_win);
+
+    purr_win_label(s_connectivity_win, "Network");
+    purr_wid_t nr = purr_win_row(s_connectivity_win, 4);
+    purr_win_button(s_connectivity_win, "WiFi Settings",      on_wifi_settings_open, NULL);
+#ifdef CONFIG_BT_NIMBLE_ENABLED
+    purr_win_button(s_connectivity_win, "Bluetooth Settings", on_bt_settings_open,   NULL);
+#endif
+    purr_win_layout_end(nr);
+
+    purr_win_show(s_connectivity_win);
+}
+
 // ── Build UI ──────────────────────────────────────────────────────────────────
 
 static int settings_init(void) {
     nvs_load();
     purr_kernel_set_dev_mode(s_dev_mode != 0);
+    purr_kernel_set_navbar_always_visible(s_navbar_always_visible != 0);
 
+    // Top-level window is just the category picker — each button opens its
+    // own lazily-built, cached sub-window (see on_open_*() above). Keeps
+    // this window's own widget count tiny (MiniWin's control/message-queue
+    // budget is finite, same rationale the old WiFi/BT split already used)
+    // and leaves room for more categories later without this screen growing
+    // unbounded.
     s_win = purr_win_create("Settings");
 
-    // ── Theme section ──────────────────────────────────────────────────────
-    purr_win_label(s_win, "Theme");
-    purr_wid_t tr = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "WCE Classic", on_theme_wce,  NULL);
-    purr_win_button(s_win, "Dark",        on_theme_dark, NULL);
-    purr_win_layout_end(tr);
+    purr_win_label(s_win, "Settings");
+    purr_wid_t cr1 = purr_win_row(s_win, 4);
+    purr_win_button(s_win, "General",       on_open_general,       NULL);
+    purr_win_button(s_win, "Display",       on_open_display,       NULL);
+    purr_win_layout_end(cr1);
 
-    char theme_str[40];
-    snprintf(theme_str, sizeof(theme_str), "Active: %s", s_theme);
-    purr_win_label(s_win, theme_str);
-
-    // ── Brightness section ─────────────────────────────────────────────────
-    purr_win_label(s_win, "Display");
-    char bright_str[32];
-    snprintf(bright_str, sizeof(bright_str), "Brightness: %d%%", (s_brightness * 100) / 255);
-    s_brightness_lbl = purr_win_label(s_win, bright_str);
-
-    purr_wid_t br = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "Low",  on_bright_low,  NULL);
-    purr_win_button(s_win, "Mid",  on_bright_mid,  NULL);
-    purr_win_button(s_win, "High", on_bright_high, NULL);
-    purr_win_layout_end(br);
-
-    // ── Screen timeout section ───────────────────────────────────────────────
-    char timeout_str[32];
-    snprintf(timeout_str, sizeof(timeout_str), "Screen timeout: %d min", s_screen_timeout_min);
-    s_screen_timeout_lbl = purr_win_label(s_win, timeout_str);
-
-    purr_wid_t tor = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "1 min", on_timeout_1, NULL);
-    purr_win_button(s_win, "3 min", on_timeout_3, NULL);
-    purr_win_button(s_win, "5 min", on_timeout_5, NULL);
-    purr_win_layout_end(tor);
-
-    // ── Network section ─────────────────────────────────────────────────────
-    // WiFi and Bluetooth each get their own dedicated window (opened here)
-    // instead of being built inline — keeps this main window's widget count
-    // small and gives each its own focused space.
-    purr_win_label(s_win, "Network");
-    purr_wid_t nr = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "WiFi Settings",      on_wifi_settings_open, NULL);
-#ifdef CONFIG_BT_NIMBLE_ENABLED
-    purr_win_button(s_win, "Bluetooth Settings", on_bt_settings_open,   NULL);
-#endif
-    purr_win_layout_end(nr);
-
-    // ── Wallpaper section ──────────────────────────────────────────────────
-    purr_win_label(s_win, "Wallpaper");
-    s_wallpaper_list = purr_win_list(s_win, 90, 30);
-    purr_win_list_on_select(s_wallpaper_list, on_wallpaper_select, NULL);
-    refresh_wallpaper_list();
-
-    // ── Storage section ────────────────────────────────────────────────────
-    purr_win_label(s_win, "Storage");
-    purr_wid_t sr = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "SD Status", on_sd_refresh, NULL);
-    purr_win_layout_end(sr);
-
-    // ── Developer section ──────────────────────────────────────────────────
-    purr_win_label(s_win, "Developer");
-    char dev_str[32];
-    snprintf(dev_str, sizeof(dev_str), "Developer Mode: %s", s_dev_mode ? "ON" : "OFF");
-    s_dev_mode_lbl = purr_win_label(s_win, dev_str);
-    purr_wid_t devr = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "Toggle", on_dev_mode_toggle, NULL);
-    purr_win_layout_end(devr);
-
-    // ── System section ─────────────────────────────────────────────────────
-    purr_win_label(s_win, "System");
-    purr_wid_t sys = purr_win_row(s_win, 4);
-    purr_win_button(s_win, "Reboot", on_reboot, NULL);
-    purr_win_layout_end(sys);
-
-    // ── About section ──────────────────────────────────────────────────────
-    purr_win_label(s_win, "About");
-    char about_buf[512];
-    build_about_text(about_buf, sizeof(about_buf));
-    s_about_lbl = purr_win_label(s_win, about_buf);
-
-    // ── Status bar ─────────────────────────────────────────────────────────
-    s_status = purr_win_label(s_win, "Ready.");
+    purr_wid_t cr2 = purr_win_row(s_win, 4);
+    purr_win_button(s_win, "Customization", on_open_customization, NULL);
+    purr_win_button(s_win, "Connectivity",  on_open_connectivity,  NULL);
+    purr_win_layout_end(cr2);
 
     purr_win_show(s_win);
     return 0;
@@ -609,6 +727,10 @@ static void settings_deinit(void) {
 #ifdef CONFIG_BT_NIMBLE_ENABLED
     if (s_bt_win)   { purr_win_destroy(s_bt_win);   s_bt_win   = 0; s_bt_status_lbl   = 0; s_bt_list   = 0; }
 #endif
+    if (s_general_win)       { purr_win_destroy(s_general_win);       s_general_win       = 0; s_general_status_lbl       = 0; }
+    if (s_display_win)       { purr_win_destroy(s_display_win);       s_display_win       = 0; s_display_status_lbl       = 0; }
+    if (s_customization_win) { purr_win_destroy(s_customization_win); s_customization_win = 0; s_customization_status_lbl = 0; }
+    if (s_connectivity_win)  { purr_win_destroy(s_connectivity_win);  s_connectivity_win  = 0; }
     purr_win_destroy(s_win);
     s_win = 0;
 }
@@ -621,7 +743,7 @@ PURR_MODULE_REGISTER(settings) = {
     .module_type       = PURR_MOD_APP,
     .load_priority     = PURR_PRIORITY_OPTIONAL,
     .name              = "settings",
-    .version           = "1.0.0",
+    .version           = "1.0.1",
     .kernel_min        = "0.11.1",
     .provided_catcalls = 0,
     .required_catcalls = 0,
