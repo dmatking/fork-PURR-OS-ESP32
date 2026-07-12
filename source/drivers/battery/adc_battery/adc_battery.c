@@ -196,16 +196,37 @@ static int module_init(void)
         return -1;
     }
 
+    // Curve fitting (ESP32-S2/S3/C3) vs. line fitting (original ESP32) are
+    // mutually exclusive per chip — confirmed live: building unconditionally
+    // against curve fitting fails outright on plain-ESP32 boards (CYD/
+    // CYD_s024c/CYD_s028r) with "unknown type name
+    // 'adc_cali_curve_fitting_config_t'", since that scheme doesn't exist
+    // there at all. ADC_CALI_SCHEME_*_SUPPORTED (adc_cali_scheme.h) is
+    // ESP-IDF's own portable way to pick whichever this target actually has.
+    // Calibration can fail on unfused/older-rev silicon either way — not
+    // fatal, just falls back to raw-code voltage (less accurate, still
+    // usable for a status icon rather than a precision measurement).
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
     adc_cali_curve_fitting_config_t cali_cfg = {
         .unit_id  = ADC_UNIT_1,
         .chan     = s_channel,
         .atten    = s_atten,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
-    // Calibration can fail on unfused/older-rev silicon — not fatal, just
-    // falls back to raw-code voltage (less accurate, still usable for a
-    // status icon rather than a precision measurement).
     s_cali_ok = adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_cali) == ESP_OK;
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    adc_cali_line_fitting_config_t cali_cfg = {
+        .unit_id  = ADC_UNIT_1,
+        .atten    = s_atten,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+#if CONFIG_IDF_TARGET_ESP32
+        .default_vref = 1100,   // only used as a fallback if eFuse cal data is absent
+#endif
+    };
+    s_cali_ok = adc_cali_create_scheme_line_fitting(&cali_cfg, &s_cali) == ESP_OK;
+#else
+    s_cali_ok = false;
+#endif
     if (!s_cali_ok) ESP_LOGW(TAG, "ADC calibration unavailable — using raw counts");
 
     xTaskCreate(battery_poll_task, "adc_battery", 3072, NULL, 2, &s_task);
@@ -217,7 +238,14 @@ static int module_init(void)
 static void module_deinit(void)
 {
     if (s_task) { vTaskDelete(s_task); s_task = NULL; }
-    if (s_cali_ok) { adc_cali_delete_scheme_curve_fitting(s_cali); s_cali_ok = false; }
+    if (s_cali_ok) {
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+        adc_cali_delete_scheme_curve_fitting(s_cali);
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+        adc_cali_delete_scheme_line_fitting(s_cali);
+#endif
+        s_cali_ok = false;
+    }
     if (s_adc) { adc_oneshot_del_unit(s_adc); s_adc = NULL; }
 }
 
@@ -227,7 +255,7 @@ PURR_MODULE_REGISTER(adc_battery) = {
     .module_type       = PURR_MOD_DRIVER,
     .load_priority     = PURR_PRIORITY_OPTIONAL,
     .name              = "adc_battery",
-    .version           = "1.0.0",
+    .version           = "1.0.1",
     .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = 0,
