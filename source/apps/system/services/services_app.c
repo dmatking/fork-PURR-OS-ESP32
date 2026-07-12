@@ -22,6 +22,7 @@ static purr_win_t s_win        = 0;
 static purr_wid_t s_list       = 0;
 static purr_wid_t s_mem_lbl    = 0;
 static purr_wid_t s_status_lbl = 0;
+static purr_wid_t s_mesh_status_lbl = 0;
 
 static char        s_row_bufs[MAX_ROWS][80];
 static const char *s_row_ptrs[MAX_ROWS];
@@ -86,11 +87,47 @@ static void on_refresh(purr_wid_t w, purr_event_t e, void *u) {
     refresh();
 }
 
+// A curated, single-module control (meshtastic specifically) rather than a
+// generic "browse every module" panel — that's what Terminal's `modules`/
+// `stop`/`start`/`restart` commands are for. Future restartable modules
+// (mesh core, etc.) get their own status label + button row the same way,
+// or this gets generalized into a small array once there's more than one —
+// deliberately not designed ahead of actually needing it.
+static void update_mesh_status(void) {
+    bool running = purr_kernel_get_module("meshtastic") != NULL;
+    purr_win_label_set(s_mesh_status_lbl, running ? "meshtastic: running" : "meshtastic: stopped");
+}
+
+static void on_mesh_toggle(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    bool want_on = purr_kernel_get_module("meshtastic") == NULL;
+    int rc = purr_kernel_module_set_enabled("meshtastic", want_on);
+    if (rc == PURR_MODCTL_ERR_DENYLISTED)      purr_win_label_set(s_mesh_status_lbl, "meshtastic: refused (protected)");
+    else if (rc == PURR_MODCTL_ERR_INIT_FAILED) purr_win_label_set(s_mesh_status_lbl, "meshtastic: failed to start");
+    else update_mesh_status();
+    refresh();   // health-list row appears/disappears along with the module
+}
+
+static void on_mesh_restart(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    int rc = purr_kernel_module_restart("meshtastic");
+    if (rc == PURR_MODCTL_ERR_INIT_FAILED) purr_win_label_set(s_mesh_status_lbl, "meshtastic: restart failed");
+    else update_mesh_status();
+    refresh();
+}
+
 static int services_app_init(void) {
     s_win = purr_win_create("Services");
 
     purr_win_label(s_win, "Core Services");
     s_list = purr_win_list(s_win, 100, 55);
+
+    purr_win_label(s_win, "Modules");
+    s_mesh_status_lbl = purr_win_label(s_win, "...");
+    purr_wid_t mrow = purr_win_row(s_win, 4);
+    purr_win_button(s_win, "meshtastic: Enable/Disable", on_mesh_toggle, NULL);
+    purr_win_button(s_win, "meshtastic: Restart",        on_mesh_restart, NULL);
+    purr_win_layout_end(mrow);
 
     purr_win_label(s_win, "Memory");
     s_mem_lbl    = purr_win_label(s_win, "...");
@@ -100,12 +137,13 @@ static int services_app_init(void) {
 
     purr_win_show(s_win);
     refresh();
+    update_mesh_status();
     return 0;
 }
 
 static void services_app_deinit(void) {
     purr_win_destroy(s_win);
-    s_win = 0; s_list = 0; s_mem_lbl = 0; s_status_lbl = 0;
+    s_win = 0; s_list = 0; s_mem_lbl = 0; s_status_lbl = 0; s_mesh_status_lbl = 0;
 }
 
 // ── Module header ─────────────────────────────────────────────────────────────
@@ -116,7 +154,7 @@ PURR_MODULE_REGISTER(services) = {
     .module_type       = PURR_MOD_APP,
     .load_priority     = PURR_PRIORITY_OPTIONAL,
     .name              = "services",
-    .version           = "1.0.0",
+    .version           = "1.0.1",
     .kernel_min        = "0.11.1",
     .provided_catcalls = 0,
     .required_catcalls = 0,

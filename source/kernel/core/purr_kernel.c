@@ -217,6 +217,23 @@ typedef struct {
 static module_slot_t s_modules[MAX_MODULES];
 static int           s_module_count = 0;
 
+// Recursive for the same reason s_ui_mutex above is: purr_kernel_module_set_
+// enabled()/_restart() (further down) call the lower-level accessors below
+// while already holding this lock, and a plain mutex would deadlock against
+// itself. Lazy-created on first use — mirrors purr_kernel_ui_lock()'s exact
+// pattern. Protects s_modules[]/s_module_count only; s_static_reg[] (below)
+// is populated once, at boot, before app_main() via C constructors, and
+// never mutated afterward, so it doesn't need locking.
+static SemaphoreHandle_t s_module_registry_mutex = NULL;
+
+static void module_registry_lock(void) {
+    if (!s_module_registry_mutex) s_module_registry_mutex = xSemaphoreCreateRecursiveMutex();
+    if (s_module_registry_mutex) xSemaphoreTakeRecursive(s_module_registry_mutex, portMAX_DELAY);
+}
+static void module_registry_unlock(void) {
+    if (s_module_registry_mutex) xSemaphoreGiveRecursive(s_module_registry_mutex);
+}
+
 // ── Version comparison ────────────────────────────────────────────────────────
 
 static int version_cmp(const char *a, const char *b) {
@@ -552,6 +569,10 @@ void purr_kernel_register_module_static(const purr_module_header_t *hdr)
     }
 }
 
+// Caller must hold module_registry_lock() — called both from boot
+// (purr_kernel_load_static_modules(), before the mutex could possibly have
+// any contention) and from purr_kernel_enable_static_module() (runtime,
+// where contention is the whole reason the lock exists).
 static int load_one_static(const purr_module_header_t *hdr)
 {
     if (s_module_count >= MAX_MODULES) {
@@ -601,6 +622,42 @@ static int load_one_static(const purr_module_header_t *hdr)
     return 0;
 }
 
+// Look up a compiled-in (static) module's header by name, whether or not
+// it's currently loaded — s_static_reg holds every PURR_MODULE_REGISTER()'d
+// module regardless of enable/disable state. NULL if no static module with
+// this name exists (e.g. it's a file-based/SD module, or the name is wrong).
+// s_static_reg is populated once at boot (before app_main) and never
+// mutated afterward, so this doesn't need module_registry_lock().
+const purr_module_header_t *purr_kernel_get_static_module(const char *name)
+{
+    for (int i = 0; i < s_static_reg_count; i++)
+        if (strcmp(s_static_reg[i]->name, name) == 0)
+            return s_static_reg[i];
+    return NULL;
+}
+
+// Re-run load_one_static() for a single static module by name — the
+// re-enable counterpart to purr_kernel_unload_module(). No safety/denylist
+// policy here (see purr_kernel_module_set_enabled() below for that) — this
+// is the bare mechanism, reused by boot (indirectly, via
+// purr_kernel_load_static_modules()) and by the policy wrapper alike.
+int purr_kernel_enable_static_module(const char *name)
+{
+    module_registry_lock();
+    if (purr_kernel_get_module(name)) {   // already loaded — idempotent, no double-init
+        module_registry_unlock();
+        return 0;
+    }
+    const purr_module_header_t *hdr = purr_kernel_get_static_module(name);
+    if (!hdr) {
+        module_registry_unlock();
+        return -1;
+    }
+    int rc = load_one_static(hdr);
+    module_registry_unlock();
+    return rc;
+}
+
 static int cmp_reg_priority(const void *a, const void *b)
 {
     const purr_module_header_t *ha = *(const purr_module_header_t **)a;
@@ -619,7 +676,9 @@ int purr_kernel_load_static_modules(void)
     int n = s_static_reg_count;
     for (int i = 0; i < n; i++) {
         const purr_module_header_t *hdr = s_static_reg[i];
+        module_registry_lock();
         int rc = load_one_static(hdr);
+        module_registry_unlock();
         if (rc != 0 && hdr->load_priority == PURR_PRIORITY_REQUIRED) {
             char reason[96];
             snprintf(reason, sizeof(reason),
@@ -859,33 +918,137 @@ int purr_kernel_scan_modules(const char *flash_dir, const char *sd_fallback_dir)
 
 void purr_kernel_unload_module(const char *name)
 {
+    module_registry_lock();
     for (int i = 0; i < s_module_count; i++) {
         if (strcmp(s_modules[i].header.name, name) == 0) {
             if (s_modules[i].header.deinit) s_modules[i].header.deinit();
             s_modules[i] = s_modules[--s_module_count];
             ESP_LOGI(TAG, "unloaded: %s", name);
-            return;
+            break;
         }
     }
+    module_registry_unlock();
 }
 
 const purr_module_header_t *purr_kernel_get_module(const char *name)
 {
-    for (int i = 0; i < s_module_count; i++)
-        if (strcmp(s_modules[i].header.name, name) == 0)
-            return &s_modules[i].header;
-    return NULL;
+    module_registry_lock();
+    const purr_module_header_t *found = NULL;
+    for (int i = 0; i < s_module_count; i++) {
+        if (strcmp(s_modules[i].header.name, name) == 0) {
+            found = &s_modules[i].header;
+            break;
+        }
+    }
+    module_registry_unlock();
+    return found;
+}
+
+// ── Runtime module enable/disable policy ────────────────────────────────────
+// Single choke point both the Services app and the Terminal app call for
+// user-driven enable/disable/restart, so the safety policy (denylist) lives
+// in exactly one place rather than being duplicated/drifting across callers.
+//
+// load_priority alone is NOT a reliable "safe to disable" signal — of every
+// module registered via PURR_MODULE_REGISTER() in this tree, only
+// display/touch drivers set PURR_PRIORITY_REQUIRED; app_manager,
+// driver_manager, and the miniwin UI backend never set .load_priority at
+// all (defaults to 0 — neither IMPORTANT nor OPTIONAL). A priority-only
+// check would let a user disable app_manager or the active UI and hard-lock
+// the device. Denylist by name instead, plus whichever UI backend is
+// actually registered right now. wifi_mgr/bt_mgr are deliberately NOT
+// denylisted (explicit product decision) despite Meshtastic's BLE companion
+// (mesh_ble_init()) depending on bt_mgr's NimBLE stack — accepted tradeoff.
+static bool module_is_denylisted(const purr_module_header_t *hdr)
+{
+    if (!hdr) return true;
+    if (hdr->load_priority == PURR_PRIORITY_REQUIRED) return true;
+
+    static const char *const s_denylist[] = { "app_manager", "driver_manager" };
+    for (size_t i = 0; i < sizeof(s_denylist) / sizeof(s_denylist[0]); i++)
+        if (strcmp(hdr->name, s_denylist[i]) == 0) return true;
+
+    const catcall_ui_t *ui = purr_kernel_ui();
+    if (ui && ui->name && strcmp(hdr->name, ui->name) == 0) return true;
+
+    return false;
+}
+
+int purr_kernel_module_set_enabled(const char *name, bool enable)
+{
+    if (!name || !*name) return PURR_MODCTL_ERR_NOT_FOUND;
+
+    module_registry_lock();
+    const purr_module_header_t *static_hdr = purr_kernel_get_static_module(name);
+    const purr_module_header_t *live_hdr   = purr_kernel_get_module(name);
+    const purr_module_header_t *hdr = static_hdr ? static_hdr : live_hdr;
+    if (!hdr) { module_registry_unlock(); return PURR_MODCTL_ERR_NOT_FOUND; }
+    if (module_is_denylisted(hdr)) { module_registry_unlock(); return PURR_MODCTL_ERR_DENYLISTED; }
+
+    int result;
+    if (enable) {
+        if (live_hdr) {
+            result = PURR_MODCTL_ERR_ALREADY;
+        } else if (!static_hdr) {
+            // File-based (SD .purr) module with no static-registry entry —
+            // the kernel doesn't track a loaded module's origin path, so
+            // there's no way to re-enable it once unloaded. Out of scope
+            // for this feature (static modules only), not a bug.
+            result = PURR_MODCTL_ERR_NOT_FOUND;
+        } else {
+            result = (purr_kernel_enable_static_module(name) == 0)
+                    ? PURR_MODCTL_OK : PURR_MODCTL_ERR_INIT_FAILED;
+        }
+    } else {
+        if (!live_hdr) {
+            result = PURR_MODCTL_ERR_ALREADY;
+        } else {
+            purr_kernel_unload_module(name);
+            result = PURR_MODCTL_OK;
+        }
+    }
+    module_registry_unlock();
+    return result;
+}
+
+int purr_kernel_module_restart(const char *name)
+{
+    if (!name || !*name) return PURR_MODCTL_ERR_NOT_FOUND;
+
+    module_registry_lock();
+    const purr_module_header_t *static_hdr = purr_kernel_get_static_module(name);
+    if (!static_hdr) {   // restart only meaningful for static modules
+        module_registry_unlock();
+        return PURR_MODCTL_ERR_NOT_FOUND;
+    }
+    if (module_is_denylisted(static_hdr)) {
+        module_registry_unlock();
+        return PURR_MODCTL_ERR_DENYLISTED;
+    }
+
+    if (purr_kernel_get_module(name)) purr_kernel_unload_module(name);
+    // Fail-safe on re-enable failure: the module ends up unloaded (a known,
+    // "off" state) rather than left in an ambiguous half-restarted state.
+    int result = (purr_kernel_enable_static_module(name) == 0)
+                ? PURR_MODCTL_OK : PURR_MODCTL_ERR_INIT_FAILED;
+    module_registry_unlock();
+    return result;
 }
 
 int purr_kernel_module_count(void)
 {
-    return s_module_count;
+    module_registry_lock();
+    int n = s_module_count;
+    module_registry_unlock();
+    return n;
 }
 
 const purr_module_header_t *purr_kernel_module_at(int idx)
 {
-    if (idx < 0 || idx >= s_module_count) return NULL;
-    return &s_modules[idx].header;
+    module_registry_lock();
+    const purr_module_header_t *hdr = (idx < 0 || idx >= s_module_count) ? NULL : &s_modules[idx].header;
+    module_registry_unlock();
+    return hdr;
 }
 
 // ── System info ───────────────────────────────────────────────────────────────
@@ -1189,8 +1352,24 @@ static void health_watchdog_task(void *arg)
 
 void purr_kernel_health_register(const char *name, purr_health_check_fn is_alive)
 {
-    if (!name || !is_alive || s_health_count >= PURR_HEALTH_MAX) return;
+    if (!name || !is_alive) return;
 
+    // A restarted module (Meshtastic today, anything else stoppable/
+    // restartable later — see purr_kernel_module_restart()) calls this
+    // again every time it re-inits. Without this dedup check, each restart
+    // used to append a brand-new entry forever, until PURR_HEALTH_MAX
+    // silently stopped accepting more and the Services app's health list
+    // showed the same module several times over. Re-registering just
+    // refreshes the existing entry in place instead.
+    for (int i = 0; i < s_health_count; i++) {
+        if (strcmp(s_health[i].name, name) == 0) {
+            s_health[i].is_alive  = is_alive;
+            s_health[i].was_alive = is_alive();
+            return;
+        }
+    }
+
+    if (s_health_count >= PURR_HEALTH_MAX) return;
     health_entry_t *h = &s_health[s_health_count++];
     h->name      = name;
     h->is_alive  = is_alive;

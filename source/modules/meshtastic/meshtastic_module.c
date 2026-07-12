@@ -511,6 +511,15 @@ void mesh_manager_deinit(void)
         vTaskDelete(s_persist_task);
         s_persist_task = NULL;
     }
+    // mesh_manager_init() unconditionally creates a new s_tx_queue every
+    // call — without freeing the old one here first, a stop/start cycle
+    // (see purr_kernel_module_restart()) leaked one queue's worth of memory
+    // per restart. After the task deletions above, nothing can still be
+    // reading/writing it.
+    if (s_tx_queue) {
+        vQueueDelete(s_tx_queue);
+        s_tx_queue = NULL;
+    }
     s_ready = false;
 }
 
@@ -547,7 +556,7 @@ PURR_MODULE_REGISTER(meshtastic) = {
     .module_type       = PURR_MOD_SYSTEM,
     .load_priority     = PURR_PRIORITY_OPTIONAL,
     .name              = "meshtastic",
-    .version           = "1.0.0",
+    .version           = "1.0.1",
     .kernel_min        = "0.11.1",
     .kernel_max        = "",
     .provided_catcalls = 0,

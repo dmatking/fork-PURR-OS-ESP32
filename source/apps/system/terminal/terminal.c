@@ -1,6 +1,6 @@
 // terminal.c — PURR OS built-in terminal app (.claw)
 // Uses purr_win.h — works on both KittenUI (LVGL) and MiniWin.
-// Commands: help, ls, cat, echo, modules, mem, uptime, reboot, clear
+// Commands: help, ls, cat, echo, modules, stop, start, restart, mem, uptime, reboot, clear
 
 #include <string.h>
 #include <stdio.h>
@@ -51,6 +51,9 @@ static void cmd_help(void) {
     term_println("  cat <path>         print file");
     term_println("  echo <text>        print text");
     term_println("  modules            list loaded modules");
+    term_println("  stop <name>        disable a module");
+    term_println("  start <name>       enable a module");
+    term_println("  restart <name>     disable+enable a module");
     term_println("  mem                free RAM");
     term_println("  uptime             uptime in seconds");
     term_println("  clear              clear screen");
@@ -118,6 +121,34 @@ static void cmd_modules(void) {
     term_print(line);
 }
 
+static void svc_result(const char *name, int rc) {
+    char buf[64];
+    switch (rc) {
+        case PURR_MODCTL_OK:              snprintf(buf, sizeof(buf), "%s: ok\n", name); break;
+        case PURR_MODCTL_ERR_NOT_FOUND:   snprintf(buf, sizeof(buf), "%s: not found\n", name); break;
+        case PURR_MODCTL_ERR_DENYLISTED:  snprintf(buf, sizeof(buf), "%s: refused (protected module)\n", name); break;
+        case PURR_MODCTL_ERR_ALREADY:     snprintf(buf, sizeof(buf), "%s: already in that state\n", name); break;
+        case PURR_MODCTL_ERR_INIT_FAILED: snprintf(buf, sizeof(buf), "%s: failed to start\n", name); break;
+        default:                          snprintf(buf, sizeof(buf), "%s: error %d\n", name, rc); break;
+    }
+    term_print(buf);
+}
+
+static void cmd_stop(const char *args) {
+    if (!args || !*args) { term_println("stop: missing module name"); return; }
+    svc_result(args, purr_kernel_module_set_enabled(args, false));
+}
+
+static void cmd_start(const char *args) {
+    if (!args || !*args) { term_println("start: missing module name"); return; }
+    svc_result(args, purr_kernel_module_set_enabled(args, true));
+}
+
+static void cmd_restart(const char *args) {
+    if (!args || !*args) { term_println("restart: missing module name"); return; }
+    svc_result(args, purr_kernel_module_restart(args));
+}
+
 static void cmd_mem(void) {
     char buf[48];
     snprintf(buf, sizeof(buf), "Free RAM: %lu bytes\n",
@@ -168,6 +199,9 @@ static void run_command(const char *line) {
     else if (strcmp(verb, "cat")    == 0) cmd_cat(args);
     else if (strcmp(verb, "echo")   == 0) cmd_echo(args);
     else if (strcmp(verb, "modules")== 0) cmd_modules();
+    else if (strcmp(verb, "stop")    == 0) cmd_stop(args);
+    else if (strcmp(verb, "start")   == 0) cmd_start(args);
+    else if (strcmp(verb, "restart") == 0) cmd_restart(args);
     else if (strcmp(verb, "mem")    == 0) cmd_mem();
     else if (strcmp(verb, "uptime") == 0) cmd_uptime();
     else if (strcmp(verb, "clear")  == 0) cmd_clear();
@@ -231,7 +265,7 @@ PURR_MODULE_REGISTER(terminal) = {
     .module_type       = PURR_MOD_APP,
     .load_priority     = PURR_PRIORITY_OPTIONAL,
     .name              = "terminal",
-    .version           = "1.0.0",
+    .version           = "1.0.1",
     .kernel_min        = "0.11.1",
     .provided_catcalls = 0,
     .required_catcalls = 0,

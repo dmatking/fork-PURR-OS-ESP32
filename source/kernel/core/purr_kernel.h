@@ -18,7 +18,7 @@ extern "C" {
 
 // ── Version ───────────────────────────────────────────────────────────────────
 
-#define PURR_KERNEL_VERSION  "1.0.0-dp5"
+#define PURR_KERNEL_VERSION  "1.0.0-dp6"
 #define KITT_VERSION         "1.0.0"
 
 // ── Module loader ─────────────────────────────────────────────────────────────
@@ -50,6 +50,41 @@ const purr_module_header_t *purr_kernel_get_module(const char *name);
 // Enumerate all registered modules (drivers, system, UI, and pre-linked apps).
 int purr_kernel_module_count(void);
 const purr_module_header_t *purr_kernel_module_at(int idx);
+
+// ── Runtime module enable/disable ───────────────────────────────────────────
+// Look up a compiled-in (static) module's header by name, whether or not
+// it's currently loaded — the only way to recover a module's init() pointer
+// after purr_kernel_unload_module() has removed it from the active
+// registry. NULL if no static module with this name exists (e.g. it's a
+// file-based/SD module, or the name is wrong).
+const purr_module_header_t *purr_kernel_get_static_module(const char *name);
+
+// Re-initializes a previously-unloaded static module and re-adds it to the
+// active module registry (purr_kernel_get_module()/module_at() will see it
+// again). Idempotent — a no-op returning 0 if already loaded. Returns -1 if
+// no static module with this name exists, or if init() failed. No safety
+// policy here — see purr_kernel_module_set_enabled() below for that.
+int purr_kernel_enable_static_module(const char *name);
+
+typedef enum {
+    PURR_MODCTL_OK              = 0,
+    PURR_MODCTL_ERR_NOT_FOUND   = -1,
+    PURR_MODCTL_ERR_DENYLISTED  = -2,   // refused: app_manager/driver_manager/active UI/a REQUIRED driver
+    PURR_MODCTL_ERR_ALREADY     = -3,   // already in the requested state
+    PURR_MODCTL_ERR_INIT_FAILED = -4,
+} purr_modctl_result_t;
+
+// Enable/disable a module by name, with denylist safety policy applied —
+// this, not purr_kernel_unload_module()/purr_kernel_enable_static_module()
+// directly, is what the Services app and Terminal app call. Returns a
+// purr_modctl_result_t (cast to int for C compatibility).
+int purr_kernel_module_set_enabled(const char *name, bool enable);
+
+// Unload-then-reload a single static module (e.g. after a config change).
+// Same denylist policy as purr_kernel_module_set_enabled(). On re-enable
+// failure, the module ends up unloaded rather than left in an ambiguous
+// half-restarted state.
+int purr_kernel_module_restart(const char *name);
 
 // ── Catcall registry ──────────────────────────────────────────────────────────
 // Modules call these at init to register what they provide.
