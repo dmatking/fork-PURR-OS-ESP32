@@ -50,6 +50,8 @@ mesh        = "meshtastic"
 meshcore    = "meshcore"
 lua         = "lua_runtime"
 wifi        = "wifi_mgr"
+proximity   = "proximity"
+pairing     = "pairing"
 
 [ui]
 theme       = "wce"
@@ -63,6 +65,7 @@ drivermgr   = true
 msn         = true
 services    = true
 taskmgr     = true
+nearby      = true
 
 [flash]
 display/st7789    = 1
@@ -76,6 +79,8 @@ wifi_mgr          = 2
 lua_runtime       = 2
 meshtastic        = 2
 meshcore          = 2
+proximity         = 2
+pairing           = 2
 gps/generic_nmea  = 3
 battery/adc_battery = 3
 apps/settings     = 3
@@ -86,6 +91,7 @@ apps/drivermgr    = 3
 apps/msn          = 3
 apps/services     = 3
 apps/taskmgr      = 3
+apps/nearby       = 3
 
 [pins]
 display_cs    = 12

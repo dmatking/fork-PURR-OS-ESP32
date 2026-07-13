@@ -7,5 +7,7 @@ idf_component_register(
         ../../kernel/core
         ../../kernel/catcalls
         ../../modules/meshtastic
-    REQUIRES esp_common driver freertos nvs_flash esp_timer meshtastic
+        ../../modules/pairing
+        ../../modules/proximity
+    REQUIRES esp_common driver freertos nvs_flash esp_timer meshtastic pairing proximity
 )

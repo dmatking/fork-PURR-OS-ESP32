@@ -1,0 +1,321 @@
+// pairing_module.c — PURR_MOD_SYSTEM registration + pairing state machine
+// + NVS persistence, riding on proximity_module.c's shared ESP-NOW frame
+// dispatch (PROXIMITY_FRAME_PAIRING).
+//
+// State lives entirely in RAM except the durable "who am I paired with"
+// fact, which follows the mesh_router.c/mc_contacts.cpp dirty-flag + small
+// persist-task NVS pattern used elsewhere in this codebase. The frame
+// handler (pairing_on_frame()) runs on proximity_task()'s own thread,
+// which may have a PSRAM-backed stack — it only ever touches in-RAM state
+// and sets a dirty flag, never NVS directly (same PSRAM-stack-vs-flash-
+// cache-disable hazard documented in meshcore_module.cpp applies here);
+// the actual NVS write happens on this module's own dedicated internal-
+// RAM-stack pairing_task(), mirroring mc_persist_task().
+
+#include "pairing.h"
+#include "../proximity/proximity.h"
+#include "../../kernel/core/purr_kernel.h"
+#include "../../kernel/core/purr_module.h"
+#include "esp_random.h"
+#include "esp_log.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <string.h>
+#include <stdio.h>
+
+static const char *TAG = "pairing";
+
+#define PAIRING_NVS_NS      "purr_pairing"
+#define PAIRING_TIMEOUT_MS  60000UL   // a pending request/confirm with no action expires
+
+typedef enum {
+    PAIRING_MSG_REQUEST = 1,   // initiator -> responder: {code, sender's name}
+    PAIRING_MSG_ACCEPT  = 2,   // responder -> initiator: {sender's name}
+    PAIRING_MSG_REJECT  = 3,   // responder -> initiator
+    PAIRING_MSG_UNPAIR  = 4,   // either -> other, best-effort notice
+} pairing_msg_type_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t  msg_type;
+    uint16_t code;
+    char     name[20];
+} pairing_wire_msg_t;
+
+static pairing_state_t s_state = PAIRING_STATE_NONE;
+
+static uint8_t  s_pending_mac[6];
+static char     s_pending_name[20];
+static uint16_t s_pending_code;
+static uint32_t s_pending_started_ms;
+
+static bool     s_paired = false;
+static uint8_t  s_paired_mac[6];
+static char     s_paired_name[20];
+static volatile bool s_dirty = false;
+
+static TaskHandle_t s_task = NULL;
+
+// ── NVS ──────────────────────────────────────────────────────────────────
+
+static void load_paired(void) {
+    nvs_handle_t h;
+    if (nvs_open(PAIRING_NVS_NS, NVS_READONLY, &h) != ESP_OK) return;
+
+    uint8_t paired = 0;
+    if (nvs_get_u8(h, "paired", &paired) == ESP_OK && paired) {
+        size_t mac_len = sizeof(s_paired_mac);
+        size_t name_len = sizeof(s_paired_name);
+        if (nvs_get_blob(h, "mac", s_paired_mac, &mac_len) == ESP_OK &&
+            nvs_get_str(h, "name", s_paired_name, &name_len) == ESP_OK) {
+            s_paired = true;
+        }
+    }
+    nvs_close(h);
+}
+
+static void save_paired(void) {
+    nvs_handle_t h;
+    if (nvs_open(PAIRING_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "paired", s_paired ? 1 : 0);
+    if (s_paired) {
+        nvs_set_blob(h, "mac", s_paired_mac, sizeof(s_paired_mac));
+        nvs_set_str(h, "name", s_paired_name);
+    }
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+// ── Frame handling ───────────────────────────────────────────────────────
+// Runs on proximity_task() — see this file's header comment. No NVS here.
+
+static void send_msg(const uint8_t *mac, pairing_msg_type_t type, const char *name) {
+    pairing_wire_msg_t msg = {0};
+    msg.msg_type = (uint8_t)type;
+    msg.code = (type == PAIRING_MSG_REQUEST) ? s_pending_code : 0;
+    if (name) {
+        strncpy(msg.name, name, sizeof(msg.name) - 1);
+    }
+    proximity_send_unicast(mac, PROXIMITY_FRAME_PAIRING, (const uint8_t *)&msg, sizeof(msg));
+}
+
+static void pairing_on_frame(const uint8_t *mac, int8_t rssi, const uint8_t *payload, size_t len) {
+    (void)rssi;
+    if (len != sizeof(pairing_wire_msg_t)) return;
+
+    pairing_wire_msg_t msg;
+    memcpy(&msg, payload, sizeof(msg));
+    char name[sizeof(msg.name) + 1];
+    memcpy(name, msg.name, sizeof(msg.name));
+    name[sizeof(msg.name)] = 0;
+
+    switch ((pairing_msg_type_t)msg.msg_type) {
+    case PAIRING_MSG_REQUEST:
+        // Drop if we're already paired or mid-pairing with anyone — no
+        // request queueing/stealing an in-progress pairing (see pairing.h).
+        if (s_state != PAIRING_STATE_NONE) return;
+        memcpy(s_pending_mac, mac, 6);
+        strncpy(s_pending_name, name, sizeof(s_pending_name) - 1);
+        s_pending_name[sizeof(s_pending_name) - 1] = 0;
+        s_pending_code = msg.code;
+        s_pending_started_ms = (uint32_t)purr_kernel_uptime_ms();
+        s_state = PAIRING_STATE_PENDING_INCOMING;
+
+        char notify_body[64];
+        snprintf(notify_body, sizeof(notify_body), "Pairing request from %s", name);
+        purr_kernel_notify("Nearby device", notify_body, "pairing");
+        break;
+
+    case PAIRING_MSG_ACCEPT:
+        if (s_state != PAIRING_STATE_PENDING_OUTGOING) return;
+        if (memcmp(mac, s_pending_mac, 6) != 0) return;
+        s_paired = true;
+        memcpy(s_paired_mac, mac, 6);
+        strncpy(s_paired_name, name, sizeof(s_paired_name) - 1);
+        s_paired_name[sizeof(s_paired_name) - 1] = 0;
+        s_dirty = true;
+        s_state = PAIRING_STATE_PAIRED;
+        break;
+
+    case PAIRING_MSG_REJECT:
+        if (s_state != PAIRING_STATE_PENDING_OUTGOING) return;
+        if (memcmp(mac, s_pending_mac, 6) != 0) return;
+        s_state = PAIRING_STATE_NONE;
+        break;
+
+    case PAIRING_MSG_UNPAIR:
+        if (!s_paired || memcmp(mac, s_paired_mac, 6) != 0) return;
+        s_paired = false;
+        memset(s_paired_mac, 0, sizeof(s_paired_mac));
+        s_paired_name[0] = 0;
+        s_dirty = true;
+        if (s_state == PAIRING_STATE_PAIRED) s_state = PAIRING_STATE_NONE;
+        break;
+
+    default:
+        break;
+    }
+}
+
+// ── Task ─────────────────────────────────────────────────────────────────
+// Internal-RAM stack (plain xTaskCreate, no WithCaps) — the only place in
+// this module allowed to touch NVS.
+
+static void pairing_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        if ((s_state == PAIRING_STATE_PENDING_OUTGOING || s_state == PAIRING_STATE_PENDING_INCOMING) &&
+            (uint32_t)purr_kernel_uptime_ms() - s_pending_started_ms >= PAIRING_TIMEOUT_MS) {
+            ESP_LOGI(TAG, "pending pairing timed out");
+            s_state = PAIRING_STATE_NONE;
+        }
+
+        if (s_dirty) {
+            s_dirty = false;
+            save_paired();
+        }
+    }
+}
+
+// ── Public API ───────────────────────────────────────────────────────────
+
+pairing_state_t pairing_get_state(void) { return s_state; }
+
+bool pairing_start(const uint8_t mac[6], const char *peer_name) {
+    if (!mac || s_state != PAIRING_STATE_NONE) return false;
+
+    memcpy(s_pending_mac, mac, 6);
+    s_pending_name[0] = 0;
+    if (peer_name) {
+        strncpy(s_pending_name, peer_name, sizeof(s_pending_name) - 1);
+    }
+    s_pending_code = (uint16_t)(esp_random() % 10000);
+    s_pending_started_ms = (uint32_t)purr_kernel_uptime_ms();
+    s_state = PAIRING_STATE_PENDING_OUTGOING;
+
+    char own_name[20];
+    proximity_get_own_name(own_name, sizeof(own_name));
+    send_msg(mac, PAIRING_MSG_REQUEST, own_name);
+    return true;
+}
+
+void pairing_cancel(void) {
+    if (s_state == PAIRING_STATE_PENDING_OUTGOING) s_state = PAIRING_STATE_NONE;
+}
+
+bool pairing_get_pending_code(char *out, size_t out_len) {
+    if (s_state != PAIRING_STATE_PENDING_INCOMING && s_state != PAIRING_STATE_PENDING_OUTGOING) return false;
+    if (!out || out_len == 0) return false;
+    snprintf(out, out_len, "%04u", (unsigned)s_pending_code);
+    return true;
+}
+
+bool pairing_get_pending_peer_name(char *out, size_t out_len) {
+    if (s_state != PAIRING_STATE_PENDING_INCOMING && s_state != PAIRING_STATE_PENDING_OUTGOING) return false;
+    if (!out || out_len == 0) return false;
+    snprintf(out, out_len, "%s", s_pending_name);
+    return true;
+}
+
+void pairing_confirm(void) {
+    if (s_state != PAIRING_STATE_PENDING_INCOMING) return;
+
+    s_paired = true;
+    memcpy(s_paired_mac, s_pending_mac, 6);
+    strncpy(s_paired_name, s_pending_name, sizeof(s_paired_name) - 1);
+    s_paired_name[sizeof(s_paired_name) - 1] = 0;
+    s_dirty = true;
+    s_state = PAIRING_STATE_PAIRED;
+
+    char own_name[20];
+    proximity_get_own_name(own_name, sizeof(own_name));
+    send_msg(s_paired_mac, PAIRING_MSG_ACCEPT, own_name);
+}
+
+void pairing_reject(void) {
+    if (s_state != PAIRING_STATE_PENDING_INCOMING) return;
+    send_msg(s_pending_mac, PAIRING_MSG_REJECT, NULL);
+    s_state = PAIRING_STATE_NONE;
+}
+
+bool pairing_is_paired(void) { return s_paired; }
+
+bool pairing_get_paired_mac(uint8_t out_mac[6]) {
+    if (!s_paired || !out_mac) return false;
+    memcpy(out_mac, s_paired_mac, 6);
+    return true;
+}
+
+bool pairing_get_paired_name(char *out, size_t out_len) {
+    if (!s_paired || !out || out_len == 0) return false;
+    snprintf(out, out_len, "%s", s_paired_name);
+    return true;
+}
+
+void pairing_unpair(void) {
+    if (!s_paired) return;
+    send_msg(s_paired_mac, PAIRING_MSG_UNPAIR, NULL);
+    s_paired = false;
+    memset(s_paired_mac, 0, sizeof(s_paired_mac));
+    s_paired_name[0] = 0;
+    s_dirty = true;
+    if (s_state == PAIRING_STATE_PAIRED) s_state = PAIRING_STATE_NONE;
+}
+
+// ── Lifecycle ────────────────────────────────────────────────────────────
+
+int pairing_init(void) {
+    // Safe here: pairing_init() runs on the kernel's module-loader task
+    // (internal RAM stack), same reasoning meshcore_module.cpp documents
+    // for why its own identity load moved out of mc_task() and into
+    // mc_manager_init() — NVS access here, not on pairing_task() the first
+    // time, is fine, and the load only happens once at boot anyway.
+    load_paired();
+
+    proximity_register_handler(PROXIMITY_FRAME_PAIRING, pairing_on_frame);
+
+    // Small/no PSRAM hazard here either way, but internal RAM keeps this
+    // consistent with "only pairing_task() touches NVS" — plain
+    // xTaskCreatePinnedToCore (not WithCaps), core 1 alongside the mesh/
+    // radio-companion tasks it's conceptually part of (see mc_persist_task).
+    BaseType_t ok = xTaskCreatePinnedToCore(pairing_task, "pairing", 3072, NULL, 2, &s_task, 1);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "failed to create pairing task — persistence disabled");
+    }
+
+    ESP_LOGI(TAG, "ready%s", s_paired ? " (already paired)" : "");
+    return 0;
+}
+
+void pairing_deinit(void) {
+    if (s_task) {
+        if (s_dirty) {
+            s_dirty = false;
+            save_paired();
+        }
+        vTaskDelete(s_task);
+        s_task = NULL;
+    }
+    proximity_register_handler(PROXIMITY_FRAME_PAIRING, NULL);
+    s_state = PAIRING_STATE_NONE;
+}
+
+// ── Module header ─────────────────────────────────────────────────────────
+
+PURR_MODULE_REGISTER(pairing) = {
+    .magic             = PURR_MODULE_MAGIC,
+    .abi_version       = PURR_MODULE_ABI_VERSION,
+    .module_type       = PURR_MOD_SYSTEM,
+    .load_priority     = PURR_PRIORITY_OPTIONAL,
+    .name              = "pairing",
+    .version           = "1.0.0",
+    .kernel_min        = "0.11.1",
+    .kernel_max        = "",
+    .provided_catcalls = 0,
+    .required_catcalls = 0,
+    .init              = pairing_init,
+    .deinit            = pairing_deinit,
+};

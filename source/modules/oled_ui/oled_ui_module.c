@@ -15,6 +15,8 @@
 #include "../../kernel/catcalls/catcall_display.h"
 #include "../../kernel/catcalls/catcall_input.h"
 #include "../../modules/meshtastic/meshtastic.h"
+#include "../../modules/pairing/pairing.h"
+#include "../../modules/proximity/proximity.h"
 
 static const char *TAG = "oled_ui";
 
@@ -211,9 +213,9 @@ static void mesh_rx_for_oled(uint32_t from_node, uint32_t to_node, int channel_i
 // forward through these, long press jumps straight back to SCREEN_LOG.
 // Order/count here must match s_screen_names[] below.
 
-typedef enum { SCREEN_LOG = 0, SCREEN_INFO, SCREEN_ABOUT, SCREEN_SEND, SCREEN_NODES, SCREEN_MESSAGES, SCREEN_SHUTDOWN, SCREEN_COUNT } screen_t;
+typedef enum { SCREEN_LOG = 0, SCREEN_INFO, SCREEN_ABOUT, SCREEN_SEND, SCREEN_NODES, SCREEN_MESSAGES, SCREEN_PAIR, SCREEN_SHUTDOWN, SCREEN_COUNT } screen_t;
 
-static const char *s_screen_names[SCREEN_COUNT] = { "Log", "Info", "About", "Send", "Nodes", "Msgs", "Power" };
+static const char *s_screen_names[SCREEN_COUNT] = { "Log", "Info", "About", "Send", "Nodes", "Msgs", "Pair", "Power" };
 
 static screen_t s_screen = SCREEN_LOG;
 
@@ -234,16 +236,24 @@ static void draw_title_bar(const char *name) {
 static void render_log(void) {
     draw_title_bar(s_screen_names[SCREEN_LOG]);
 
-    // Row 1: LoRa/mesh status is real now (meshtastic module wired in);
-    // GPS stays a placeholder — this board has no onboard GPS and none is
-    // attached, nothing to actually report yet.
+    // Row 1: a pending incoming pairing request takes over this row — it's
+    // the one thing on this screen that needs the user's attention before
+    // it times out (PAIRING_TIMEOUT_MS in pairing_module.c), unlike LoRa/
+    // GPS status which is fine to glance at whenever. Otherwise: LoRa/mesh
+    // status is real now (meshtastic module wired in); GPS stays a
+    // placeholder — this board has no onboard GPS and none is attached,
+    // nothing to actually report yet.
     // Oversized on purpose — see draw_title_bar()'s buf comment for why.
     char status[48];
-    const char *lora = !mesh_manager_ready()   ? "starting"
-                      : !mesh_manager_is_alive() ? "stale"
-                      : "ready";
-    snprintf(status, sizeof(status), "LoRa:%s GPS:--", lora);
-    draw_str(0, FONT_H, status, COL_WHITE, COL_BLACK);
+    if (pairing_get_state() == PAIRING_STATE_PENDING_INCOMING) {
+        draw_str(0, FONT_H, "Pair request! ->Pair", COL_WHITE, COL_BLACK);
+    } else {
+        const char *lora = !mesh_manager_ready()   ? "starting"
+                          : !mesh_manager_is_alive() ? "stale"
+                          : "ready";
+        snprintf(status, sizeof(status), "LoRa:%s GPS:--", lora);
+        draw_str(0, FONT_H, status, COL_WHITE, COL_BLACK);
+    }
 
     // Row 2: battery — purr_kernel_battery_*() is the plain push-based
     // pattern every battery driver uses (no catcall, no NULL to check;
@@ -441,6 +451,45 @@ static void render_shutdown(void) {
     draw_str(0, FONT_H * 3, "hold to confirm", COL_WHITE, COL_BLACK);
 }
 
+// --- Pair (pairing_module.c confirm/status screen) -----------------------------
+// Not the same locked/unlocked two-step shape as Send/Shutdown — pairing.h's
+// pairing_confirm()/pairing_reject() are already a single user action apiece
+// (a request only exists at all because a nearby device explicitly asked),
+// so a single hold-to-confirm/tap-to-reject here is enough, no separate
+// unlock step first.
+
+static void render_pair(void) {
+    draw_title_bar(s_screen_names[SCREEN_PAIR]);
+
+    if (pairing_is_paired()) {
+        char name[20];
+        pairing_get_paired_name(name, sizeof(name));
+        draw_str(0, FONT_H * 2, "Paired with:", COL_WHITE, COL_BLACK);
+        draw_str(0, FONT_H * 3, name, COL_WHITE, COL_BLACK);
+        draw_str(0, FONT_H * 5, "hold=unpair", COL_WHITE, COL_BLACK);
+        return;
+    }
+
+    if (pairing_get_state() != PAIRING_STATE_PENDING_INCOMING) {
+        draw_str(0, FONT_H * 2, "Not paired", COL_WHITE, COL_BLACK);
+        draw_str(0, FONT_H * 3, "waiting for a", COL_WHITE, COL_BLACK);
+        draw_str(0, FONT_H * 4, "pair request...", COL_WHITE, COL_BLACK);
+        return;
+    }
+
+    char peer[20], code[8];
+    pairing_get_pending_peer_name(peer, sizeof(peer));
+    pairing_get_pending_code(code, sizeof(code));
+
+    char line[24];
+    draw_str(0, FONT_H * 2, "Pair request:", COL_WHITE, COL_BLACK);
+    draw_str(0, FONT_H * 3, peer, COL_WHITE, COL_BLACK);
+    snprintf(line, sizeof(line), "Code: %s", code);
+    draw_str(0, FONT_H * 4, line, COL_WHITE, COL_BLACK);
+    draw_str(0, FONT_H * 6, "hold=confirm", COL_WHITE, COL_BLACK);
+    draw_str(0, FONT_H * 7, "tap=reject", COL_WHITE, COL_BLACK);
+}
+
 // --- Render -----------------------------------------------------------------
 
 static void render(void) {
@@ -456,6 +505,7 @@ static void render(void) {
         case SCREEN_SEND:  render_send();  break;
         case SCREEN_NODES:    render_nodes();    break;
         case SCREEN_MESSAGES: render_messages(); break;
+        case SCREEN_PAIR:     render_pair();     break;
         case SCREEN_SHUTDOWN: render_shutdown(); break;
         default: break;
     }
@@ -519,6 +569,15 @@ static bool handle_button_event(const input_event_t *ev) {
             s_send_unlocked = false;                                // require a fresh hold before the next send
         } else if (s_screen == SCREEN_SHUTDOWN && s_shutdown_unlocked && held_ms >= VERY_LONG_PRESS_MS) {
             purr_kernel_shutdown();                                 // does not return
+        } else if (s_screen == SCREEN_PAIR && pairing_get_state() == PAIRING_STATE_PENDING_INCOMING) {
+            // Single-step, not the two-tier locked/unlock+very-long shape
+            // above (see render_pair()'s comment) — hold confirms, any
+            // shorter tap rejects. Both consume the event outright: a
+            // short tap here must NOT also fall through to "next screen".
+            if (held_ms >= LONG_PRESS_MS) pairing_confirm();
+            else                          pairing_reject();
+        } else if (s_screen == SCREEN_PAIR && pairing_is_paired() && held_ms >= LONG_PRESS_MS) {
+            pairing_unpair();
         } else if (s_screen == SCREEN_SEND && !s_send_unlocked && held_ms >= LONG_PRESS_MS) {
             s_send_unlocked = true;                                 // long press on locked Send: unlock, don't leave
         } else if (s_screen == SCREEN_NODES && !s_nodes_unlocked && held_ms >= LONG_PRESS_MS) {
@@ -621,6 +680,16 @@ static esp_err_t oled_ui_init(void) {
         oled_ui_log(boot_msg);
     }
     mesh_manager_add_rx_callback(mesh_rx_for_oled);
+
+    // Advertises "I'm a headless LoRa radio companion, pair with me" in
+    // this device's beacon (see the "Remote radio companion" plan) —
+    // proximity_set_own_caps() is safe to call regardless of whether
+    // proximity_module.c's own init() has run yet (see its own comment on
+    // why s_own_caps isn't reset there). oled_ui is the natural place for
+    // this: it's this codebase's "minimal/no touchscreen UI" signal, not a
+    // Heltec-specific special case (any future device using oled_ui would
+    // want the same beacon flag).
+    proximity_set_own_caps(PROXIMITY_CAP_RADIO_COMPANION);
 
     s_running = true;
     xTaskCreate(oled_ui_task, "oled_ui", 4096, NULL, 5, NULL);

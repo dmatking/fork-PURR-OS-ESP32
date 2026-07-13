@@ -34,6 +34,13 @@ lora        = "sx1262_rl"
 ui          = "oled_ui"
 app_manager = "app_manager"
 mesh        = "meshtastic"
+# proximity/pairing — ESP-NOW "radio companion" discovery + pairing (see
+# the "Remote radio companion" plan). No wifi_mgr on this device (no WiFi
+# network connectivity needed) — proximity_module.c brings up the WiFi
+# driver itself in STA mode (never connected to an AP) since nothing else
+# on this device does, see its own ensure_wifi_ready() comment.
+proximity   = "proximity"
+pairing     = "pairing"
 
 [ui]
 style       = "full"
@@ -53,6 +60,8 @@ radio/sx1262_rl       = 2
 oled_ui               = 2
 app_manager           = 2
 meshtastic             = 2
+proximity              = 2
+pairing                = 2
 battery/adc_battery    = 3
 
 [pins]
