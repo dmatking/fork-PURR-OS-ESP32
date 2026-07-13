@@ -8,10 +8,11 @@
 // Launch screen is a backend chooser: two big buttons (Meshtastic/MeshCore)
 // with an active-indicator next to whichever one purr_kernel_get_module()
 // shows is actually running. Tapping the active one enters the normal
-// Rooms/Buddies chat UI below. Tapping the inactive one persists the choice
-// (purr_kernel_mesh_backend_set()) and reboots into it — mutual exclusion
-// (one physical radio) means a live switch isn't possible, matching
-// meshtastic_module.c's/meshcore_module.cpp's own guard design.
+// Rooms/Buddies chat UI below. Tapping the inactive one live-switches to it
+// via purr_kernel_mesh_backend_switch() — persists the choice and swaps
+// which mesh module is loaded, no reboot (see that function's own comment
+// in purr_kernel.c for how the one-physical-radio mutual exclusion still
+// holds without one).
 //
 // Two lists on the chat window: Rooms (channels — group chat scoped to one
 // channel's key) and Buddies (1:1 DMs). A buddy is DMed using whichever
@@ -718,12 +719,19 @@ static void enter_chat_ui(const msn_backend_t *backend) {
 
 static void do_switch(purr_wid_t w, purr_event_t e, void *user) {
     (void)w; (void)e; (void)user;
-    // Mutual exclusion means a live switch isn't possible (one physical
-    // radio, one catcall_radio_t slot) — persist the choice and reboot into
-    // it, matching meshtastic_module.c's/meshcore_module.cpp's own guard
-    // design (the preference is authoritative from the next boot on).
-    purr_kernel_mesh_backend_set(s_pending_switch_target);
-    purr_kernel_reboot();
+    purr_mesh_backend_t target = s_pending_switch_target;
+    int rc = purr_kernel_mesh_backend_switch(target);
+
+    if (s_switch_confirm_win) {
+        purr_win_destroy(s_switch_confirm_win);
+        s_switch_confirm_win = 0; s_switch_confirm_lbl = 0;
+    }
+
+    if (rc != PURR_MODCTL_OK && rc != PURR_MODCTL_ERR_ALREADY) {
+        update_chooser_status();   // switch failed — stay on the chooser, reflect real state
+        return;
+    }
+    enter_chat_ui(target == PURR_MESH_BACKEND_MESHCORE ? msn_backend_meshcore() : msn_backend_meshtastic());
 }
 
 static void on_switch_cancel(purr_wid_t w, purr_event_t e, void *user) {
@@ -742,7 +750,7 @@ static void open_switch_confirm(purr_mesh_backend_t target, const char *name) {
     }
 
     char msg[64];
-    snprintf(msg, sizeof(msg), "Switch to %s? Device will restart.", name);
+    snprintf(msg, sizeof(msg), "Switch to %s?", name);
 
     s_switch_confirm_win = purr_win_create("Switch Backend");
     s_switch_confirm_lbl = purr_win_label(s_switch_confirm_win, msg);

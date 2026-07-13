@@ -677,10 +677,10 @@ static void on_open_customization(purr_wid_t w, purr_event_t e, void *u) {
 }
 
 // ── Mesh backend switch ──────────────────────────────────────────────────
-// Shares the exact same preference + reboot mechanism as MSN's own chooser
-// screen (msn.c) — one source of truth (purr_kernel_mesh_backend_get/_set),
-// no logic duplicated. A live switch isn't possible (one physical radio,
-// mutually exclusive modules), so this always reboots, same as MSN's.
+// Shares the exact same preference + live-switch mechanism as MSN's own
+// chooser screen (msn.c) — one source of truth
+// (purr_kernel_mesh_backend_switch(), see its own comment in purr_kernel.c
+// for how the mutual-exclusion guard cooperates with a no-reboot switch).
 
 static void update_mesh_backend_status(void) {
     if (!s_mesh_backend_status_lbl) return;
@@ -694,8 +694,16 @@ static void update_mesh_backend_status(void) {
 
 static void on_mesh_switch_confirm(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
-    purr_kernel_mesh_backend_set(s_mesh_switch_target);
-    purr_kernel_reboot();
+    int rc = purr_kernel_mesh_backend_switch(s_mesh_switch_target);
+
+    if (s_mesh_switch_confirm_win) {
+        purr_win_destroy(s_mesh_switch_confirm_win);
+        s_mesh_switch_confirm_win = 0;
+    }
+    update_mesh_backend_status();
+    if (rc != PURR_MODCTL_OK && rc != PURR_MODCTL_ERR_ALREADY && s_mesh_backend_status_lbl) {
+        purr_win_label_set(s_mesh_backend_status_lbl, "Mesh backend: switch failed");
+    }
 }
 
 static void on_mesh_switch_cancel(purr_wid_t w, purr_event_t e, void *u) {
@@ -711,7 +719,7 @@ static void open_mesh_switch_confirm(purr_mesh_backend_t target, const char *nam
     if (s_mesh_switch_confirm_win) { purr_win_show(s_mesh_switch_confirm_win); return; }
 
     char msg[64];
-    snprintf(msg, sizeof(msg), "Switch to %s? Device will restart.", name);
+    snprintf(msg, sizeof(msg), "Switch to %s?", name);
 
     s_mesh_switch_confirm_win = purr_win_create("Switch Backend");
     purr_win_label(s_mesh_switch_confirm_win, msg);

@@ -1139,6 +1139,34 @@ void purr_kernel_mesh_backend_set(purr_mesh_backend_t backend) {
     nvs_close(h);
 }
 
+// Persist first — if the target's start (below) fails for some reason, the
+// preference still reflects intent, same as a failed switch should still
+// "stick" for the next boot rather than silently staying on the old
+// backend. purr_kernel_unload_module() (used by purr_kernel_module_set_
+// enabled(name, false)) fully removes the stopped module from s_modules[]
+// before this returns, so the target's own init() — re-run synchronously
+// by purr_kernel_module_set_enabled(name, true) — sees a clean
+// purr_kernel_get_module(other) == NULL when its mutual-exclusion guard
+// checks (meshtastic_module.c's mesh_manager_init() / meshcore_module.cpp's
+// mc_manager_init()), exactly as if this were done by hand via Terminal's
+// `stop`/`start`. No reboot needed — the one-physical-radio constraint only
+// requires the other module to be gone before the target starts, not a
+// clean boot.
+int purr_kernel_mesh_backend_switch(purr_mesh_backend_t backend) {
+    purr_kernel_mesh_backend_set(backend);
+
+    const char *target_name = (backend == PURR_MESH_BACKEND_MESHCORE) ? "meshcore" : "meshtastic";
+    const char *other_name  = (backend == PURR_MESH_BACKEND_MESHCORE) ? "meshtastic" : "meshcore";
+
+    if (purr_kernel_get_module(other_name)) {
+        purr_kernel_module_set_enabled(other_name, false);
+    }
+    if (purr_kernel_get_module(target_name)) {
+        return PURR_MODCTL_ERR_ALREADY;   // already running — nothing left to do
+    }
+    return purr_kernel_module_set_enabled(target_name, true);
+}
+
 // ── Notifications ─────────────────────────────────────────────────────────────
 // Ring buffer indexed by insertion order; s_notify_head points at the slot
 // the *next* notification will be written to, so the most recent entry is

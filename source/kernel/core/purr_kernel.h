@@ -191,6 +191,16 @@ typedef enum {
 purr_mesh_backend_t purr_kernel_mesh_backend_get(void);
 void                 purr_kernel_mesh_backend_set(purr_mesh_backend_t backend);
 
+// Switches the active mesh backend live — no reboot. Persists the
+// preference (purr_kernel_mesh_backend_set()) and then stops whichever of
+// meshtastic/meshcore is currently running and starts the target, via the
+// same purr_kernel_module_set_enabled() choke point Terminal's stop/start
+// commands use — see purr_kernel.c's own comment for why that's sufficient
+// (the mutual-exclusion guard in each module's init() only needs the other
+// to be fully unloaded from the registry, not a reboot). Returns a
+// PURR_MODCTL_* result code for the "start target" step.
+int purr_kernel_mesh_backend_switch(purr_mesh_backend_t backend);
+
 // Called by SD / WiFi / PMIC / LoRa drivers when their state changes
 void     purr_kernel_set_sd_available(bool v);
 void     purr_kernel_set_wifi_connected(bool v);
