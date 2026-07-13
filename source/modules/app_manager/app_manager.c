@@ -433,12 +433,13 @@ static int launch_meow(app_entry_t *app, int idx)
     // documented elsewhere in this session's work), so doubling it here
     // is cheap. Scripts that build a UI and return (the documented
     // "supported" .meow pattern) never ran long enough to hit this.
-    // Priority 4, not 5 — matches cupcake_task's own render-loop priority
-    // (cupcake_module.c) rather than sitting above it. At 5 this task's
-    // synchronous script-run work could fully preempt and freeze
-    // rendering for its whole duration on the same core; at 4 it shares
-    // the CPU with the renderer instead of starving it outright.
-    BaseType_t ok = xTaskCreateWithCaps(meow_task, app->name, 16384, ctx, 4, &ctx->task, MALLOC_CAP_SPIRAM);
+    // Priority 4, not 5 — originally chosen to match cupcake_task's own
+    // render-loop priority when both shared a core (avoiding this task's
+    // synchronous script-run work fully preempting rendering). Now pinned
+    // to core 0 while cupcake_task moves to core 1 (see that module's own
+    // comment) — the two no longer contend for the same core at all, but
+    // the priority is left as-is since it's still harmless.
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(meow_task, app->name, 16384, ctx, 4, &ctx->task, 0, MALLOC_CAP_SPIRAM);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreateWithCaps failed for '%s' — out of PSRAM too?", app->name);
         report_launch_oom(app);
@@ -572,9 +573,11 @@ static int launch_native(app_entry_t *app, int idx)
             stack_buf = s_static_stack_fileman;
             tcb_buf   = &s_static_tcb_fileman;
         }
-        // Priority 4 — see the meow_task creation site's comment above for
-        // why this no longer sits above cupcake_task's own priority.
-        ctx->task = xTaskCreateStatic(native_task, app->name, STATIC_STACK_SIZE, ctx, 4, stack_buf, tcb_buf);
+        // Priority 4 — see the meow_task creation site's comment above.
+        // Pinned to core 0 alongside every other app task — see that same
+        // comment for the cupcake_task/mesh_task core-1 grouping this pairs
+        // with.
+        ctx->task = xTaskCreateStaticPinnedToCore(native_task, app->name, STATIC_STACK_SIZE, ctx, 4, stack_buf, tcb_buf, 0);
         if (!ctx->task) {
             // Can't happen in practice (a static buffer never "runs out"),
             // but xTaskCreateStatic() can still return NULL on bad params.
@@ -586,9 +589,9 @@ static int launch_native(app_entry_t *app, int idx)
         }
     } else {
         uint32_t stack = (app->tier == APP_TIER_CLAW) ? 16384 : 8192;
-        // Priority 4 — see the meow_task creation site's comment above for
-        // why this no longer sits above cupcake_task's own priority.
-        BaseType_t ok = xTaskCreateWithCaps(native_task, app->name, stack, ctx, 4, &ctx->task, MALLOC_CAP_SPIRAM);
+        // Priority 4, pinned to core 0 — see the meow_task creation site's
+        // comment above.
+        BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(native_task, app->name, stack, ctx, 4, &ctx->task, 0, MALLOC_CAP_SPIRAM);
         if (ok != pdPASS) {
             // xTaskCreate's return value was never checked before — a silent
             // failure here left `state` stuck at RUNNING forever with no task

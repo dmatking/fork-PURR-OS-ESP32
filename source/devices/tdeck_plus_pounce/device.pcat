@@ -49,7 +49,7 @@ terminal    = true
 fileman     = true
 hwtest      = true
 drivermgr   = true
-meshchat    = true
+msn         = true
 meshdiag    = true
 services    = true
 
@@ -70,7 +70,7 @@ apps/terminal     = 3
 apps/fileman      = 3
 apps/hwtest       = 3
 apps/drivermgr    = 3
-apps/meshchat     = 3
+apps/msn          = 3
 apps/meshdiag     = 3
 apps/services     = 3
 

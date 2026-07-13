@@ -7,7 +7,6 @@ idf_component_register(
         ../../../kernel/core
         ../../../kernel/catcalls
         ../../../modules/bt_mgr
-        ../../../modules/meshtastic
-    REQUIRES esp_common driver freertos esp_hw_support app_manager bt_mgr meshtastic
+    REQUIRES esp_common driver freertos esp_hw_support app_manager bt_mgr
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-format-truncation)

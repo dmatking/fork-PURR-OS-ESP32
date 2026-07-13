@@ -93,8 +93,12 @@ int cupcake_init(void)
     extern void cupcake_win_register(void);
     cupcake_win_register();
 
-    s_task = xTaskCreateStatic(cupcake_task, "cupcake", CUPCAKE_STACK_SIZE, NULL, 4,
-                                s_cupcake_stack, &s_cupcake_tcb);
+    // Pinned to core 1 — groups with mesh_task/mc_task (see meshtastic_module.c/
+    // meshcore_module.cpp), away from core 0's app tasks + WiFi/BT (see
+    // app_manager.c's matching change). Deliberate choice, not previously
+    // pinned at all.
+    s_task = xTaskCreateStaticPinnedToCore(cupcake_task, "cupcake", CUPCAKE_STACK_SIZE, NULL, 4,
+                                            s_cupcake_stack, &s_cupcake_tcb, 1);
     if (!s_task) {
         ESP_LOGE(TAG, "xTaskCreateStatic failed for cupcake task");
         return -1;

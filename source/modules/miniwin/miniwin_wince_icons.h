@@ -15,7 +15,7 @@ extern "C" {
 extern const uint8_t wce_icon_settings[];
 extern const uint8_t wce_icon_terminal[];
 extern const uint8_t wce_icon_calculator[];
-extern const uint8_t wce_icon_meshchat[];
+extern const uint8_t wce_icon_msn[];
 
 #ifdef __cplusplus
 }

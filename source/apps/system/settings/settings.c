@@ -52,6 +52,9 @@ static purr_wid_t  s_display_status_lbl = 0;
 static purr_win_t  s_customization_win        = 0;
 static purr_wid_t  s_customization_status_lbl = 0;
 static purr_win_t  s_connectivity_win = 0;
+static purr_wid_t  s_mesh_backend_status_lbl = 0;
+static purr_win_t  s_mesh_switch_confirm_win = 0;
+static purr_mesh_backend_t s_mesh_switch_target;
 
 static purr_wid_t  s_brightness_lbl = 0;
 static purr_wid_t  s_screen_timeout_lbl = 0;
@@ -673,9 +676,68 @@ static void on_open_customization(purr_wid_t w, purr_event_t e, void *u) {
     purr_win_show(s_customization_win);
 }
 
+// ── Mesh backend switch ──────────────────────────────────────────────────
+// Shares the exact same preference + reboot mechanism as MSN's own chooser
+// screen (msn.c) — one source of truth (purr_kernel_mesh_backend_get/_set),
+// no logic duplicated. A live switch isn't possible (one physical radio,
+// mutually exclusive modules), so this always reboots, same as MSN's.
+
+static void update_mesh_backend_status(void) {
+    if (!s_mesh_backend_status_lbl) return;
+    bool mt_active = purr_kernel_get_module("meshtastic") != NULL;
+    bool mc_active = purr_kernel_get_module("meshcore") != NULL;
+    const char *active = mt_active ? "Meshtastic" : (mc_active ? "MeshCore" : "none");
+    char buf[48];
+    snprintf(buf, sizeof(buf), "Mesh backend: %s", active);
+    purr_win_label_set(s_mesh_backend_status_lbl, buf);
+}
+
+static void on_mesh_switch_confirm(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    purr_kernel_mesh_backend_set(s_mesh_switch_target);
+    purr_kernel_reboot();
+}
+
+static void on_mesh_switch_cancel(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (s_mesh_switch_confirm_win) {
+        purr_win_destroy(s_mesh_switch_confirm_win);
+        s_mesh_switch_confirm_win = 0;
+    }
+}
+
+static void open_mesh_switch_confirm(purr_mesh_backend_t target, const char *name) {
+    s_mesh_switch_target = target;
+    if (s_mesh_switch_confirm_win) { purr_win_show(s_mesh_switch_confirm_win); return; }
+
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Switch to %s? Device will restart.", name);
+
+    s_mesh_switch_confirm_win = purr_win_create("Switch Backend");
+    purr_win_label(s_mesh_switch_confirm_win, msg);
+    purr_wid_t row = purr_win_row(s_mesh_switch_confirm_win, 4);
+    purr_win_button(s_mesh_switch_confirm_win, "Switch", on_mesh_switch_confirm, NULL);
+    purr_win_button(s_mesh_switch_confirm_win, "Cancel", on_mesh_switch_cancel,  NULL);
+    purr_win_layout_end(row);
+
+    purr_win_show(s_mesh_switch_confirm_win);
+}
+
+static void on_mesh_switch_meshtastic(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (purr_kernel_get_module("meshtastic")) return;   // already active
+    open_mesh_switch_confirm(PURR_MESH_BACKEND_MESHTASTIC, "Meshtastic");
+}
+
+static void on_mesh_switch_meshcore(purr_wid_t w, purr_event_t e, void *u) {
+    (void)w;(void)e;(void)u;
+    if (purr_kernel_get_module("meshcore")) return;   // already active
+    open_mesh_switch_confirm(PURR_MESH_BACKEND_MESHCORE, "MeshCore");
+}
+
 static void on_open_connectivity(purr_wid_t w, purr_event_t e, void *u) {
     (void)w;(void)e;(void)u;
-    if (s_connectivity_win) { purr_win_show(s_connectivity_win); return; }
+    if (s_connectivity_win) { purr_win_show(s_connectivity_win); update_mesh_backend_status(); return; }
 
     s_connectivity_win = purr_win_create("Connectivity");
     add_back_button(s_connectivity_win);
@@ -687,6 +749,14 @@ static void on_open_connectivity(purr_wid_t w, purr_event_t e, void *u) {
     purr_win_button(s_connectivity_win, "Bluetooth Settings", on_bt_settings_open,   NULL);
 #endif
     purr_win_layout_end(nr);
+
+    purr_win_label(s_connectivity_win, "Mesh");
+    s_mesh_backend_status_lbl = purr_win_label(s_connectivity_win, "Mesh backend: ...");
+    purr_wid_t mr = purr_win_row(s_connectivity_win, 4);
+    purr_win_button(s_connectivity_win, "Use Meshtastic", on_mesh_switch_meshtastic, NULL);
+    purr_win_button(s_connectivity_win, "Use MeshCore",   on_mesh_switch_meshcore,   NULL);
+    purr_win_layout_end(mr);
+    update_mesh_backend_status();
 
     purr_win_show(s_connectivity_win);
 }
@@ -730,7 +800,8 @@ static void settings_deinit(void) {
     if (s_general_win)       { purr_win_destroy(s_general_win);       s_general_win       = 0; s_general_status_lbl       = 0; }
     if (s_display_win)       { purr_win_destroy(s_display_win);       s_display_win       = 0; s_display_status_lbl       = 0; }
     if (s_customization_win) { purr_win_destroy(s_customization_win); s_customization_win = 0; s_customization_status_lbl = 0; }
-    if (s_connectivity_win)  { purr_win_destroy(s_connectivity_win);  s_connectivity_win  = 0; }
+    if (s_connectivity_win)  { purr_win_destroy(s_connectivity_win);  s_connectivity_win  = 0; s_mesh_backend_status_lbl = 0; }
+    if (s_mesh_switch_confirm_win) { purr_win_destroy(s_mesh_switch_confirm_win); s_mesh_switch_confirm_win = 0; }
     purr_win_destroy(s_win);
     s_win = 0;
 }

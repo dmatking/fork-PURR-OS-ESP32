@@ -109,6 +109,11 @@ static void cmd_modules(void) {
     for (int i = 0; i < n; i++) {
         const purr_module_header_t *hdr = purr_kernel_module_at(i);
         if (!hdr) continue;
+        // meshtastic/meshcore are "extensions" managed through MSN, not
+        // generic modules the user browses here — stop/start/restart by
+        // name still work (Terminal doesn't need them listed to target
+        // them), this only hides them from the enumeration.
+        if (strcmp(hdr->name, "meshtastic") == 0 || strcmp(hdr->name, "meshcore") == 0) continue;
         snprintf(line, sizeof(line), "  %-16s %-8s v%s\n",
                  hdr->name, module_type_name(hdr->module_type), hdr->version);
         term_print(line);

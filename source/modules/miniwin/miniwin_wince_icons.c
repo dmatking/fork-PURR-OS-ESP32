@@ -98,7 +98,7 @@ const uint8_t wce_icon_calculator[] = {
 
 /* Bitmap width: 24 */
 /* Bitmap height: 24 */
-const uint8_t wce_icon_meshchat[] = {
+const uint8_t wce_icon_msn[] = {
   0x00U, 0x00U, 0x00U,
   0x00U, 0x00U, 0x00U,
   0x3FU, 0xFFU, 0xFCU,

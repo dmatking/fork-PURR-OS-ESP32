@@ -1,22 +1,32 @@
-// meshchat.c — PURR OS MeshChat: MSN-style rooms + buddy list, private 1:1
-// chat and multi-channel group chat over the Meshtastic mesh (.claw). Talks
-// only through meshtastic.h's public API (mesh_manager_send_text/
-// add_rx_callback/node_at/channel_*) — the mesh module itself is a real,
-// wire-compatible Meshtastic client (verified default channel PSK +
-// LongFast modem preset against real Meshtastic hardware), so this app is a
-// standalone messaging client: no phone, no BLE companion, no official
-// Meshtastic app required to chat.
+// msn.c — PURR OS MSN (Mesh Social Network): rooms + buddy list, private 1:1
+// chat and multi-channel group chat over whichever mesh backend (Meshtastic
+// or MeshCore) is currently active. Renamed/refactored from meshchat.c,
+// which talked to meshtastic.h directly — this file now talks only through
+// msn_backend.h's protocol-agnostic vtable (msn_backend_meshtastic.c /
+// msn_backend_meshcore.c own the actual meshtastic.h/meshcore_api.h calls).
 //
-// Two lists on the main window: Rooms (channels — group chat scoped to one
-// channel's PSK, channel 0 is always the "LongFast" default everyone
-// speaks) and Buddies (1:1 DMs). A buddy is DMed on whichever channel it
-// was last heard on (mesh_node_info_t.channel_idx) — a node met on a
-// private room's channel can't be reached on the primary channel's key.
+// Launch screen is a backend chooser: two big buttons (Meshtastic/MeshCore)
+// with an active-indicator next to whichever one purr_kernel_get_module()
+// shows is actually running. Tapping the active one enters the normal
+// Rooms/Buddies chat UI below. Tapping the inactive one persists the choice
+// (purr_kernel_mesh_backend_set()) and reboots into it — mutual exclusion
+// (one physical radio) means a live switch isn't possible, matching
+// meshtastic_module.c's/meshcore_module.cpp's own guard design.
+//
+// Two lists on the chat window: Rooms (channels — group chat scoped to one
+// channel's key) and Buddies (1:1 DMs). A buddy is DMed using whichever
+// channel/key the active backend's own contact record implies (Meshtastic:
+// the contact's last-heard channel; MeshCore: per-contact ECDH, no channel
+// involved) — msn_backend_t's send_text() owns that distinction internally.
 //
 // Message logs (both rooms and DMs) persist across closing and reopening a
 // chat window (and across closing/relaunching the whole app) — only the
 // window widgets are torn down and rebuilt, the log buffers below are
-// static/heap globals that outlive them.
+// static/heap globals that outlive them. SD history paths are keyed by
+// msn_contact_t.id_str / the channel's on-air hash byte — both stable
+// across a contact/channel table re-sort, and (for Meshtastic) byte-for-
+// byte identical to what meshchat.c already wrote, so existing users' chat
+// history is picked up unchanged after this rename.
 
 #include <string.h>
 #include <stdio.h>
@@ -29,20 +39,29 @@
 #include "purr_win.h"
 #include "purr_kernel.h"
 #include "purr_module.h"
-#include "meshtastic.h"
-#include "meshtastic/portnums.pb.h"
+#include "msn_backend.h"
 #include <mbedtls/sha256.h>
 
-// Mirrors mesh_router.c's MAX_NODES — can't have more buddies than the mesh
-// module itself tracks nodes.
 #define MAX_CHATS      16
 #define CHAT_LOG_LEN   1024
+#define MAX_ROOMS      8   // matches MESH_MAX_CHANNELS / MC_MAX_CHANNELS
 // A buddy is shown as "online" if heard from within this window; purely a
-// UI-freshness cue, not synced to meshtastic_module.c's own (private)
-// re-announce interval.
+// UI-freshness cue, computed from msn_contact_t.last_seen_ms_ago (already
+// normalized by the active backend), not any protocol-specific clock.
 #define ONLINE_WINDOW_MS (15UL * 60UL * 1000UL)
 
-// ── Main window state ────────────────────────────────────────────────────────
+// ── Backend selection ────────────────────────────────────────────────────
+static const msn_backend_t *s_backend = NULL;
+
+// ── Chooser screen state ─────────────────────────────────────────────────
+static purr_win_t s_chooser_win        = 0;
+static purr_wid_t s_meshtastic_status  = 0;
+static purr_wid_t s_meshcore_status    = 0;
+static purr_win_t s_switch_confirm_win = 0;
+static purr_wid_t s_switch_confirm_lbl = 0;
+static purr_mesh_backend_t s_pending_switch_target;
+
+// ── Main chat window state ───────────────────────────────────────────────
 
 static purr_win_t  s_buddy_win   = 0;
 static purr_wid_t  s_buddy_list  = 0;
@@ -51,22 +70,19 @@ static purr_wid_t  s_status_lbl  = 0;
 static TaskHandle_t s_refresh_task = NULL;
 static bool         s_running      = false;
 // Given by buddy_refresh_task() right before it self-deletes, waited on by
-// meshchat_deinit() before it destroys any window — see that function's
-// comment for the use-after-free this closes (Task Manager's Kill button
-// could tear down s_buddy_win/s_buddy_list/s_status_lbl while this task was
-// still mid-refresh_buddy_list()/refresh_status_label(), touching those same
-// now-freed handles; confirmed live as the "close_ctrl_body_start" hang).
+// close_chat_ui() before it destroys any window — see that function's
+// comment for the use-after-free this closes. Same shape as meshchat.c's
+// own original fix for the "close_ctrl_body_start" hang.
 static SemaphoreHandle_t s_refresh_done = NULL;
 
-// ── Buddies (1:1 DMs) ────────────────────────────────────────────────────────
+// ── Buddies (1:1 DMs) ────────────────────────────────────────────────────
 
-static uint32_t     s_buddy_ids[MAX_CHATS];
-static int           s_buddy_channels[MAX_CHATS];   // which channel to DM each buddy on
-static char         s_buddy_labels[MAX_CHATS][64];
+static char         s_buddy_id_strs[MAX_CHATS][24];
+static char         s_buddy_labels[MAX_CHATS][80];
 static const char   *s_buddy_label_ptrs[MAX_CHATS];
 static int           s_buddy_count = 0;
 
-// Per-buddy chat state (parallel arrays, indexed same as s_buddy_ids).
+// Per-buddy chat state (parallel arrays, indexed same as s_buddy_id_strs).
 static char        s_chat_logs[MAX_CHATS][CHAT_LOG_LEN];
 static size_t      s_chat_loglen[MAX_CHATS];
 static purr_win_t  s_chat_win[MAX_CHATS];
@@ -74,51 +90,54 @@ static purr_wid_t  s_chat_out[MAX_CHATS];
 static purr_wid_t  s_chat_in[MAX_CHATS];
 static int         s_chat_scroll[MAX_CHATS];   // lines skipped from the top of the log — see render_chat_view()
 
-// ── Rooms (channel group chat) ───────────────────────────────────────────────
+// ── Rooms (channel group chat) ───────────────────────────────────────────
 
-static char        s_room_names[MESH_MAX_CHANNELS][12];
-static const char  *s_room_label_ptrs[MESH_MAX_CHANNELS];
+static char        s_room_names[MAX_ROOMS][12];
+static const char  *s_room_label_ptrs[MAX_ROOMS];
 static int          s_room_count = 0;
 
 // Heap-allocated from PSRAM (not static arrays) — internal DRAM on this
 // board is already razor-thin (see cupcake_module.c's static-stack-sizing
-// comment); MESH_MAX_CHANNELS(8) * CHAT_LOG_LEN(1024) static buffers here
-// would overflow dram0_0_seg the same way one 1024-byte static broadcast
-// log previously did.
-static char        *s_room_logs[MESH_MAX_CHANNELS];
-static size_t        s_room_loglen[MESH_MAX_CHANNELS];
-static purr_win_t   s_room_win[MESH_MAX_CHANNELS];
-static purr_wid_t   s_room_out[MESH_MAX_CHANNELS];
-static purr_wid_t   s_room_in[MESH_MAX_CHANNELS];
-static int          s_room_scroll[MESH_MAX_CHANNELS];   // lines skipped from the top of the log
+// comment); MAX_ROOMS(8) * CHAT_LOG_LEN(1024) static buffers here would
+// overflow dram0_0_seg the same way one 1024-byte static broadcast log
+// previously did.
+static char        *s_room_logs[MAX_ROOMS];
+static size_t        s_room_loglen[MAX_ROOMS];
+static purr_win_t   s_room_win[MAX_ROOMS];
+static purr_wid_t   s_room_out[MAX_ROOMS];
+static purr_wid_t   s_room_in[MAX_ROOMS];
+static int          s_room_scroll[MAX_ROOMS];   // lines skipped from the top of the log
 
-// ── Add Room window ──────────────────────────────────────────────────────────
+// ── Add Room window ──────────────────────────────────────────────────────
 
 static purr_win_t  s_addroom_win      = 0;
 static purr_wid_t  s_addroom_name_in  = 0;
 static purr_wid_t  s_addroom_psk_in   = 0;
 
-// ── Manage window (forget nodes/rooms) ───────────────────────────────────────
+// ── Manage window (forget nodes/rooms) ───────────────────────────────────
 
 static purr_win_t  s_manage_win       = 0;
 static purr_wid_t  s_manage_node_list = 0;
 static purr_wid_t  s_manage_room_list = 0;
 
-// ── SD persistence ────────────────────────────────────────────────────────────
-// Real, unbounded history on /sdcard/meshchat/ — independent of the in-
-// memory display buffers above (CHAT_LOG_LEN-capped scrollback, unchanged).
-// Keyed by stable identity (node id / channel hash byte), not table index —
-// indices shift when a node or room is forgotten, but the underlying id/
-// hash never does. Everything here no-ops behind purr_kernel_sd_available()
-// — no SD card means today's in-memory-only behavior, not a crash.
+// ── SD persistence ────────────────────────────────────────────────────────
+// Real, unbounded history on /sdcard/meshchat/ (directory name kept exactly
+// as-is — not renamed to /sdcard/msn/ — specifically so existing users'
+// Meshtastic chat history is picked up unchanged; kernel_tdp_boot.c already
+// ensures this directory exists at boot). Independent of the in-memory
+// display buffers above (CHAT_LOG_LEN-capped scrollback, unchanged). Keyed
+// by msn_contact_t.id_str / a channel's on-air hash byte — stable identity,
+// not table index (indices shift when a contact/room is forgotten).
+// Everything here no-ops behind purr_kernel_sd_available() — no SD card
+// means today's in-memory-only behavior, not a crash.
 
-static void dm_path(uint32_t node_id, char *out, size_t out_max) {
-    snprintf(out, out_max, "/sdcard/meshchat/dm_%08lX.txt", (unsigned long)node_id);
+static void dm_path(const char *id_str, char *out, size_t out_max) {
+    snprintf(out, out_max, "/sdcard/meshchat/dm_%s.txt", id_str);
 }
 
 static void room_path(int channel_idx, char *out, size_t out_max) {
     uint8_t hash = 0;
-    mesh_manager_channel_hash(channel_idx, &hash);
+    s_backend->channel_hash(channel_idx, &hash);
     snprintf(out, out_max, "/sdcard/meshchat/room_%02X.txt", hash);
 }
 
@@ -153,26 +172,25 @@ static void load_tail_from_sd(const char *path, char *buf, size_t *len, size_t b
     fclose(f);
 }
 
-// ── Buddy list ────────────────────────────────────────────────────────────────
+// ── Buddy list ────────────────────────────────────────────────────────────
 
 static void refresh_buddy_list(void) {
-    int n = mesh_manager_node_count();
+    int n = s_backend->contact_count();
     if (n > MAX_CHATS) n = MAX_CHATS;
     s_buddy_count = n;
 
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
     for (int i = 0; i < n; i++) {
-        mesh_node_info_t info;
-        if (mesh_manager_node_at(i, &info) != 0) { s_buddy_count = i; break; }
-        s_buddy_ids[i]      = info.id;
-        s_buddy_channels[i] = info.channel_idx;
-        bool online = (now_ms - info.last_ms) < ONLINE_WINDOW_MS;
-        if (online) {
-            snprintf(s_buddy_labels[i], sizeof(s_buddy_labels[i]), "%s (online)", info.long_name);
+        msn_contact_t info;
+        if (!s_backend->contact_at(i, &info)) { s_buddy_count = i; break; }
+        strncpy(s_buddy_id_strs[i], info.id_str, sizeof(s_buddy_id_strs[i]) - 1);
+        if (info.last_seen_ms_ago == MSN_LAST_SEEN_UNKNOWN) {
+            snprintf(s_buddy_labels[i], sizeof(s_buddy_labels[i]), "%s (never heard)", info.name);
+        } else if (info.last_seen_ms_ago < ONLINE_WINDOW_MS) {
+            snprintf(s_buddy_labels[i], sizeof(s_buddy_labels[i]), "%s (online)", info.name);
         } else {
-            uint32_t age_min = (now_ms - info.last_ms) / 60000UL;
+            uint32_t age_min = info.last_seen_ms_ago / 60000UL;
             snprintf(s_buddy_labels[i], sizeof(s_buddy_labels[i]), "%s (%lum ago)",
-                     info.long_name, (unsigned long)age_min);
+                     info.name, (unsigned long)age_min);
         }
         s_buddy_label_ptrs[i] = s_buddy_labels[i];
     }
@@ -180,15 +198,15 @@ static void refresh_buddy_list(void) {
     if (s_buddy_list) purr_win_list_set_items(s_buddy_list, s_buddy_label_ptrs, s_buddy_count);
 }
 
-// ── Room list ─────────────────────────────────────────────────────────────────
+// ── Room list ─────────────────────────────────────────────────────────────
 
 static void refresh_room_list(void) {
-    int n = mesh_manager_channel_count();
-    if (n > MESH_MAX_CHANNELS) n = MESH_MAX_CHANNELS;
+    int n = s_backend->channel_count();
+    if (n > MAX_ROOMS) n = MAX_ROOMS;
     s_room_count = n;
 
     for (int i = 0; i < n; i++) {
-        mesh_manager_channel_name(i, s_room_names[i], sizeof(s_room_names[i]));
+        s_backend->channel_name(i, s_room_names[i], sizeof(s_room_names[i]));
         s_room_label_ptrs[i] = s_room_names[i];
     }
 
@@ -201,14 +219,14 @@ static void refresh_room_list(void) {
 // box with nothing to look at or tap.
 static void refresh_status_label(void) {
     if (!s_status_lbl) return;
-    if (!mesh_manager_ready()) {
+    if (!s_backend->ready()) {
         purr_win_label_set(s_status_lbl, "Mesh: starting...");
-    } else if (!mesh_manager_is_alive()) {
+    } else if (!s_backend->is_alive()) {
         purr_win_label_set(s_status_lbl, "Mesh: not responding");
     } else {
-        char buf[48];
-        snprintf(buf, sizeof(buf), "Mesh: ready (%d node%s)",
-                 s_buddy_count, s_buddy_count == 1 ? "" : "s");
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%s: ready (%d node%s)",
+                 s_backend->name, s_buddy_count, s_buddy_count == 1 ? "" : "s");
         purr_win_label_set(s_status_lbl, buf);
     }
 }
@@ -220,16 +238,6 @@ static void on_refresh_click(purr_wid_t w, purr_event_t e, void *user) {
     refresh_status_label();
 }
 
-// Finds idx for a node id already known to the buddy list, refreshing once
-// if not found (covers a brand-new node's first message arriving before our
-// next periodic refresh has picked it up).
-static int find_buddy_idx(uint32_t node_id) {
-    for (int i = 0; i < s_buddy_count; i++) if (s_buddy_ids[i] == node_id) return i;
-    refresh_buddy_list();
-    for (int i = 0; i < s_buddy_count; i++) if (s_buddy_ids[i] == node_id) return i;
-    return -1;
-}
-
 static void buddy_refresh_task(void *arg) {
     (void)arg;
     while (s_running) {
@@ -237,11 +245,7 @@ static void buddy_refresh_task(void *arg) {
         refresh_room_list();
         refresh_status_label();
         // Slept in short steps (not one 10s vTaskDelay) so a stop request
-        // (s_running = false) is noticed within ~200ms, not up to 10s late —
-        // meshchat_deinit() blocks on s_refresh_done for this task to
-        // actually exit before it destroys the windows/widgets this loop
-        // touches, so a slow-to-notice stop directly extends how long Kill
-        // stalls waiting, not just a cosmetic delay.
+        // (s_running = false) is noticed within ~200ms, not up to 10s late.
         for (int waited_ms = 0; waited_ms < 10000 && s_running; waited_ms += 200) {
             vTaskDelay(pdMS_TO_TICKS(200));
         }
@@ -266,18 +270,11 @@ static void log_append(char *buf, size_t *len, const char *text) {
     *len += tlen;
 }
 
-// ── Scrolling ────────────────────────────────────────────────────────────────
+// ── Scrolling ────────────────────────────────────────────────────────────
 // No backend exposes real textarea scrolling through the purr_win_* catcall
-// layer (MiniWin's own engine has the machinery — ui_text_box.c's
-// lines_to_scroll — but miniwin_win.c never wires it up; Cupcake's LVGL
-// textarea has no equivalent hook either). Rather than add new catcall/
-// engine plumbing for one app, this renders a scrolled-down "window" into
-// the log by re-calling the textarea_set() every backend already has,
-// skipping the first N lines of the underlying buffer — works identically
-// everywhere with zero engine changes. The textarea always draws from
-// whatever text it's given starting at its own top, so without this the
-// newest messages (appended at the END of the buffer) are exactly the ones
-// that get clipped off the bottom once a conversation overflows the box.
+// layer — see the original meshchat.c's comment for the full rationale.
+// Renders a scrolled-down "window" into the log by re-calling textarea_set()
+// with the first N lines skipped, rather than adding new engine plumbing.
 #define CHAT_SCROLL_STEP 4   // lines revealed per "v" button press
 
 static int count_lines(const char *s) {
@@ -322,7 +319,7 @@ static void on_chat_scroll_click(purr_wid_t w, purr_event_t e, void *user) {
 static void on_room_scroll_click(purr_wid_t w, purr_event_t e, void *user) {
     (void)w; (void)e;
     int idx = (int)(intptr_t)user;
-    if (idx < 0 || idx >= MESH_MAX_CHANNELS) return;
+    if (idx < 0 || idx >= MAX_ROOMS) return;
     s_room_scroll[idx] += CHAT_SCROLL_STEP;
     render_room_view(idx);
 }
@@ -331,7 +328,7 @@ static void chat_log_append(int idx, const char *text) {
     log_append(s_chat_logs[idx], &s_chat_loglen[idx], text);
     render_chat_view(idx);
     char path[64];
-    dm_path(s_buddy_ids[idx], path, sizeof(path));
+    dm_path(s_buddy_id_strs[idx], path, sizeof(path));
     append_to_sd(path, text);
 }
 
@@ -357,7 +354,7 @@ static void on_chat_send(purr_wid_t w, purr_event_t e, void *user) {
     snprintf(line, sizeof(line), "> %s\n", text);
     chat_log_append(idx, line);
 
-    mesh_manager_send_text(s_buddy_ids[idx], s_buddy_channels[idx], text);
+    s_backend->send_text(idx, -1, text);
     purr_win_textarea_clear(s_chat_in[idx]);
 }
 
@@ -372,7 +369,7 @@ static void open_chat(int idx) {
     // history from SD before building the window.
     if (s_chat_loglen[idx] == 0) {
         char path[64];
-        dm_path(s_buddy_ids[idx], path, sizeof(path));
+        dm_path(s_buddy_id_strs[idx], path, sizeof(path));
         load_tail_from_sd(path, s_chat_logs[idx], &s_chat_loglen[idx], CHAT_LOG_LEN);
     }
 
@@ -412,7 +409,7 @@ static void on_room_send(purr_wid_t w, purr_event_t e, void *user) {
     snprintf(line, sizeof(line), "> %s\n", text);
     room_log_append(idx, line);
 
-    mesh_manager_send_text(MESH_BROADCAST, idx, text);
+    s_backend->send_text(-1, idx, text);
     purr_win_textarea_clear(s_room_in[idx]);
 }
 
@@ -445,8 +442,6 @@ static void open_room(int idx) {
 
     render_room_view(idx);
     purr_win_textarea_focus(s_room_in[idx]);
-    // win_show() first — see terminal.c's terminal_init() for why (Cupcake's
-    // win_show() raises the window above whatever kb_show() just showed).
     purr_win_show(s_room_win[idx]);
     purr_win_keyboard_show(s_room_win[idx], s_room_in[idx]);
 }
@@ -459,13 +454,12 @@ static void on_room_list_event(purr_wid_t w, purr_event_t e, void *user) {
 }
 
 // ── Add Room ──────────────────────────────────────────────────────────────────
-// No QR/URL channel-sharing (out of scope) — the PSK is derived from
+// No QR/URL channel-sharing (out of scope) — the key is derived from
 // whatever passphrase text the user types, via SHA-256 truncated to 16
 // bytes, so two PURR devices typing the same passphrase land on the same
-// key deterministically. This won't match a real Meshtastic node's own
+// key deterministically. For Meshtastic this won't match a real node's own
 // custom-channel PSK (those are raw random bytes shared via QR/URL, not a
-// passphrase) — interop there would need the exact same 16 raw bytes,
-// which this flow doesn't support yet.
+// passphrase) — interop there would need the exact same 16 raw bytes.
 
 static void derive_psk_from_passphrase(const char *passphrase, uint8_t psk16[16]) {
     uint8_t hash[32];
@@ -481,7 +475,7 @@ static void on_addroom_create(purr_wid_t w, purr_event_t e, void *user) {
 
     uint8_t psk16[16];
     derive_psk_from_passphrase(pass, psk16);
-    int idx = mesh_manager_add_channel(name, psk16);
+    int idx = s_backend->channel_add(name, psk16, sizeof(psk16));
     if (idx < 0) return;   // full, or hash collision — nothing to show for it yet
 
     refresh_room_list();
@@ -495,7 +489,7 @@ static void open_addroom(void) {
         purr_win_show(s_addroom_win);
         return;
     }
-    if (mesh_manager_channel_count() >= MESH_MAX_CHANNELS) return;   // full
+    if (s_backend->channel_count() >= MAX_ROOMS) return;   // full
 
     s_addroom_win     = purr_win_create("Add Room");
     purr_win_label(s_addroom_win, "Room name:");
@@ -515,15 +509,13 @@ static void on_addroom_click(purr_wid_t w, purr_event_t e, void *user) {
 }
 
 // ── Manage (forget nodes/rooms) ───────────────────────────────────────────────
-// A forget action changes which buddy/room ends up at which table index
-// (mesh_router_node_forget()/mesh_radio_remove_channel() both shift the
-// underlying table down) — rather than try to shift the parallel
-// s_chat_*/s_room_* window/log arrays to match, every open chat/room window
-// just gets closed and its in-memory log cleared. Re-opening any of them
-// reloads correctly (dm_path()/room_path() are keyed by node id / channel
-// hash, not index, so this is always safe) — a small UX cost for a
-// deliberate, infrequent action, in exchange for zero risk of a stale log
-// silently appearing under the wrong buddy's name.
+// A forget action changes which buddy/room ends up at which table index —
+// rather than try to shift the parallel s_chat_*/s_room_* window/log arrays
+// to match, every open chat/room window just gets closed and its in-memory
+// log cleared. Re-opening any of them reloads correctly (dm_path()/
+// room_path() are keyed by id_str / channel hash, not index) — a small UX
+// cost for a deliberate, infrequent action, in exchange for zero risk of a
+// stale log silently appearing under the wrong buddy's name.
 
 static void reset_all_buddy_windows(void) {
     for (int i = 0; i < MAX_CHATS; i++) {
@@ -537,7 +529,7 @@ static void reset_all_buddy_windows(void) {
 }
 
 static void reset_all_room_windows(void) {
-    for (int i = 0; i < MESH_MAX_CHANNELS; i++) {
+    for (int i = 0; i < MAX_ROOMS; i++) {
         if (s_room_win[i]) {
             purr_win_destroy(s_room_win[i]);
             s_room_win[i] = 0; s_room_out[i] = 0; s_room_in[i] = 0;
@@ -558,9 +550,9 @@ static void on_forget_node(purr_wid_t w, purr_event_t e, void *user) {
     if (idx < 0 || idx >= s_buddy_count) return;
 
     char path[64];
-    dm_path(s_buddy_ids[idx], path, sizeof(path));
+    dm_path(s_buddy_id_strs[idx], path, sizeof(path));
     remove(path);
-    mesh_manager_node_forget(s_buddy_ids[idx]);
+    s_backend->contact_forget(idx);
     reset_all_buddy_windows();
     refresh_buddy_list();
     refresh_manage_lists();
@@ -574,7 +566,7 @@ static void on_forget_room(purr_wid_t w, purr_event_t e, void *user) {
     char path[64];
     room_path(idx, path, sizeof(path));
     remove(path);
-    mesh_manager_remove_channel(idx);
+    s_backend->channel_remove(idx);
     reset_all_room_windows();
     refresh_room_list();
     refresh_manage_lists();
@@ -606,50 +598,37 @@ static void on_manage_click(purr_wid_t w, purr_event_t e, void *user) {
 }
 
 // ── Incoming messages ─────────────────────────────────────────────────────────
-// Registers the mesh module's single RX-callback slot — meshtastic_module.c
-// already fires purr_kernel_notify() for every TEXT_MESSAGE_APP regardless
-// (unchanged), so a message for a buddy/room whose window isn't open right
-// now still surfaces as a notification banner.
+// Registers with the active backend's single unified RX-callback slot —
+// both mesh modules already fire purr_kernel_notify() for every text
+// message regardless (unchanged), so a message for a buddy/room whose
+// window isn't open right now still surfaces as a notification banner.
 
-static void on_mesh_rx(uint32_t from_node, uint32_t to_node, int channel_idx, int portnum,
-                        const uint8_t *payload, size_t len) {
-    if (portnum != (int)meshtastic_PortNum_TEXT_MESSAGE_APP) return;
-
-    char text[241];
-    size_t n = len < sizeof(text) - 1 ? len : sizeof(text) - 1;
-    memcpy(text, payload, n);
-    text[n] = '\0';
-
-    if (to_node == (uint32_t)MESH_BROADCAST) {
-        if (channel_idx < 0 || channel_idx >= s_room_count) return;
+static void on_mesh_rx(int contact_idx, int channel_idx, const char *text) {
+    if (channel_idx >= 0) {
+        if (channel_idx >= s_room_count) return;
         char line[280];
-        snprintf(line, sizeof(line), "%08lX: %s\n", (unsigned long)from_node, text);
+        snprintf(line, sizeof(line), "%s: %s\n", s_room_names[channel_idx], text);
         room_log_append(channel_idx, line);
         return;
     }
 
-    int idx = find_buddy_idx(from_node);
-    if (idx < 0) return;
+    if (contact_idx < 0 || contact_idx >= s_buddy_count) return;
     char line[280];
-    snprintf(line, sizeof(line), "%s: %s\n", s_buddy_labels[idx], text);
-    chat_log_append(idx, line);
+    snprintf(line, sizeof(line), "%s: %s\n", s_buddy_labels[contact_idx], text);
+    chat_log_append(contact_idx, line);
 }
 
-// ── App lifecycle ─────────────────────────────────────────────────────────────
+// ── Chat UI lifecycle (Rooms/Buddies window + its background task) ─────────
 
-static int meshchat_init(void) {
+static void open_chat_ui(void) {
     // Reused across relaunches like s_room_logs below — starts "empty"
-    // (taken), which is exactly the state meshchat_deinit()'s
-    // xSemaphoreTake() below needs at the start of every run.
+    // (taken), which is exactly the state close_chat_ui()'s xSemaphoreTake()
+    // below needs at the start of every run.
     if (!s_refresh_done) s_refresh_done = xSemaphoreCreateBinary();
 
-    // Display name only — the app/module id stays "meshchat" (file names,
-    // device.pcat's apps.meshchat entry, icon lookup key all unchanged).
     s_buddy_win  = purr_win_create("MSN");
     s_status_lbl = purr_win_label(s_buddy_win, "Mesh: starting...");
 
-    // Static control row — always present regardless of how many peers
-    // (zero, at worst) have been discovered, unlike the lists below it.
     purr_wid_t row = purr_win_row(s_buddy_win, 4);
     purr_win_button(s_buddy_win, "Refresh",  on_refresh_click,  NULL);
     purr_win_button(s_buddy_win, "Add Room", on_addroom_click,  NULL);
@@ -669,29 +648,25 @@ static int meshchat_init(void) {
     refresh_status_label();
     purr_win_show(s_buddy_win);
 
-    mesh_manager_add_rx_callback(on_mesh_rx);
+    s_backend->add_rx_cb(on_mesh_rx);
 
     s_running = true;
     // No NVS/flash/SD access anywhere in this task's own body — safe on a
     // PSRAM-backed stack (see app_manager.c's launch_native()/launch_meow()
     // for the same pattern).
-    xTaskCreateWithCaps(buddy_refresh_task, "meshchat_ref", 4096, NULL, 3, &s_refresh_task, MALLOC_CAP_SPIRAM);
-    return 0;
+    xTaskCreateWithCaps(buddy_refresh_task, "msn_ref", 4096, NULL, 3, &s_refresh_task, MALLOC_CAP_SPIRAM);
 }
 
-static void meshchat_deinit(void) {
+static void close_chat_ui(void) {
     s_running = false;
     // Wait for buddy_refresh_task() to actually notice s_running == false
     // and exit before touching any window/widget below — see
     // s_refresh_done's declaration comment for the use-after-free this
-    // closes. Bounded timeout matches app_manager_stop()'s own
-    // wait-then-proceed pattern; the task loop has no blocking calls beyond
-    // its own short vTaskDelay steps, so it should never actually take
-    // anywhere near this long to respond.
+    // closes.
     if (s_refresh_done) xSemaphoreTake(s_refresh_done, pdMS_TO_TICKS(2000));
     s_refresh_task = NULL;
 
-    mesh_manager_remove_rx_callback(on_mesh_rx);
+    if (s_backend) s_backend->remove_rx_cb(on_mesh_rx);
 
     for (int i = 0; i < MAX_CHATS; i++) {
         if (s_chat_win[i]) {
@@ -699,7 +674,7 @@ static void meshchat_deinit(void) {
             s_chat_win[i] = 0; s_chat_out[i] = 0; s_chat_in[i] = 0;
         }
     }
-    for (int i = 0; i < MESH_MAX_CHANNELS; i++) {
+    for (int i = 0; i < MAX_ROOMS; i++) {
         if (s_room_win[i]) {
             purr_win_destroy(s_room_win[i]);
             s_room_win[i] = 0; s_room_out[i] = 0; s_room_in[i] = 0;
@@ -713,24 +688,138 @@ static void meshchat_deinit(void) {
         purr_win_destroy(s_manage_win);
         s_manage_win = 0; s_manage_node_list = 0; s_manage_room_list = 0;
     }
-    purr_win_destroy(s_buddy_win);
+    if (s_buddy_win) purr_win_destroy(s_buddy_win);
     s_buddy_win = 0; s_buddy_list = 0; s_room_list = 0; s_status_lbl = 0;
     // s_chat_logs/s_chat_loglen/s_room_logs/s_room_loglen deliberately NOT
     // cleared — chat history persists across closing and relaunching the app.
 }
 
+// ── Chooser screen ───────────────────────────────────────────────────────
+
+static void update_chooser_status(void) {
+    bool mt_active = purr_kernel_get_module("meshtastic") != NULL;
+    bool mc_active = purr_kernel_get_module("meshcore") != NULL;
+    if (s_meshtastic_status) purr_win_label_set(s_meshtastic_status, mt_active ? "* active" : "");
+    if (s_meshcore_status)   purr_win_label_set(s_meshcore_status,   mc_active ? "* active" : "");
+}
+
+static void close_chooser(void) {
+    if (s_chooser_win) {
+        purr_win_destroy(s_chooser_win);
+        s_chooser_win = 0; s_meshtastic_status = 0; s_meshcore_status = 0;
+    }
+}
+
+static void enter_chat_ui(const msn_backend_t *backend) {
+    s_backend = backend;
+    close_chooser();
+    open_chat_ui();
+}
+
+static void do_switch(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    // Mutual exclusion means a live switch isn't possible (one physical
+    // radio, one catcall_radio_t slot) — persist the choice and reboot into
+    // it, matching meshtastic_module.c's/meshcore_module.cpp's own guard
+    // design (the preference is authoritative from the next boot on).
+    purr_kernel_mesh_backend_set(s_pending_switch_target);
+    purr_kernel_reboot();
+}
+
+static void on_switch_cancel(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    if (s_switch_confirm_win) {
+        purr_win_destroy(s_switch_confirm_win);
+        s_switch_confirm_win = 0; s_switch_confirm_lbl = 0;
+    }
+}
+
+static void open_switch_confirm(purr_mesh_backend_t target, const char *name) {
+    s_pending_switch_target = target;
+    if (s_switch_confirm_win) {
+        purr_win_show(s_switch_confirm_win);
+        return;
+    }
+
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Switch to %s? Device will restart.", name);
+
+    s_switch_confirm_win = purr_win_create("Switch Backend");
+    s_switch_confirm_lbl = purr_win_label(s_switch_confirm_win, msg);
+    purr_wid_t row = purr_win_row(s_switch_confirm_win, 4);
+    purr_win_button(s_switch_confirm_win, "Switch", do_switch, NULL);
+    purr_win_button(s_switch_confirm_win, "Cancel", on_switch_cancel, NULL);
+    purr_win_layout_end(row);
+
+    purr_win_show(s_switch_confirm_win);
+}
+
+static void on_meshtastic_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    if (purr_kernel_get_module("meshtastic")) {
+        enter_chat_ui(msn_backend_meshtastic());
+    } else {
+        open_switch_confirm(PURR_MESH_BACKEND_MESHTASTIC, "Meshtastic");
+    }
+}
+
+static void on_meshcore_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    if (purr_kernel_get_module("meshcore")) {
+        enter_chat_ui(msn_backend_meshcore());
+    } else {
+        open_switch_confirm(PURR_MESH_BACKEND_MESHCORE, "MeshCore");
+    }
+}
+
+static void open_chooser(void) {
+    s_chooser_win = purr_win_create("MSN");
+    purr_win_label(s_chooser_win, "Choose a mesh backend:");
+
+    purr_wid_t mt_row = purr_win_row(s_chooser_win, 4);
+    purr_win_button(s_chooser_win, "Meshtastic", on_meshtastic_click, NULL);
+    s_meshtastic_status = purr_win_label(s_chooser_win, "");
+    purr_win_layout_end(mt_row);
+
+    purr_wid_t mc_row = purr_win_row(s_chooser_win, 4);
+    purr_win_button(s_chooser_win, "MeshCore", on_meshcore_click, NULL);
+    s_meshcore_status = purr_win_label(s_chooser_win, "");
+    purr_win_layout_end(mc_row);
+
+    update_chooser_status();
+    purr_win_show(s_chooser_win);
+}
+
+// ── App lifecycle ─────────────────────────────────────────────────────────────
+
+static int msn_init(void) {
+    s_backend = NULL;
+    open_chooser();
+    return 0;
+}
+
+static void msn_deinit(void) {
+    close_chat_ui();
+    close_chooser();
+    if (s_switch_confirm_win) {
+        purr_win_destroy(s_switch_confirm_win);
+        s_switch_confirm_win = 0; s_switch_confirm_lbl = 0;
+    }
+    s_backend = NULL;
+}
+
 // ── Module header ─────────────────────────────────────────────────────────────
 
-PURR_MODULE_REGISTER(meshchat) = {
+PURR_MODULE_REGISTER(msn) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_APP,
     .load_priority     = PURR_PRIORITY_OPTIONAL,
-    .name              = "meshchat",
+    .name              = "msn",
     .version           = "1.0.0",
     .kernel_min        = "0.11.1",
     .provided_catcalls = 0,
     .required_catcalls = 0,
-    .init              = meshchat_init,
-    .deinit            = meshchat_deinit,
+    .init              = msn_init,
+    .deinit            = msn_deinit,
 };

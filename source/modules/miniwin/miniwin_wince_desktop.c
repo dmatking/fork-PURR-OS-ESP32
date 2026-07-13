@@ -190,7 +190,7 @@ static const wce_desktop_icon_t s_desktop_icons[] = {
     { "terminal",   wce_icon_terminal,             WCE_ICON_SIZE, WCE_ICON_SIZE },
     { "fileman",    mw_bitmaps_folder_icon_large,  16,            16            },
     { "calculator", wce_icon_calculator,           WCE_ICON_SIZE, WCE_ICON_SIZE },
-    { "meshchat",   wce_icon_meshchat,             WCE_ICON_SIZE, WCE_ICON_SIZE },
+    { "msn",        wce_icon_msn,                  WCE_ICON_SIZE, WCE_ICON_SIZE },
 };
 #define DESKTOP_ICON_COUNT (int)(sizeof(s_desktop_icons) / sizeof(s_desktop_icons[0]))
 
