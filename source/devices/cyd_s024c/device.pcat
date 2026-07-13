@@ -28,6 +28,8 @@ ui          = "miniwin"
 app_manager = "app_manager"
 lua         = "lua_runtime"
 wifi        = "wifi_mgr"
+# proximity/pairing/msn/nearby — auto-added by purrstrap.py's
+# apply_radio_companion_defaults(), see cyd/device.pcat's matching comment.
 
 [ui]
 theme       = "wce"

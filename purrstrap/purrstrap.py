@@ -180,7 +180,47 @@ def resolve_device(device_slug):
     pcat_path = os.path.join(DEVICES_DIR, device_slug, "device.pcat")
     if not os.path.isfile(pcat_path):
         die(f"no device.pcat found for '{device_slug}' — check source/devices/")
-    return parse_pcat(pcat_path), pcat_path
+    cfg = parse_pcat(pcat_path)
+    apply_radio_companion_defaults(cfg)
+    return cfg, pcat_path
+
+# ── Radio companion capability defaults ──────────────────────────────────────
+# Every device with WiFi gets ESP-NOW proximity discovery + pairing "for
+# free," rather than needing it hand-wired into each device.pcat one at a
+# time: proximity_module.c/pairing_module.c already handle no-PSRAM and
+# no-LoRa gracefully (see their own header comments), so WiFi is the only
+# real hardware requirement. msn + nearby (the apps that let a user actually
+# see/act on it) are added on top only when the UI backend implements
+# purr_win (catcall_ui_t) — a raw-framebuffer UI like oled_ui needs its own
+# custom screen instead (see heltec's hand-built Pair screen in
+# oled_ui_module.c) rather than a generic purr_win one.
+#
+# [modules] radio_companion = true/false overrides this heuristic either
+# direction — force it on for a WiFi device this doesn't detect correctly,
+# or off for one that technically has WiFi but shouldn't carry this (e.g. a
+# stripped-down diagnostic/test kernel).
+PURR_WIN_UI_BACKENDS = {"miniwin", "cupcake", "kittenui", "cardstack", "pounce"}
+
+def apply_radio_companion_defaults(cfg):
+    """Mutates cfg in place, adding proximity/pairing (+ msn/nearby where the
+    UI backend supports it) unless already present or explicitly opted out."""
+    flag = cfg.get("modules.radio_companion", "").strip().lower()
+    if flag in ("false", "0", "no"):
+        return cfg
+    forced_on = flag in ("true", "1", "yes")
+    wifi = cfg.get("radio.wifi", "").strip().lower() in ("true", "1", "yes")
+    if not (forced_on or wifi):
+        return cfg
+
+    for key, val in (("modules.proximity", "proximity"), ("modules.pairing", "pairing"),
+                      ("flash.proximity", "2"), ("flash.pairing", "2")):
+        cfg.setdefault(key, val)
+
+    if cfg.get("modules.ui", "") in PURR_WIN_UI_BACKENDS:
+        for key, val in (("apps.msn", "true"), ("apps.nearby", "true"),
+                          ("flash.apps/msn", "3"), ("flash.apps/nearby", "3")):
+            cfg.setdefault(key, val)
+    return cfg
 
 def _idf_path():
     p = os.environ.get("IDF_PATH", "")
@@ -595,9 +635,12 @@ def _generate_glue(device, cfg, out_dir):
         val = cfg.get(key, "")
         if val:
             module_ids.append(to_sym(val))
-    # [modules] section — ui, app_manager, etc.
+    # [modules] section — ui, app_manager, etc. "radio_companion" is a
+    # control flag (see apply_radio_companion_defaults()), not a module
+    # name — excluded here or to_sym("true"/"false") would produce a bogus
+    # "extern purr_module_true;" reference.
     for raw_key, raw_val in sorted(cfg.items()):
-        if raw_key.startswith("modules.") and raw_val:
+        if raw_key.startswith("modules.") and raw_val and raw_key != "modules.radio_companion":
             module_ids.append(to_sym(raw_val))
     # driver_manager is always included if present
     if to_sym("driver_manager") not in module_ids:
