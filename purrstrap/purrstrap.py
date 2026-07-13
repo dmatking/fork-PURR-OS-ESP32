@@ -775,6 +775,11 @@ def _sdkconfig_lines(device, cfg):
         lines.append("# Meshtastic")
         lines.append("CONFIG_PURR_FEATURE_MESHTASTIC=y")
 
+    if cfg.get("modules.meshcore", ""):
+        lines.append("")
+        lines.append("# MeshCore")
+        lines.append("CONFIG_PURR_FEATURE_MESHCORE=y")
+
     return lines
 
 def _generate_sdkconfig(device, cfg, check=False):

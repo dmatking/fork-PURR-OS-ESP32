@@ -420,6 +420,29 @@ static void mesh_persist_task(void *arg)
 
 int mesh_manager_init(void)
 {
+    // Mutually exclusive with meshcore — one physical radio, one
+    // catcall_radio_t slot, two incompatible on-air presets.
+    //
+    // Preference check first: MSN's backend chooser (and Settings'
+    // mirrored control) persist which protocol the user actually wants via
+    // purr_kernel_mesh_backend_set(), then reboot — so by the time this
+    // runs again, the preference is the authoritative source of truth, not
+    // [flash] load order. Declines via PURR_MODULE_INIT_DECLINED (not -1)
+    // since this fires on every boot where the preference names meshcore —
+    // not a crash-loop symptom, see PURR_MODULE_INIT_DECLINED's doc comment.
+    if (purr_kernel_mesh_backend_get() == PURR_MESH_BACKEND_MESHCORE) {
+        ESP_LOGI(TAG, "declining to start — mesh backend preference is meshcore");
+        return PURR_MODULE_INIT_DECLINED;
+    }
+    // Secondary safety net, kept from before the preference existed: covers
+    // a manual Terminal `start meshtastic` while meshcore happens to already
+    // be running (preference and actually-loaded state can legitimately
+    // diverge until the next reboot).
+    if (purr_kernel_get_module("meshcore")) {
+        ESP_LOGW(TAG, "refusing to start — meshcore is active (stop it first)");
+        return PURR_MODULE_INIT_DECLINED;
+    }
+
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     s_node_id = ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16)
@@ -453,18 +476,17 @@ int mesh_manager_init(void)
     // is safe regardless (if anything, more so, since it doesn't share the
     // cache-disable hazard PSRAM access has).
     s_task_uses_psram_stack = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0;
-    // Pinned to core 1 on the plain-stack (PSRAM-less) fallback path only —
-    // matches blackpurr_module.c/kittenui_module.c's own established fix for
-    // the same class of problem: WiFi/BT run on core 0, and a task that
-    // isn't explicitly pinned can land there too and never get meaningfully
-    // scheduled against them. Confirmed live: without this, mesh_task()
-    // never printed even its very first log line (before touching NVS,
-    // radio, anything) on Heltec V3 — the first device this session to
-    // combine WiFi+BT+meshtastic on a non-PSRAM stack; tdeck_plus's
-    // existing PSRAM-caps path has bt=false and has never shown this, so
-    // it's left as-is rather than risking a change to something proven.
+    // Pinned to core 1 on both paths — deliberate, repo-wide grouping:
+    // mesh_task/mc_task + the UI's own cupcake_task share core 1, while
+    // app tasks (native_task/meow_task) move to core 0 alongside WiFi/BT
+    // (see app_manager.c's matching change). Originally this fallback path
+    // alone was pinned to core 1 specifically to dodge WiFi/BT contention
+    // on core 0 (confirmed live on Heltec V3 — mesh_task() never printed
+    // even its first log line without this); that rationale still holds
+    // here, just now applied consistently to the PSRAM-caps path too
+    // rather than being fallback-path-only.
     BaseType_t ret = s_task_uses_psram_stack
-        ? xTaskCreateWithCaps(mesh_task, "meshtastic", 8192, NULL, 4, &s_task, MALLOC_CAP_SPIRAM)
+        ? xTaskCreatePinnedToCoreWithCaps(mesh_task, "meshtastic", 8192, NULL, 4, &s_task, 1, MALLOC_CAP_SPIRAM)
         : xTaskCreatePinnedToCore(mesh_task, "meshtastic", 8192, NULL, 4, &s_task, 1);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "failed to create mesh task");
@@ -475,7 +497,7 @@ int mesh_manager_init(void)
     // mesh_persist_task()'s doc comment. Small and idle almost always, so a
     // failure here (extremely unlikely on a ~2KB ask) just means node/
     // channel-table changes stop persisting, not a hard init failure.
-    ret = xTaskCreate(mesh_persist_task, "mesh_persist", 3072, NULL, 2, &s_persist_task);
+    ret = xTaskCreatePinnedToCore(mesh_persist_task, "mesh_persist", 3072, NULL, 2, &s_persist_task, 1);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "failed to create mesh persist task — node/channel persistence disabled");
     }

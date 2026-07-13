@@ -17,6 +17,8 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_sleep.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -606,9 +608,18 @@ static int load_one_static(const purr_module_header_t *hdr)
     if (call_init && hdr->init) {
         if (guarded) purr_crash_guard_mark_start(hdr->name);
         int rc = hdr->init();
-        if (guarded) purr_crash_guard_mark_stop(hdr->name, rc == 0, "init() failed");
+        bool declined = (rc == PURR_MODULE_INIT_DECLINED);
+        // A decline isn't a crash-loop symptom — see PURR_MODULE_INIT_DECLINED's
+        // doc comment. Report it to the guard as "ok" (clears the mark_start()
+        // breadcrumb, records no strike) rather than as a failure — the module
+        // returned control normally, it just chose not to fully start.
+        if (guarded) purr_crash_guard_mark_stop(hdr->name, rc == 0 || declined, "init() failed");
         if (rc != 0) {
-            ESP_LOGE(TAG, "static module '%s' init() returned %d", hdr->name, rc);
+            if (declined) {
+                ESP_LOGI(TAG, "static module '%s' declined to start", hdr->name);
+            } else {
+                ESP_LOGE(TAG, "static module '%s' init() returned %d", hdr->name, rc);
+            }
             return -1;
         }
     }
@@ -1103,6 +1114,29 @@ void purr_kernel_shutdown(void) {
     ESP_LOGW(TAG, "kernel shutdown requested — entering deep sleep");
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_deep_sleep_start();
+}
+
+#define MESH_BACKEND_NVS_NS  "purr_settings"
+#define MESH_BACKEND_NVS_KEY "mesh_backend"
+
+purr_mesh_backend_t purr_kernel_mesh_backend_get(void) {
+    nvs_handle_t h;
+    if (nvs_open(MESH_BACKEND_NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        return PURR_MESH_BACKEND_MESHTASTIC;
+    }
+    uint8_t v = PURR_MESH_BACKEND_MESHTASTIC;
+    esp_err_t err = nvs_get_u8(h, MESH_BACKEND_NVS_KEY, &v);
+    nvs_close(h);
+    if (err != ESP_OK) return PURR_MESH_BACKEND_MESHTASTIC;
+    return (v == PURR_MESH_BACKEND_MESHCORE) ? PURR_MESH_BACKEND_MESHCORE : PURR_MESH_BACKEND_MESHTASTIC;
+}
+
+void purr_kernel_mesh_backend_set(purr_mesh_backend_t backend) {
+    nvs_handle_t h;
+    if (nvs_open(MESH_BACKEND_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, MESH_BACKEND_NVS_KEY, (uint8_t)backend);
+    nvs_commit(h);
+    nvs_close(h);
 }
 
 // ── Notifications ─────────────────────────────────────────────────────────────

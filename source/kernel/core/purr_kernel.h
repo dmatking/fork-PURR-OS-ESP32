@@ -175,6 +175,22 @@ void     purr_kernel_reboot(void);
 // "off" available across every device uniformly.
 void     purr_kernel_shutdown(void);
 
+// ── Mesh backend preference ─────────────────────────────────────────────────
+// Which mesh protocol module (meshtastic vs meshcore — mutually exclusive,
+// one physical radio) should activate at boot. NVS-backed directly
+// (namespace "purr_settings", key "mesh_backend") rather than the RAM-
+// cached-and-app-persisted pattern purr_kernel_screen_timeout_min() uses:
+// mesh_manager_init()/mc_manager_init() need this value before MSN or
+// Settings exist as running apps, so every call reads/writes NVS fresh
+// rather than relying on an app having already loaded it into kernel RAM.
+typedef enum {
+    PURR_MESH_BACKEND_MESHTASTIC = 0,  // default when no preference is stored yet
+    PURR_MESH_BACKEND_MESHCORE   = 1,
+} purr_mesh_backend_t;
+
+purr_mesh_backend_t purr_kernel_mesh_backend_get(void);
+void                 purr_kernel_mesh_backend_set(purr_mesh_backend_t backend);
+
 // Called by SD / WiFi / PMIC / LoRa drivers when their state changes
 void     purr_kernel_set_sd_available(bool v);
 void     purr_kernel_set_wifi_connected(bool v);

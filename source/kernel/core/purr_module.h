@@ -38,6 +38,19 @@
 #define PURR_PRIORITY_IMPORTANT 2   // load before apps — warn if missing
 #define PURR_PRIORITY_OPTIONAL  3   // best-effort — silent if missing
 
+// init() return value meaning "chose not to start, this is not a fault" —
+// e.g. a module that refuses to activate because a mutually-exclusive
+// peer already owns a shared resource (meshcore_module.cpp declining
+// while meshtastic holds the radio). Distinct from any nonzero failure
+// code: the kernel's static module loader (purr_kernel.c's
+// load_one_static()) skips the crash-guard strike for this specific
+// value, since retrying an intentional decline on every boot isn't a
+// crash loop — logging it as one and eventually disabling the module via
+// purr_crash_guard would be wrong. The module still doesn't load this
+// boot (same as any other nonzero return); this only affects whether the
+// attempt counts against the crash guard's failure budget.
+#define PURR_MODULE_INIT_DECLINED  2
+
 // Catcall bitmask flags
 #define CATCALL_FLAG_DISPLAY  (1u << 0)
 #define CATCALL_FLAG_TOUCH    (1u << 1)

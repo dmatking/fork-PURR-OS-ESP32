@@ -40,6 +40,14 @@ app_manager = "app_manager"
 # mesh — re-enabled for active Meshtastic diagnosis (was off, gated behind
 # CONFIG_PURR_FEATURE_MESHTASTIC, see CoreOS/main/Kconfig.projbuild).
 mesh        = "meshtastic"
+# meshcore — compiled in and statically registered alongside meshtastic
+# (separate [modules] key, both loaded into the static registry — see
+# purrstrap.py's free-form modules.* handling), but NOT the boot-time
+# default: meshtastic loads first and meshcore's own mutual-exclusion
+# guard (meshcore_module.cpp) refuses to activate while it's running.
+# Manually toggle via Terminal's `stop meshtastic` / `start meshcore`
+# until roadmap item 2 (the NVS-driven select-and-reboot switch) exists.
+meshcore    = "meshcore"
 lua         = "lua_runtime"
 wifi        = "wifi_mgr"
 
@@ -52,7 +60,7 @@ terminal    = true
 fileman     = true
 hwtest      = true
 drivermgr   = true
-meshchat    = true
+msn         = true
 services    = true
 taskmgr     = true
 
@@ -67,6 +75,7 @@ driver_manager    = 2
 wifi_mgr          = 2
 lua_runtime       = 2
 meshtastic        = 2
+meshcore          = 2
 gps/generic_nmea  = 3
 battery/adc_battery = 3
 apps/settings     = 3
@@ -74,7 +83,7 @@ apps/terminal     = 3
 apps/fileman      = 3
 apps/hwtest       = 3
 apps/drivermgr    = 3
-apps/meshchat     = 3
+apps/msn          = 3
 apps/services     = 3
 apps/taskmgr      = 3
 

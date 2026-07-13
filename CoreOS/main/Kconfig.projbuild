@@ -177,6 +177,29 @@ menu "PURR OS"
             opt in via their own .overrides file, same pattern as
             PURR_DISPLAY_ST7789_BGR_ORDER above.
 
+    config PURR_FEATURE_MESHCORE
+        bool "MeshCore-compatible mesh module"
+        default n
+        help
+            Gates source/modules/meshcore/ (vendored MeshCore protocol core
+            under vendor/, plus mc_radio_adapter.cpp/mc_contacts.cpp/
+            mc_identity.cpp/meshcore_module.cpp) — off by default on every
+            device, same two-layer gate shape as CONFIG_PURR_FEATURE_
+            MESHTASTIC above (components under source/modules/ compile into
+            every device's firmware regardless of device.pcat's [modules]
+            section, so this Kconfig flag is what actually saves footprint
+            and switches meshcore_module.cpp between its real implementation
+            and a stub). When off, meshcore.h's public API compiles to a
+            stub returning false/0/empty everywhere.
+
+            Mutually exclusive with CONFIG_PURR_FEATURE_MESHTASTIC at
+            runtime (not at compile time — both can be enabled in the same
+            build; meshcore_module.cpp/meshtastic_module.c each refuse to
+            activate if the other is already loaded, since both need
+            exclusive use of the one physical LoRa radio). Both being
+            compiled in simultaneously is intentional groundwork for a
+            future runtime protocol switch, not an oversight.
+
     config PURR_TDECK_PLUS_PHYSICAL_KEYBOARD
         bool "T-Deck Plus: init physical BBQ20 keyboard"
         default y
