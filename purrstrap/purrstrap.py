@@ -184,6 +184,23 @@ def resolve_device(device_slug):
     apply_radio_companion_defaults(cfg)
     return cfg, pcat_path
 
+# 2nd-stage bootloader flash offset — chip-specific, dictated by the ROM
+# bootloader (not configurable in ESP-IDF itself). Confirmed against IDF's
+# own default in components/bootloader/Kconfig.projbuild:
+#   default 0x1000 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S2
+#   default 0x2000 if IDF_TARGET_ESP32P4 || IDF_TARGET_ESP32C5
+#   default 0x0    (everything else — esp32s3, esp32c3, esp32c6, esp32h2, ...)
+# Single source of truth for both call sites (_merge_flash_image() and
+# cmd_flash()) — they used to each carry their own copy of this mapping,
+# and esp32s2 was wrong in both (mapped to 0x0 instead of 0x1000), just
+# never exercised since no esp32s2 device.pcat exists in this tree yet.
+def bootloader_offset(chip):
+    if chip in ("esp32", "esp32s2"):
+        return "0x1000"
+    if chip in ("esp32p4", "esp32c5"):
+        return "0x2000"
+    return "0x0"
+
 # ── Radio companion capability defaults ──────────────────────────────────────
 # Every device with WiFi gets ESP-NOW proximity discovery + pairing "for
 # free," rather than needing it hand-wired into each device.pcat one at a
@@ -891,7 +908,7 @@ def _build_kernel_spine(device, cfg, out_dir):
         return None
 
     chip = cfg.get("device.chip", "esp32")
-    valid_chips = ("esp32", "esp32s3", "esp32c3", "esp32s2", "esp32h2")
+    valid_chips = ("esp32", "esp32s3", "esp32c3", "esp32s2", "esp32h2", "esp32c6", "esp32p4")
     if chip not in valid_chips:
         chip = "esp32"
 
@@ -1016,7 +1033,7 @@ def _merge_flash_image(device, cfg, out_dir, firmware_bin, flash_bin):
     partitions    = os.path.join(out_dir, "partition-table.bin")
 
     chip = cfg.get("device.chip", "esp32")
-    bl_offset = "0x0" if chip in ("esp32s3", "esp32s2", "esp32c3", "esp32c6", "esp32h2") else "0x1000"
+    bl_offset = bootloader_offset(chip)
 
     parts = []
     if os.path.isfile(bootloader):   parts += [bl_offset,        bootloader]
@@ -1165,7 +1182,7 @@ def cmd_flash(args):
         cfg_flash, _ = resolve_device(args.device)
         chip     = cfg_flash.get("device.chip", "esp32s3")
         flash_mb = cfg_flash.get("device.flash_mb", "4")
-        bl_offset = "0x0" if chip in ("esp32s3", "esp32s2", "esp32c3", "esp32c6", "esp32h2") else "0x1000"
+        bl_offset = bootloader_offset(chip)
         info(f"flashing bootloader+partition-table+firmware+SPIFFS (NVS untouched) ...")
         erase_flag = ["--erase-all"] if getattr(args, "erase", False) else []
         cmd = _esptool + [

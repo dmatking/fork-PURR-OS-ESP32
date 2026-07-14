@@ -4,6 +4,22 @@ dependencies:
     version: ">=8.3.0,<9.0.0"
   espressif/arduino-esp32:
     version: ">=3.0.0"
+  # M5Stack Tab5 (ESP32-P4) board support — display/touch/SD bring-up,
+  # wraps the real hardware-tested init sequences (MIPI-DSI panel timing,
+  # dual ILI9881/ST7123 revision auto-detect, PI4IOE5V6408 IO-expander
+  # reset lines) instead of hand-transcribing them. MIT licensed. Target-
+  # restricted with an explicit rule — this manifest is global (applies to
+  # every device's build), and the espp/tinyusb incident already taught
+  # this codebase the hard way that an unconditional dependency here can
+  # break every OTHER device's build outright at configure time if it
+  # doesn't resolve for their chip (see the espressif/esp_tinyusb comment
+  # below). This component also self-declares esp32p4 as its only
+  # supported target in its own manifest, so this rule is defense-in-depth
+  # on top of that, not the only thing preventing a repeat.
+  espp/m5stack-tab5:
+    version: ">=1.0.32"
+    rules:
+      - if: "target == esp32p4"
   # espressif/esp_tinyusb — pinned/dormant USB MSC work (source/modules/usb_msc,
   # #if 0'd out at its only call site in kernel_tdp_boot.c) doesn't need this
   # right now, and the dependency was actively breaking every plain-ESP32

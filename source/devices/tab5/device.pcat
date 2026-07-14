@@ -1,0 +1,102 @@
+# devices/tab5/device.pcat
+# M5Stack Tab5 — ESP32-P4 (RISC-V, dual-core), 5" 1280x720 MIPI-DSI IPS
+# touchscreen, ESP32-C6-MINI-1U companion for WiFi 6/BT over SDIO.
+# First ESP32-P4 device in this codebase. Two hardware revisions exist
+# (original: ILI9881C display + GT911 touch; newer: integrated ST7123) —
+# both drivers are wrapped by the espp/m5stack-tab5 BSP component
+# (m5tab5_bsp driver, source/drivers/display/m5tab5_bsp/), which
+# auto-detects which one is actually present at boot. See the ESP32-P4
+# plan for the full research trail (pin sources, IDF version compat,
+# bootloader offset, why this wraps a real hardware-tested BSP instead of
+# hand-transcribing MIPI-DSI panel init sequences).
+#
+# Phase 1 (this pass): display/touch/SD bring-up only, no wireless yet —
+# build-verify only, no physical hardware in hand. [radio] wifi stays
+# false until Phase 2 wires up the C6 companion over SDIO; flip it once
+# that's confirmed working, which also makes this device eligible for
+# purrstrap.py's apply_radio_companion_defaults() (proximity/pairing/
+# msn/nearby) automatically, same as every other WiFi-capable device.
+
+[device]
+name        = "tab5"
+chip        = "esp32p4"
+kernel_type = "native"
+flash_mb    = 16
+psram       = true
+psram_mb    = 32
+
+[drivers]
+# Baked directly into kernel_tab5_boot.c (specialized kernel — see
+# purrstrap.py's `specialized` glue-skip for display/touch/input, same as
+# T-Deck Plus). Listed here for documentation only; one physical
+# component (m5tab5_bsp) answers both catcalls, since the espp BSP's
+# ILI9881C+GT911 vs. ST7123 auto-detect happens inside one object either
+# way.
+display     = "m5tab5_bsp"
+touch       = "m5tab5_bsp"
+input       = ""
+radio       = ""
+gps         = ""
+
+[radio]
+# No WiFi/BT on the P4 itself — the ESP32-C6-MINI-1U companion (SDIO) is
+# Phase 2, not wired up yet in this pass. No LoRa at all on this board;
+# like the CYD fleet, Tab5 becomes a WiFi/BT-only "remote radio companion"
+# client once Phase 2 lands, not a local mesh device.
+wifi        = false
+bt          = false
+lora        = ""
+
+[modules]
+ui          = "miniwin"
+app_manager = "app_manager"
+
+[ui]
+theme       = "wce"
+
+[apps]
+settings    = true
+drivermgr   = true
+
+[flash]
+# Priority 1 — required, kernel panics without these. m5tab5_bsp isn't
+# listed here: it's baked into the specialized kernel directly (see
+# [drivers]'s comment), same as st7789/gt911 aren't in T-Deck Plus's
+# [flash] either.
+miniwin          = 2
+app_manager      = 2
+driver_manager   = 2
+apps/settings    = 3
+apps/drivermgr   = 3
+
+[pins]
+# ── MIPI-DSI panel + IO-expander reset lines ──────────────────────────────
+# LCD/touch reset are NOT direct GPIO — routed through a PI4IOE5V6408 I2C
+# IO-expander at 0x43 (LCD_RST=P4, TP_RST=P5, SPK_EN=P1) — confirmed via
+# the espp/m5stack-tab5 BSP source, not guessed. m5tab5_bsp.cpp drives this
+# through espp's own Pi4ioe5v wrapper, not raw register writes here.
+display_backlight = 22
+
+# ── Touch (GT911 or ST7123, I2C) ──────────────────────────────────────────
+touch_i2c_port = 0
+touch_sda      = 31
+touch_scl      = 32
+touch_int      = 23
+
+# ── SD card (SDMMC 4-bit mode) ────────────────────────────────────────────
+sd_enabled  = true
+sd_clk      = 43
+sd_cmd      = 44
+sd_dat0     = 39
+sd_dat1     = 40
+sd_dat2     = 41
+sd_dat3     = 42
+
+# ── ESP32-C6 companion (SDIO host, Phase 2 — not brought up yet this pass) ─
+c6_sdio_clk   = 12
+c6_sdio_cmd   = 13
+c6_sdio_d0    = 11
+c6_sdio_d1    = 10
+c6_sdio_d2    = 9
+c6_sdio_d3    = 8
+c6_reset      = 15
