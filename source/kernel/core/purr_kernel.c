@@ -679,14 +679,35 @@ static int cmp_reg_priority(const void *a, const void *b)
     return ka - kb;
 }
 
+// One-time pause between the P2 (IMPORTANT — display/UI backend/app_manager/
+// wifi_mgr) and P3 (OPTIONAL — proximity/pairing/meshtastic/meshcore, and
+// every deferred user app: msn, nearby, services, settings, ...) load
+// tiers. UI is P2 and should come up as fast as possible; P3 is everything
+// else racing to start radio tasks and spin up their own background
+// pollers on top of a UI that's barely rendered its first frame yet.
+// Confirmed live: opening the Nearby app moments after boot could freeze
+// cupcake's own render task long enough to trip the "UI TASK UNRESPONSIVE"
+// hang-watchdog (see purr_crash_guard.h) — giving the UI a couple of
+// uncontested seconds first, before P3 modules/apps start piling on,
+// avoids racing it against everything spinning up at once.
+#define BOOT_SETTLE_MS 2500UL
+
 int purr_kernel_load_static_modules(void)
 {
     qsort(s_static_reg, s_static_reg_count,
           sizeof(s_static_reg[0]), cmp_reg_priority);
 
     int n = s_static_reg_count;
+    uint8_t prev_priority = 0;
     for (int i = 0; i < n; i++) {
         const purr_module_header_t *hdr = s_static_reg[i];
+
+        if (hdr->load_priority == PURR_PRIORITY_OPTIONAL && prev_priority != PURR_PRIORITY_OPTIONAL) {
+            ESP_LOGI(TAG, "boot settle: pausing %lu ms before P3/OPTIONAL modules", BOOT_SETTLE_MS);
+            vTaskDelay(pdMS_TO_TICKS(BOOT_SETTLE_MS));
+        }
+        prev_priority = hdr->load_priority;
+
         module_registry_lock();
         int rc = load_one_static(hdr);
         module_registry_unlock();

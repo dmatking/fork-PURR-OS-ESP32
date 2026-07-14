@@ -6,5 +6,5 @@ idf_component_register(
         ../../kernel/core
         ../../kernel/catcalls
         ../proximity
-    REQUIRES esp_common driver freertos nvs_flash esp_hw_support proximity
+    REQUIRES esp_common driver freertos nvs_flash esp_hw_support esp_wifi proximity
 )
