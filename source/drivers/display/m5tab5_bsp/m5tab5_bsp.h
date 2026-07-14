@@ -3,10 +3,11 @@
 
 // Public surface for kernel_tab5_boot.c calling this directly before the
 // module loader runs — same "baked-in Layer 0" pattern as gt911.h/
-// st7789.h on T-Deck Plus. One physical BSP object (espp::M5StackTab5)
-// answers both the display and touch catcalls, since the espp component's
-// own ILI9881C-vs-ST7123 auto-detect lives inside that one object either
-// way — this header/its .cpp is the only place that knows that.
+// st7789.h on T-Deck Plus. One native driver (m5tab5_bsp.c, plain C against
+// raw ESP-IDF esp_lcd/i2c_master APIs — no espp dependency) answers both
+// the display and touch catcalls, since the ILI9881C-vs-ST7123 auto-detect
+// lives inside that one translation unit either way — this header/its .c
+// is the only place that knows that.
 
 // Brings up display (MIPI-DSI panel, auto-detecting ILI9881C vs ST7123
 // hardware revision), touch, and registers both catcall_display_t and

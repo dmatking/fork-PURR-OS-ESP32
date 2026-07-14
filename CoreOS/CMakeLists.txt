@@ -10,6 +10,37 @@ if(NOT _manifest_loaded)
         "run 'python3 modulestrap/modulestrap.py build all' from repo root")
 endif()
 
+set(PURR_DEVICE $ENV{PURR_DEVICE})
+
+# Tab5 resolves LVGL v9 (see idf_component.yml's matches clause) and hosts
+# its own v9-only UI backend, "nougat" — every other device stays on v8.
+# Component *compilation* isn't gated by which LVGL version a manifest
+# resolves to: this project's own components_manifest.cmake (included
+# above) is included unconditionally, with no COMPONENTS/EXCLUDE_COMPONENTS
+# filtering at all until now, so every discovered component gets built as
+# part of *every device's own build* regardless of whether its device.pcat
+# references it (confirmed empirically elsewhere this session: msn/
+# meshtastic/proximity all compiled for heltec despite not being in its
+# [modules]). Left unfiltered, Tab5's build would still attempt to compile
+# cupcake_hal.c/kittenui_win.c/cardstack_win.c/pounce_win.c/lvgldebug (all
+# v8-coded) against the v9 headers actually present and fail outright —
+# and symmetrically, nougat's v9-only source would fail against v8 on
+# every other device. EXCLUDE_COMPONENTS must be set before project().
+# m5tab5_bsp is symmetric with nougat here, not just the LVGL-backend list:
+# it #includes esp_lcd_mipi_dsi.h (esp_lcd's dsi/ subdirectory), which only
+# exists/works on a target with MIPI-DSI PHY hardware. Left out of this
+# list, it compiled for every other device too (confirmed live via a full
+# fleet bake — "fatal error: esp_lcd_mipi_dsi.h: No such file or directory"
+# building it for waveshare169/esp32s3) since CoreOS/main/CMakeLists.txt's
+# own TAB5_REQUIRES guard only controls whether main *links* against it,
+# not whether components_manifest.cmake's unconditional include still
+# attempts to *compile* it as part of the build graph.
+if(PURR_DEVICE STREQUAL "tab5")
+    set(EXCLUDE_COMPONENTS cupcake kittenui cardstack pounce lvgldebug)
+else()
+    set(EXCLUDE_COMPONENTS nougat m5tab5_bsp)
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 # Force LVGL's allocator onto PSRAM instead of the board's scarce internal
@@ -20,14 +51,28 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # global build property (rather than a per-component include path) applies
 # it to every component, including the vendored lvgl__lvgl itself.
 #
-# Deliberately NOT pre-quoted here: lv_conf_internal.h does
-# `#include __LV_TO_STR(LV_CONF_PATH)`, where __LV_TO_STR itself stringizes
-# (#x) its argument. Passing an already-quoted value here double-stringizes
-# it into a malformed nested-quote path ("\"C:/...\"") that GCC rejects with
-# "fatal error: ...: Invalid argument" — confirmed live. LV_CONF_PATH must
-# be the bare, unquoted path so __LV_TO_STR's own #x produces the single
-# pair of quotes #include actually needs.
-get_filename_component(PURR_LV_CONF_PATH "${CMAKE_CURRENT_LIST_DIR}/../source/config/lv_conf.h" ABSOLUTE)
-idf_build_set_property(COMPILE_DEFINITIONS "LV_CONF_PATH=${PURR_LV_CONF_PATH}" APPEND)
+# Quoting differs by LVGL major version — confirmed by reading each
+# version's own lv_conf_internal.h, not assumed to be the same mechanism:
+#   v8: `#include __LV_TO_STR(LV_CONF_PATH)` — __LV_TO_STR stringizes (#x)
+#       its argument itself. A pre-quoted value here double-stringizes into
+#       a malformed nested-quote path ("\"C:/...\"") that GCC rejects with
+#       "fatal error: ...: Invalid argument" — confirmed live. Must stay
+#       the bare, unquoted path.
+#   v9: `#include LV_CONF_PATH` — no wrapping macro at all (the header's
+#       own comment says so: "Make sure to define custom CONF_PATH as a
+#       string"). An unquoted path here is not a valid #include operand at
+#       all — "#include expects FILENAME or <FILENAME>" — confirmed live.
+#       Must be pre-quoted.
+#
+# LVGL v8 and v9 also have different lv_conf.h schemas (renamed/restructured
+# options) — one file can't serve both, so the path itself is
+# PURR_DEVICE-conditional too, same split as EXCLUDE_COMPONENTS above.
+if(PURR_DEVICE STREQUAL "tab5")
+    get_filename_component(PURR_LV_CONF_PATH "${CMAKE_CURRENT_LIST_DIR}/../source/config/lv_conf_v9.h" ABSOLUTE)
+    idf_build_set_property(COMPILE_DEFINITIONS "LV_CONF_PATH=\"${PURR_LV_CONF_PATH}\"" APPEND)
+else()
+    get_filename_component(PURR_LV_CONF_PATH "${CMAKE_CURRENT_LIST_DIR}/../source/config/lv_conf.h" ABSOLUTE)
+    idf_build_set_property(COMPILE_DEFINITIONS "LV_CONF_PATH=${PURR_LV_CONF_PATH}" APPEND)
+endif()
 
 project(purr_os)

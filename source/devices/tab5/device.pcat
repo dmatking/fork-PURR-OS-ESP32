@@ -3,12 +3,15 @@
 # touchscreen, ESP32-C6-MINI-1U companion for WiFi 6/BT over SDIO.
 # First ESP32-P4 device in this codebase. Two hardware revisions exist
 # (original: ILI9881C display + GT911 touch; newer: integrated ST7123) —
-# both drivers are wrapped by the espp/m5stack-tab5 BSP component
-# (m5tab5_bsp driver, source/drivers/display/m5tab5_bsp/), which
-# auto-detects which one is actually present at boot. See the ESP32-P4
-# plan for the full research trail (pin sources, IDF version compat,
-# bootloader offset, why this wraps a real hardware-tested BSP instead of
-# hand-transcribing MIPI-DSI panel init sequences).
+# both are handled by a native driver (m5tab5_bsp driver,
+# source/drivers/display/m5tab5_bsp/, plain C against esp_lcd/i2c_master),
+# which auto-detects which one is actually present at boot. Its DCS init
+# tables and MIPI-DSI/DPI timing were sourced from espp/m5stack-tab5's real
+# code (read-only reference, never a build dependency — that managed
+# component was dropped: it requires lvgl>=9.2.2 and an ESP-IDF version
+# newer than this project's pinned v5.3.5) and cross-checked byte-for-byte
+# against M5Stack's own M5GFX. See m5tab5_bsp.c's header comment for the
+# full trail.
 #
 # Phase 1 (this pass): display/touch/SD bring-up only, no wireless yet —
 # build-verify only, no physical hardware in hand. [radio] wifi stays
@@ -29,9 +32,8 @@ psram_mb    = 32
 # Baked directly into kernel_tab5_boot.c (specialized kernel — see
 # purrstrap.py's `specialized` glue-skip for display/touch/input, same as
 # T-Deck Plus). Listed here for documentation only; one physical
-# component (m5tab5_bsp) answers both catcalls, since the espp BSP's
-# ILI9881C+GT911 vs. ST7123 auto-detect happens inside one object either
-# way.
+# component (m5tab5_bsp) answers both catcalls, since the ILI9881C+GT911
+# vs. ST7123 auto-detect happens inside one native driver either way.
 display     = "m5tab5_bsp"
 touch       = "m5tab5_bsp"
 input       = ""
@@ -73,8 +75,9 @@ apps/drivermgr   = 3
 # ── MIPI-DSI panel + IO-expander reset lines ──────────────────────────────
 # LCD/touch reset are NOT direct GPIO — routed through a PI4IOE5V6408 I2C
 # IO-expander at 0x43 (LCD_RST=P4, TP_RST=P5, SPK_EN=P1) — confirmed via
-# the espp/m5stack-tab5 BSP source, not guessed. m5tab5_bsp.cpp drives this
-# through espp's own Pi4ioe5v wrapper, not raw register writes here.
+# espp/m5stack-tab5's real source, not guessed. m5tab5_bsp.c drives this
+# with direct I2C register writes against the public PI4IOE5V6408 register
+# map (no wrapper library).
 display_backlight = 22
 
 # ── Touch (GT911 or ST7123, I2C) ──────────────────────────────────────────

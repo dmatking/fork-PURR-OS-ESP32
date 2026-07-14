@@ -24,4 +24,4 @@ required_catcalls = [
     "catcall_touch_t.deinit",
 ]
 
-notes = "M5Stack Tab5 (ESP32-P4) MIPI-DSI display + touch, wrapping espp/m5stack-tab5. Auto-detects ILI9881C (original) vs ST7123 (newer) hardware revision at boot. Baked-in Layer 0 driver, used only by kernel_tab5_boot.c."
+notes = "M5Stack Tab5 (ESP32-P4) MIPI-DSI display + touch, native driver (no espp dependency — direct esp_lcd/i2c_master calls). Auto-detects ILI9881C (original) vs ST7123 (newer) hardware revision at boot. DCS init tables and MIPI-DSI/DPI timing sourced from espp/m5stack-tab5's real source (read-only reference, cross-checked byte-for-byte against M5Stack's own M5GFX) — not guessed. Baked-in Layer 0 driver, used only by kernel_tab5_boot.c."

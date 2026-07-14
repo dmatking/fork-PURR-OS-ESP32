@@ -1,10 +1,11 @@
 // kernel_tab5_boot.c — specialized boot for M5Stack Tab5 (ESP32-P4)
 //
 // Much shorter than kernel_tdp_boot.c's own equivalent: display/touch/SD
-// bring-up is delegated to m5tab5_bsp.cpp (which wraps the real
-// hardware-tested espp/m5stack-tab5 BSP), not hand-sequenced here — no
-// per-peripheral SPI-bus-sharing/timing workarounds to encode in this
-// file, since espp already solved those against real hardware.
+// bring-up is delegated to m5tab5_bsp.c (native driver — MIPI-DSI/DPI panel
+// bring-up, DCS init tables, and IO-expander sequencing all sourced from
+// espp/m5stack-tab5's real hardware-tested code, cross-checked against
+// M5Stack's own M5GFX — see that file's header comment), not hand-sequenced
+// here.
 //
 // Phase 1 scope (this pass): display, touch, SD. No physical Tab5 in hand
 // yet — build-verified only. The ESP32-C6 companion (SDIO, for WiFi/BT —

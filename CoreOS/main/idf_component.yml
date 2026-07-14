@@ -1,25 +1,44 @@
 ## IDF Component Manager manifest for PURR OS CoreOS main component
 dependencies:
+  # v8 is the default for every existing UI backend (cupcake/kittenui/
+  # cardstack/pounce/lvgldebug) — Tab5's "Nougat" backend needs v9
+  # (originally discovered via espp/m5stack-tab5's own transitive
+  # requirement; confirmed independently true regardless of that dependency
+  # since dropped — LVGL v9 is Nougat's own deliberate choice, see the
+  # "Nougat" plan).
+  #
+  # A `matches:` list here is NOT "override the version for this target,
+  # else fall back to a plain `version:` field" — confirmed by reading this
+  # installed Component Manager's own source
+  # (idf_component_tools/manifest/models.py): a non-empty `matches` makes
+  # the WHOLE dependency conditionally-optional (gated by
+  # `meet_optional_dependencies`, which re-runs the same match list and
+  # drops the dependency entirely — not falls back — if nothing matches
+  # the current target). A `matches` list with only an esp32p4 entry
+  # silently dropped lvgl/lvgl from every OTHER device's build outright
+  # ("Failed to resolve component 'lvgl__lvgl'" at CMake configure time,
+  # confirmed live via a full fleet bake). Fixed by making the `matches`
+  # list exhaustive — one branch per outcome, covering every target — so
+  # exactly one branch is always true and the dependency is never dropped.
   lvgl/lvgl:
-    version: ">=8.3.0,<9.0.0"
+    matches:
+      - if: "target == esp32p4"
+        version: ">=9.2.2"
+      - if: "target != esp32p4"
+        version: ">=8.3.0,<9.0.0"
   espressif/arduino-esp32:
     version: ">=3.0.0"
-  # M5Stack Tab5 (ESP32-P4) board support — display/touch/SD bring-up,
-  # wraps the real hardware-tested init sequences (MIPI-DSI panel timing,
-  # dual ILI9881/ST7123 revision auto-detect, PI4IOE5V6408 IO-expander
-  # reset lines) instead of hand-transcribing them. MIT licensed. Target-
-  # restricted with an explicit rule — this manifest is global (applies to
-  # every device's build), and the espp/tinyusb incident already taught
-  # this codebase the hard way that an unconditional dependency here can
-  # break every OTHER device's build outright at configure time if it
-  # doesn't resolve for their chip (see the espressif/esp_tinyusb comment
-  # below). This component also self-declares esp32p4 as its only
-  # supported target in its own manifest, so this rule is defense-in-depth
-  # on top of that, not the only thing preventing a repeat.
-  espp/m5stack-tab5:
-    version: ">=1.0.32"
-    rules:
-      - if: "target == esp32p4"
+  # M5Stack Tab5 (ESP32-P4) board support used to wrap espp/m5stack-tab5
+  # here. Dropped: that component transitively requires lvgl>=9.2.2 even
+  # at its low-level display_drivers/display layer (not just the top-level
+  # BSP class), AND its espp/logger dependency requires esp_log_timestamp.h,
+  # which does not exist in this project's pinned ESP-IDF v5.3.5 — two
+  # independent blockers. source/drivers/display/m5tab5_bsp/m5tab5_bsp.c is
+  # now a native driver (plain C against esp_lcd/i2c_master directly, no
+  # managed component), with every hardware fact (DCS init tables, MIPI-DSI/
+  # DPI timing, IO-expander register map) sourced from espp's real code
+  # read-only (never a build dependency) and cross-checked against
+  # M5Stack's own M5GFX. See that file's header comment for the full trail.
   # espressif/esp_tinyusb — pinned/dormant USB MSC work (source/modules/usb_msc,
   # #if 0'd out at its only call site in kernel_tdp_boot.c) doesn't need this
   # right now, and the dependency was actively breaking every plain-ESP32
