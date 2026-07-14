@@ -50,11 +50,8 @@ bt          = false
 lora        = ""
 
 [modules]
-ui          = "miniwin"
+ui          = "nougat"
 app_manager = "app_manager"
-
-[ui]
-theme       = "wce"
 
 [apps]
 settings    = true
@@ -65,7 +62,7 @@ drivermgr   = true
 # listed here: it's baked into the specialized kernel directly (see
 # [drivers]'s comment), same as st7789/gt911 aren't in T-Deck Plus's
 # [flash] either.
-miniwin          = 2
+nougat           = 2
 app_manager      = 2
 driver_manager   = 2
 apps/settings    = 3

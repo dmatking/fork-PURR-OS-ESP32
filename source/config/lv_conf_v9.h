@@ -47,4 +47,17 @@ static inline void *lv_realloc_core(void *p, size_t new_size) {
     return heap_caps_realloc(p, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 
+// lv_init.c (a different translation unit than lv_mem.c) calls lv_mem_init()/
+// lv_mem_deinit() unconditionally — every other LV_USE_STDLIB_MALLOC backend
+// (BUILTIN/CLIB/rtthread/micropython) provides these in its own vendored .c
+// file, but LV_STDLIB_CUSTOM provides none, since a custom allocator has no
+// pool to set up (confirmed by reading every stdlib/*/lv_mem_core_*.c —
+// none of them compile in for LV_STDLIB_CUSTOM). heap_caps_malloc() needs no
+// init/teardown, so these are true no-ops — same `static inline`-in-this-
+// header trick as the *_core functions above, for the same reason (visible
+// directly inside lv_init.c's own translation unit, no cross-component
+// linking needed).
+static inline void lv_mem_init(void) {}
+static inline void lv_mem_deinit(void) {}
+
 #endif // PURR_LV_CONF_V9_H

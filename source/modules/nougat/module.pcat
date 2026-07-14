@@ -1,0 +1,17 @@
+[module]
+name        = "nougat"
+version     = "0.1.0"
+type        = "ui"
+description = "Nougat — Android 7.1.2-style LVGL v9 UI backend (Tab5/ESP32-P4 only)"
+author      = "PURR OS"
+
+[requires]
+catcalls    = "display"
+kernel_min  = "1.0.0"
+
+[depends]
+app_manager = ">=0.1.0"
+
+[build]
+sources     = "nougat_module.c nougat_hal.c nougat_win.c"
+requires    = "lvgl app_manager"

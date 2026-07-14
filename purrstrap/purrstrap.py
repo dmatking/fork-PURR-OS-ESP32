@@ -758,6 +758,7 @@ UI_BACKEND_MAP = {
     "cupcake":   "CUPCAKE",
     "lvgldebug": "LVGLDEBUG",
     "pounce":    "POUNCE",
+    "nougat":    "NOUGAT",
 }
 
 def _pcat_bool(cfg, key):
