@@ -18,7 +18,7 @@ extern "C" {
 
 // ── Version ───────────────────────────────────────────────────────────────────
 
-#define PURR_KERNEL_VERSION  "1.0.0-dp6"
+#define PURR_KERNEL_VERSION  "1.0.0-dp7"
 #define KITT_VERSION         "1.0.0"
 
 // ── Module loader ─────────────────────────────────────────────────────────────
