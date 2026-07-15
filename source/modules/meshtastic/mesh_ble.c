@@ -1,5 +1,5 @@
-// mesh_ble.c — Meshtastic BLE phone-API companion service (see mesh_ble.h
-// for the UUID-verification caveat before relying on this for real interop).
+// mesh_ble.c — Meshtastic BLE phone-API companion service (see mesh_ble.h —
+// the four UUIDs below are verified against real meshtastic/firmware source).
 //
 // NimBLE host stack — migrated from Bluedroid along with bt_mgr.c (see that
 // file's header comment and CoreOS/sdkconfig_tdeck_plus.overrides for why).
@@ -62,10 +62,14 @@ static const char *TAG = "mesh_ble";
 #define MESH_BLE_FRAME_MAX  256
 #define MESH_BLE_QUEUE_LEN  8
 
-// See mesh_ble.h — reproduced from memory of Meshtastic's public BLE spec,
-// byte-reversed (little-endian) from the human-readable UUID strings. Same
-// byte order NimBLE's ble_uuid128_t/BLE_UUID128_INIT expects (over-the-air
+// Byte-reversed (little-endian) from the real UUID strings confirmed in
+// meshtastic/firmware's src/BluetoothCommon.h — see mesh_ble.h. Same byte
+// order NimBLE's ble_uuid128_t/BLE_UUID128_INIT expects (over-the-air
 // LSB-first, same convention Bluedroid used) — carried over unchanged.
+//   service:   6ba1b218-15a8-461f-9fa8-5dcae273eafd  (MESH_SERVICE_UUID)
+//   toradio:   f75c76d2-129e-4dad-a1dd-7866124401e7  (TORADIO_UUID)
+//   fromradio: 2c55e69e-4993-11ed-b878-0242ac120002  (FROMRADIO_UUID)
+//   fromnum:   ed9da18c-a800-4f66-a670-aa7547e34453  (FROMNUM_UUID)
 static const ble_uuid128_t s_svc_uuid = BLE_UUID128_INIT(
     0xfd,0xea,0x73,0xe2,0xca,0x5d,0xa8,0x9f,0x1f,0x46,0xa8,0x15,0x18,0xb2,0xa1,0x6b);
 static const ble_uuid128_t s_toradio_uuid = BLE_UUID128_INIT(

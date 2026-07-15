@@ -26,6 +26,12 @@ static bool backend_contact_at(int idx, msn_contact_t *out) {
     strncpy(out->name, info.name[0] ? info.name : out->id_str, sizeof(out->name) - 1);
     out->name[sizeof(out->name) - 1] = 0;
     out->channel_idx = -1;   // no per-contact channel concept — DMs use per-contact ECDH
+    // mc_contact_info_t (meshcore_api.h) has no rssi/hop/telemetry fields at
+    // all — confirmed by reading it, not assumed. MeshCore's protocol simply
+    // doesn't carry any of this today.
+    out->rssi_dbm    = MSN_RSSI_UNKNOWN;
+    out->hops_away   = MSN_HOPS_UNKNOWN;
+    out->battery_pct = MSN_BATTERY_UNKNOWN;
 
     if (info.last_advert_timestamp == 0) {
         out->last_seen_ms_ago = MSN_LAST_SEEN_UNKNOWN;
