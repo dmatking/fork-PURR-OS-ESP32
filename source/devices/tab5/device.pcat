@@ -1,24 +1,28 @@
 # devices/tab5/device.pcat
-# M5Stack Tab5 — ESP32-P4 (RISC-V, dual-core), 5" 1280x720 MIPI-DSI IPS
-# touchscreen, ESP32-C6-MINI-1U companion for WiFi 6/BT over SDIO.
-# First ESP32-P4 device in this codebase. Two hardware revisions exist
-# (original: ILI9881C display + GT911 touch; newer: integrated ST7123) —
-# both are handled by a native driver (m5tab5_bsp driver,
-# source/drivers/display/m5tab5_bsp/, plain C against esp_lcd/i2c_master),
-# which auto-detects which one is actually present at boot. Its DCS init
-# tables and MIPI-DSI/DPI timing were sourced from espp/m5stack-tab5's real
-# code (read-only reference, never a build dependency — that managed
-# component was dropped: it requires lvgl>=9.2.2 and an ESP-IDF version
-# newer than this project's pinned v5.3.5) and cross-checked byte-for-byte
-# against M5Stack's own M5GFX. See m5tab5_bsp.c's header comment for the
-# full trail.
+# M5Stack Tab5 — ESP32-P4, 5" 720x1280 MIPI-DSI (ST7123 display+touch), attachable
+# I2C keyboard, 32MB PSRAM. Used landscape (1280x720) — the st7123 driver rotates.
 #
-# Phase 1 (this pass): display/touch/SD bring-up only, no wireless yet —
-# build-verify only, no physical hardware in hand. [radio] wifi stays
-# false until Phase 2 wires up the C6 companion over SDIO; flip it once
-# that's confirmed working, which also makes this device eligible for
-# purrstrap.py's apply_radio_companion_defaults() (proximity/pairing/
-# msn/nearby) automatically, same as every other WiFi-capable device.
+# EXPERIMENTAL / UNSTABLE: this device.pcat adopts a real-hardware-verified
+# driver (st7123 + tab5_kbd, ported from an external contributor's PR) that
+# was built and tested against ESP-IDF 5.5.4. This build targets the
+# project's pinned 5.3.5 instead — the specific esp_lcd_new_panel_dpi()/
+# ppa_do_scale_rotate_mirror() APIs the driver uses, and every P4-specific
+# Kconfig symbol below, were individually confirmed present in the pinned
+# 5.3.5 tree before attempting this, but the port itself has only been
+# build-verified here, NOT run on physical hardware under 5.3.5 — the
+# original author's own hardware verification was against 5.5.4. Treat any
+# release built from this as unstable until someone confirms it boots on a
+# real Tab5.
+#
+# Previous approach (native m5tab5_bsp driver, auto-detecting ILI9881C+GT911
+# vs. ST7123) is preserved at source/kernel/kernel_tab5_m5bsp_legacy/ and
+# source/drivers/display/m5tab5_bsp/ — never hardware-verified either, kept
+# for reference/revert only, not referenced by this device anymore.
+#
+# Radio is OFF for DP1: WiFi/BT live on an ESP32-C6 co-processor behind esp-hosted
+# (SDIO), which nothing in the tree brings up yet, and ESP-NOW does not exist on
+# the P4 at all (disabled in IDF) — so proximity/pairing can never run here. When
+# esp-hosted lands, set wifi = true AND radio_companion = false together.
 
 [device]
 name        = "tab5"
@@ -27,81 +31,76 @@ kernel_type = "native"
 flash_mb    = 16
 psram       = true
 psram_mb    = 32
+# 2496 KB = 0x270000, the exact spiffs partition length in partitions_16mb.csv.
+# A smaller image (the 1024 the other 16MB devices use) fails to mount on this
+# device with SPIFFS -10025: the filesystem geometry baked by spiffsgen must
+# match the partition size esp_spiffs mounts with.
+spiffs_kb      = 2496
+spiffs_offset  = "0xD90000"
 
 [drivers]
-# Baked directly into kernel_tab5_boot.c (specialized kernel — see
-# purrstrap.py's `specialized` glue-skip for display/touch/input, same as
-# T-Deck Plus). Listed here for documentation only; one physical
-# component (m5tab5_bsp) answers both catcalls, since the ILI9881C+GT911
-# vs. ST7123 auto-detect happens inside one native driver either way.
-display     = "m5tab5_bsp"
-touch       = "m5tab5_bsp"
-input       = ""
+display     = "st7123"
+touch       = "st7123"
+# tab5_kbd sits in the input slot (not keyboard=) — purrstrap's glue generator
+# only emits static registration for display/touch/input/radio/gps/battery;
+# a keyboard= entry would silently never be registered on a native kernel.
+input       = "tab5_kbd"
 radio       = ""
 gps         = ""
 
 [radio]
-# No WiFi/BT on the P4 itself — the ESP32-C6-MINI-1U companion (SDIO) is
-# Phase 2, not wired up yet in this pass. No LoRa at all on this board;
-# like the CYD fleet, Tab5 becomes a WiFi/BT-only "remote radio companion"
-# client once Phase 2 lands, not a local mesh device.
 wifi        = false
 bt          = false
 lora        = ""
 
 [modules]
-# Nougat (LVGL v9, source/modules/nougat/) is build-verified and registers
-# cleanly, but Phase 1 only landed the HAL + widget backend — no chrome yet
-# (nav bar/status bar/recents/home screen is Phase 2, not started). MiniWin
-# ships here instead so this device has an actually usable UI in the
-# meantime; switch back to "nougat" once Phase 2 lands.
 ui          = "miniwin"
 app_manager = "app_manager"
+lua         = "lua_runtime"
+
+[ui]
+theme       = "wce"
 
 [apps]
 settings    = true
+terminal    = true
+fileman     = true
+hwtest      = true
 drivermgr   = true
+services    = true
+taskmgr     = true
 
 [flash]
-# Priority 1 — required, kernel panics without these. m5tab5_bsp isn't
-# listed here: it's baked into the specialized kernel directly (see
-# [drivers]'s comment), same as st7789/gt911 aren't in T-Deck Plus's
-# [flash] either.
-miniwin          = 2
-app_manager      = 2
-driver_manager   = 2
-apps/settings    = 3
-apps/drivermgr   = 3
+display/st7123     = 1
+touch/st7123       = 1
+input/tab5_kbd     = 1
+miniwin            = 2
+app_manager        = 2
+driver_manager     = 2
+lua_runtime        = 2
+apps/settings      = 3
+apps/terminal      = 3
+apps/fileman       = 3
+apps/hwtest        = 3
+apps/drivermgr     = 3
+apps/services      = 3
+apps/taskmgr       = 3
 
 [pins]
-# ── MIPI-DSI panel + IO-expander reset lines ──────────────────────────────
-# LCD/touch reset are NOT direct GPIO — routed through a PI4IOE5V6408 I2C
-# IO-expander at 0x43 (LCD_RST=P4, TP_RST=P5, SPK_EN=P1) — confirmed via
-# espp/m5stack-tab5's real source, not guessed. m5tab5_bsp.c drives this
-# with direct I2C register writes against the public PI4IOE5V6408 register
-# map (no wrapper library).
-display_backlight = 22
+# Documentation — the st7123/tab5_kbd drivers hard-code the Tab5's fixed wiring
+# (repo convention: native drivers own their pin #defines).
+display_bl    = 22
 
-# ── Touch (GT911 or ST7123, I2C) ──────────────────────────────────────────
-touch_i2c_port = 0
-touch_sda      = 31
-touch_scl      = 32
-touch_int      = 23
+touch_sda     = 31
+touch_scl     = 32
+touch_int     = 23
+touch_rst     = -1
 
-# ── SD card (SDMMC 4-bit mode) ────────────────────────────────────────────
-sd_enabled  = true
-sd_clk      = 43
-sd_cmd      = 44
-sd_dat0     = 39
-sd_dat1     = 40
-sd_dat2     = 41
-sd_dat3     = 42
+kbd_sda       = 0
+kbd_scl       = 1
+kbd_int       = 50
 
-# ── ESP32-C6 companion (SDIO host, Phase 2 — not brought up yet this pass) ─
-c6_sdio_clk   = 12
-c6_sdio_cmd   = 13
-c6_sdio_d0    = 11
-c6_sdio_d1    = 10
-c6_sdio_d2    = 9
-c6_sdio_d3    = 8
-c6_reset      = 15
+# Not wired up in this port (no specialized boot file to mount it) — the
+# previous m5tab5_bsp approach did bring up SD; revisit following T-Deck
+# Plus's mount_sd_vfs() pattern if SD support is wanted here later.
+sd_enabled    = false

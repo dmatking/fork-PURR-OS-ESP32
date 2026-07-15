@@ -795,11 +795,19 @@ def _sdkconfig_lines(device, cfg):
         except ValueError:
             die(f"{device}: device.pcat has psram=true but psram_mb is missing or not an integer")
         lines.append("")
-        lines.append("CONFIG_SPIRAM=y")
-        lines.append("CONFIG_SPIRAM_MODE_OCT=y")
-        lines.append("CONFIG_SPIRAM_SPEED_80M=y")
-        lines.append(f"CONFIG_SPIRAM_SIZE={psram_bytes}")
-        lines.append("CONFIG_SPIRAM_USE_MALLOC=y")
+        if cfg.get("device.chip", "") == "esp32p4":
+            # The P4's PSRAM is hex-mode with its own Kconfig symbol set (and
+            # CONFIG_IDF_EXPERIMENTAL_FEATURES for 200 MHz) — the S3-shaped
+            # OCT/80M symbols below don't exist there. Mode/speed live in the
+            # device's hand-written sdkconfig_<device>.overrides instead.
+            lines.append("CONFIG_SPIRAM=y")
+            lines.append("CONFIG_SPIRAM_USE_MALLOC=y")
+        else:
+            lines.append("CONFIG_SPIRAM=y")
+            lines.append("CONFIG_SPIRAM_MODE_OCT=y")
+            lines.append("CONFIG_SPIRAM_SPEED_80M=y")
+            lines.append(f"CONFIG_SPIRAM_SIZE={psram_bytes}")
+            lines.append("CONFIG_SPIRAM_USE_MALLOC=y")
 
     if cfg.get("device.kernel_type", "native") == "arduino":
         # CONFIG_FREERTOS_HZ=1000 is deliberately NOT re-emitted here — it's

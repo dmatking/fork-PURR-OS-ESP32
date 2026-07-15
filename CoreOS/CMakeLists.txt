@@ -36,7 +36,15 @@ set(PURR_DEVICE $ENV{PURR_DEVICE})
 # not whether components_manifest.cmake's unconditional include still
 # attempts to *compile* it as part of the build graph.
 if(PURR_DEVICE STREQUAL "tab5")
-    set(EXCLUDE_COMPONENTS cupcake kittenui cardstack pounce lvgldebug)
+    # tab5's own device.pcat now selects MiniWin (an experimental st7123-
+    # driver-based port, see device.pcat's own header comment), not Nougat —
+    # Nougat's own code has a real, pre-existing bug independent of this
+    # (nougat_win.c calls lv_list_add_button(), which doesn't exist in either
+    # LVGL version; cupcake_win.c's equivalent correctly uses
+    # lv_list_add_btn()) that this exclusion also happens to route around.
+    # m5tab5_bsp is the previous (also-unverified) tab5 display driver this
+    # device no longer references — excluded same as every other device.
+    set(EXCLUDE_COMPONENTS cupcake kittenui cardstack pounce lvgldebug nougat m5tab5_bsp)
 else()
     set(EXCLUDE_COMPONENTS nougat m5tab5_bsp)
 endif()
