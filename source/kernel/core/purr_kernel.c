@@ -304,6 +304,7 @@ static const panic_glyph_t PANIC_FONT[] = {
     {'7', {0x7,0x1,0x2,0x2,0x2}},
     {'8', {0x7,0x5,0x7,0x5,0x7}},
     {'9', {0x7,0x5,0x7,0x1,0x7}},
+    {'>', {0x4,0x2,0x1,0x2,0x4}},
     {'A', {0x2,0x5,0x7,0x5,0x5}},
     {'B', {0x6,0x5,0x6,0x5,0x6}},
     {'C', {0x3,0x4,0x4,0x4,0x3}},
@@ -333,7 +334,7 @@ static const panic_glyph_t PANIC_FONT[] = {
 };
 #define PANIC_FONT_COUNT (sizeof(PANIC_FONT) / sizeof(PANIC_FONT[0]))
 
-#define PANIC_SCALE   2
+#define PANIC_SCALE   3
 #define PANIC_CHAR_W  (3 * PANIC_SCALE + PANIC_SCALE)   // glyph + 1-cell gap
 #define PANIC_CHAR_H  (5 * PANIC_SCALE + PANIC_SCALE)   // glyph + 1-line gap
 
@@ -417,10 +418,38 @@ static void panic_dump_logs(const char *entity_name, const char *reason)
     }
 }
 
-void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool recoverable, const char *entity_name)
+// Three visual states share one rendering core (built ONLY on
+// catcall_display_t/catcall_touch_t — no LVGL/MiniWin dependency, since
+// this must still work when the broken thing IS the active UI backend):
+//   PANIC_KIND_FATAL       — red, ":-(", 10s countdown then reboot. P1
+//                            REQUIRED failures (purr_kernel_panic()).
+//   PANIC_KIND_RECOVERABLE — blue, ":-(", parks with touch buttons
+//                            (dump logs / hold-to-reset). A P2/P3 entity
+//                            just hit its strike threshold or hung —
+//                            purr_crash_guard.c's normal path.
+//   PANIC_KIND_UI_DISABLED — red, ">:-(", same parked touch-button shell
+//                            as RECOVERABLE (never auto-reboots — that
+//                            would just loop straight back into the same
+//                            disabled module every ~10s with no way out).
+//                            Fires when the static module loader finds the
+//                            UI module already disabled from a PAST
+//                            session's strikes and skips it outright —
+//                            previously silent (a log line only), leaving
+//                            a totally dead screen with zero user-visible
+//                            feedback. Angrier face than RECOVERABLE on
+//                            purpose: this isn't a fresh strike, it's the
+//                            fully-exhausted state.
+typedef enum { PANIC_KIND_FATAL, PANIC_KIND_RECOVERABLE, PANIC_KIND_UI_DISABLED } panic_kind_t;
+
+static void __attribute__((noreturn)) panic_render(panic_kind_t kind, const char *reason, const char *entity_name)
 {
+    bool fatal = (kind == PANIC_KIND_FATAL);
+    bool red   = (kind != PANIC_KIND_RECOVERABLE);
+
     // Always log to serial first — display may not be up.
-    ESP_LOGE(TAG, "=== KERNEL PANIC%s ===", recoverable ? " (recoverable)" : "");
+    const char *kind_tag = kind == PANIC_KIND_FATAL ? "" :
+                           kind == PANIC_KIND_RECOVERABLE ? " (recoverable)" : " (UI disabled)";
+    ESP_LOGE(TAG, "=== KERNEL PANIC%s ===", kind_tag);
     if (entity_name && entity_name[0]) ESP_LOGE(TAG, "entity: %s", entity_name);
     ESP_LOGE(TAG, "%s", reason ? reason : "(no reason given)");
     ESP_LOGE(TAG, "System halted.");
@@ -433,15 +462,17 @@ void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool rec
         w = info.width  ? info.width  : 320;
         h = info.height ? info.height : 240;
 
-        uint16_t bg = recoverable ? 0x001Fu /* blue */ : 0xD800u /* red */;
+        uint16_t bg = red ? 0xD800u /* red */ : 0x001Fu /* blue */;
         disp->fill_rect(0, 0, w, h, bg);
         disp->fill_rect(0, 0, w, 24, 0xFFFFu);   // white header bar
 
+        const char *header = kind == PANIC_KIND_FATAL       ? "PURR OS - KERNEL PANIC :-(" :
+                             kind == PANIC_KIND_RECOVERABLE ? "SUBSYSTEM DISABLED :-("     :
+                                                               "UI DISABLED >:-(";
+
         int max_cols = (int)((w - 8) / PANIC_CHAR_W);
         int y = 4;
-        y = panic_draw_string(disp, 4, y,
-                               recoverable ? "SUBSYSTEM DISABLED" : "PURR OS - KERNEL PANIC",
-                               0x0000u, max_cols);
+        y = panic_draw_string(disp, 4, y, header, 0x0000u, max_cols);
         y += PANIC_SCALE;
         if (entity_name && entity_name[0]) {
             y = panic_draw_string(disp, 4, y, entity_name, 0xFFFFu, max_cols);
@@ -449,7 +480,7 @@ void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool rec
         y = panic_draw_string(disp, 4, y, reason ? reason : "UNKNOWN REASON", 0xFFFFu, max_cols);
     }
 
-    if (!recoverable) {
+    if (fatal) {
         // Fatal — same shape the historic KITT 0.6.0 panic screen used:
         // hold long enough to actually read, then reboot. purr_kernel_reboot()
         // (below) already exists and is reused, not reimplemented.
@@ -536,6 +567,16 @@ void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool rec
     }
 }
 
+void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool recoverable, const char *entity_name)
+{
+    panic_render(recoverable ? PANIC_KIND_RECOVERABLE : PANIC_KIND_FATAL, reason, entity_name);
+}
+
+void __attribute__((noreturn)) purr_kernel_panic_ui_disabled(const char *entity_name, const char *reason)
+{
+    panic_render(PANIC_KIND_UI_DISABLED, reason, entity_name);
+}
+
 void __attribute__((noreturn)) purr_kernel_panic(const char *reason)
 {
     purr_kernel_panic_ex(reason, /*recoverable=*/false, NULL);
@@ -602,6 +643,16 @@ static int load_one_static(const purr_module_header_t *hdr)
     bool guarded = call_init && hdr->load_priority != PURR_PRIORITY_REQUIRED;
     if (guarded && purr_crash_guard_is_disabled(hdr->name)) {
         ESP_LOGW(TAG, "static module '%s' disabled after repeated failures — skipping", hdr->name);
+        // The UI module specifically gets a red screen, not just a log
+        // line — every other guarded module silently skips (a background
+        // driver/service going quiet isn't user-visible the way losing
+        // the entire UI is), but the UI is the one case where "just
+        // skip it" leaves a totally dead, unexplained screen. Noreturn:
+        // halts the boot right here rather than continuing to load other
+        // P2/P3 modules into a device that will never show anything.
+        if (hdr->module_type == PURR_MOD_UI) {
+            purr_kernel_panic_ui_disabled(hdr->name, "disabled after repeated failures");
+        }
         return -1;
     }
 
@@ -674,8 +725,13 @@ static int cmp_reg_priority(const void *a, const void *b)
     const purr_module_header_t *ha = *(const purr_module_header_t **)a;
     const purr_module_header_t *hb = *(const purr_module_header_t **)b;
     // Primary: load_priority (1=REQUIRED first). Secondary: module_type (DRIVER < SYSTEM < UI < APP).
-    int ka = (int)ha->load_priority * 10 + (int)ha->module_type;
-    int kb = (int)hb->load_priority * 10 + (int)hb->module_type;
+    // An UNSET load_priority (0) must sort LAST, not first — a module that
+    // forgot to declare one used to jump ahead of the P1 display driver
+    // (miniwin, before it declared P2) and fail against missing catcalls.
+    int pa = ha->load_priority ? ha->load_priority : PURR_PRIORITY_OPTIONAL + 1;
+    int pb = hb->load_priority ? hb->load_priority : PURR_PRIORITY_OPTIONAL + 1;
+    int ka = pa * 10 + (int)ha->module_type;
+    int kb = pb * 10 + (int)hb->module_type;
     return ka - kb;
 }
 

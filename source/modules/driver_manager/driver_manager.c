@@ -200,6 +200,9 @@ PURR_MODULE_REGISTER(driver_manager) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_SYSTEM,
+    // Explicit — unset (0) sorted this ahead of P1 drivers (see miniwin's
+    // matching comment for the failure that exposed it).
+    .load_priority     = PURR_PRIORITY_IMPORTANT,
     .name              = "driver_manager",
     .version           = "1.0.0",
     .kernel_min        = "0.11.1",

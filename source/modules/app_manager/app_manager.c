@@ -711,10 +711,12 @@ void app_manager_stop(int idx)
     // (self-completed or force-deleted) is it ever safe to call deinit().
     bool hung = false;
     if (ctx->done) {
+        purr_kernel_ui_breadcrumb("appstop:wait_done");
         if (xSemaphoreTake(ctx->done, pdMS_TO_TICKS(2000)) == pdTRUE) {
             ctx->task = NULL;
         } else if (ctx->task) {
             ESP_LOGW(TAG, "force-deleting task for '%s'", app->name);
+            purr_kernel_ui_breadcrumb("appstop:force_delete");
             // Must match how this task's stack was created (see
             // native_task()'s matching comment) — static-stack apps
             // (settings/fileman) use plain vTaskDelete(); everything else
@@ -731,6 +733,7 @@ void app_manager_stop(int idx)
 
     // Now safe: the task is guaranteed to no longer be running.
     if (ctx->mod && ctx->mod->deinit) {
+        purr_kernel_ui_breadcrumb("appstop:deinit");
         ctx->mod->deinit();
     }
 
@@ -744,6 +747,7 @@ void app_manager_stop(int idx)
     // one place that's guaranteed to run after every app's task has fully
     // stopped, regardless of tier, so it's the right spot for the net.
     if (app->window) {
+        purr_kernel_ui_breadcrumb("appstop:win_destroy");
         purr_win_destroy(app->window);
         app->window = 0;
     }
@@ -753,6 +757,7 @@ void app_manager_stop(int idx)
 
     app->state = APP_STATE_STOPPED;
     ESP_LOGI(TAG, "stopped: %s", app->name);
+    purr_kernel_ui_breadcrumb("appstop:done");
 }
 
 const char *app_manager_get_pending_meow_path(void) { return s_meow_pending_path; }
@@ -764,7 +769,20 @@ const char *app_manager_get_pending_meow_code(size_t *out_len) {
 
 bool app_manager_get_pending_meow_privileged(void) { return s_meow_pending_privileged; }
 
-int app_manager_count(void)             { return s_app_count; }
+int app_manager_count(void)
+{
+    // Boot-order backstop: init()'s scan runs while the pre-linked app modules
+    // are still unregistered (app_manager loads P2, PURR_MOD_APP entries load
+    // after it), so it always finds zero of them. KittenUI's desktop happens
+    // to re-scan when it opens; MiniWin's WinCE start menu only calls this —
+    // leaving its Programs list permanently empty (confirmed live on tab5).
+    // Re-scan on first query instead: by the time any UI asks, the module
+    // table is complete. One-shot on empty only — entries hold live launch
+    // state, so a routine re-scan would clobber a RUNNING app's slot, but an
+    // empty list has nothing to lose.
+    if (s_app_count == 0) app_manager_scan();
+    return s_app_count;
+}
 const app_entry_t *app_manager_get(int idx)
 {
     if (idx < 0 || idx >= s_app_count) return NULL;
@@ -943,6 +961,9 @@ PURR_MODULE_REGISTER(app_manager) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_SYSTEM,
+    // Explicit — unset (0) sorted this ahead of P1 drivers (see miniwin's
+    // matching comment for the failure that exposed it).
+    .load_priority     = PURR_PRIORITY_IMPORTANT,
     .name              = "app_manager",
     .version           = "1.0.1",
     .kernel_min        = "0.11.1",

@@ -337,6 +337,12 @@ PURR_MODULE_REGISTER(miniwin) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
     .module_type       = PURR_MOD_UI,
+    // Explicit: an unset load_priority is 0, which sorted this module BEFORE
+    // the P1 display driver it requires — miniwin_init() then failed every
+    // boot with "no display catcall" and the crash guard eventually disabled
+    // the whole UI (confirmed live on tab5). P2 + type UI orders it after
+    // drivers and system modules.
+    .load_priority     = PURR_PRIORITY_IMPORTANT,
     .name              = "miniwin",
     .version           = "1.0.0",
     .kernel_min        = "0.11.1",

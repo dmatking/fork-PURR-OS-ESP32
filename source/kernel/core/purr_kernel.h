@@ -344,6 +344,19 @@ void __attribute__((noreturn)) purr_kernel_panic(const char *reason);
 // Never returns.
 void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool recoverable, const char *entity_name);
 
+// Red "UI DISABLED >:-(" screen — distinct from both purr_kernel_panic_ex()
+// variants above. Fires when the static module loader finds the UI module
+// ALREADY disabled (purr_crash_guard_is_disabled(), from a past session's
+// strikes) and would otherwise just skip it with a log line — leaving a
+// totally dead screen with zero user-visible feedback, since no other
+// panic path ever fires in that case (nothing crashed THIS boot, the
+// module just never started). Same parked touch-button shell as the
+// recoverable variant (dump logs / hold-to-reset) — never auto-reboots,
+// since that would loop straight back into the same disabled module every
+// ~10s with no way out. entity_name is shown on screen; reason may be
+// NULL. Never returns.
+void __attribute__((noreturn)) purr_kernel_panic_ui_disabled(const char *entity_name, const char *reason);
+
 // Optional hook a specialized kernel boot registers (e.g.
 // kernel_tdeck_plus/kernel_tdp_boot.c, calling usb_msc_share_sd() —
 // source/modules/usb_msc/usb_msc.h) so purr_kernel_panic_ex()'s recoverable
