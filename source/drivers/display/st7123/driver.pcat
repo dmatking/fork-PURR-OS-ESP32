@@ -1,0 +1,27 @@
+# drivers/display/st7123/driver.pcat
+
+name            = "st7123"
+version         = "1.0.0"
+type            = "display"
+catcall_version = 1
+idf_min         = "5.5.0"
+chip            = ["esp32p4"]
+kernel_min      = "0.11.1"
+kernel_max      = ""
+
+module_type     = "PURR_MOD_DRIVER"
+provides        = ["display", "touch"]    # ST7123 handles both in one chip
+
+required_catcalls = [
+    "catcall_display_t.init",
+    "catcall_display_t.push_pixels",
+    "catcall_display_t.fill_rect",
+    "catcall_display_t.set_brightness",
+    "catcall_display_t.deinit",
+    "catcall_touch_t.init",
+    "catcall_touch_t.read_point",
+    "catcall_touch_t.is_pressed",
+    "catcall_touch_t.deinit",
+]
+
+notes = "M5Stack Tab5. MIPI-DSI 2-lane 965Mbps, DPI 70MHz, native 720x1280 portrait presented as 1280x720 landscape via PPA rotation. Touch at I2C 0x55 on the shared system bus (SDA31/SCL32). Vendors lib_st7123 (esp_lcd panel + esp_lcd_touch). esp32p4-only — CMakeLists registers an empty component on other targets."

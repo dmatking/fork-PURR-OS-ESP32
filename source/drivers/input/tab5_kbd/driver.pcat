@@ -1,0 +1,21 @@
+# drivers/input/tab5_kbd/driver.pcat
+
+name            = "tab5_kbd"
+version         = "1.0.0"
+type            = "input"
+catcall_version = 2
+idf_min         = "5.5.0"
+chip            = ["esp32p4"]
+kernel_min      = "0.11.1"
+kernel_max      = ""
+
+module_type     = "PURR_MOD_DRIVER"
+provides        = ["input"]
+
+required_catcalls = [
+    "catcall_input_t.init",
+    "catcall_input_t.poll_event",
+    "catcall_input_t.deinit",
+]
+
+notes = "M5Stack Tab5 attachable keyboard (I2C 0x6D, dedicated bus SDA=GPIO0 SCL=GPIO1). String mode, POLLING only — the GPIO50 INT ISR dies once esp-hosted runs. Protocol from M5Stack's official component (MIT) + Tab5 keyboard I2C protocol PDF. Detachable: absent keyboard is a clean warn-and-continue (IMPORTANT priority)."
