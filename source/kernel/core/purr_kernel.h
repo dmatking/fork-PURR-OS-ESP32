@@ -167,6 +167,22 @@ int      purr_kernel_battery_percent(void);  // -1 = unknown (no PMIC/fuel gauge
 int      purr_kernel_battery_voltage_mv(void);  // -1 = unknown
 bool     purr_kernel_lora_available(void);
 void     purr_kernel_reboot(void);
+
+// Runs fn(arg) on a helper task and waits up to timeout_ms for it to
+// finish; returns false on timeout instead of blocking forever. Built for
+// bring-up calls that touch a shared SPI bus that may still be wedged
+// right after a hang-triggered reboot (see purr_crash_guard.c's pending-
+// recovery marker) — without this, a still-bad bus would just hang the
+// recovery boot itself the same way. On timeout, fn()'s helper task is
+// deliberately left running and its context deliberately leaked — a task
+// truly parked inside a blocking SPI call with no software timeout isn't
+// blocked on any FreeRTOS primitive and can't be safely reclaimed; the
+// alternative (freeing while it might still resume) is worse. Not a
+// general-purpose timeout utility — only use this where "the callee might
+// never return" is a real, known possibility.
+typedef void (*purr_bounded_fn_t)(void *arg);
+bool     purr_kernel_run_bounded(const char *label, purr_bounded_fn_t fn,
+                                  void *arg, uint32_t timeout_ms);
 // True power-down, not a reboot — deep sleep with no wake source
 // configured, so the device stays off (minimal draw) until the physical
 // EN/reset button power-cycles it. No PMIC-level power cut on any current
@@ -343,6 +359,14 @@ void __attribute__((noreturn)) purr_kernel_panic(const char *reason);
 // entity_name is shown on screen and included in the log-dump; may be NULL.
 // Never returns.
 void __attribute__((noreturn)) purr_kernel_panic_ex(const char *reason, bool recoverable, const char *entity_name);
+
+// Writes the same crash-dump text (entity/reason/uptime/free-mem/reset-
+// reason) the panic screen's manual "TAP:DUMP LOGS" button produces, to
+// serial always and to /sdcard/crashlog_<uptime>.txt if SD is available —
+// but callable directly, without a panic screen or a tap. Used by
+// purr_crash_guard_check_reset_reason() to auto-dump once a recovery boot
+// has confirmed SD is actually up again. Returns immediately either way.
+void purr_kernel_panic_dump_logs(const char *entity_name, const char *reason);
 
 // Red "UI DISABLED >:-(" screen — distinct from both purr_kernel_panic_ex()
 // variants above. Fires when the static module loader finds the UI module

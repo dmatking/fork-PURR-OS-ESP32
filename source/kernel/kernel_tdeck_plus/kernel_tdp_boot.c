@@ -344,6 +344,31 @@ static void serial_console_task(void *arg)
     }
 }
 
+// ── Recovery-boot bounded bring-up ───────────────────────────────────────
+//
+// Only used when purr_crash_guard_pending_recovery() says this boot is
+// recovering from a hang-triggered reboot (see purr_crash_guard.c) — a
+// still-wedged SPI2 bus right after that reboot would otherwise just hang
+// SD mount / display init the exact same way, defeating the whole point.
+// On a normal cold boot these are never invoked; mount_sd_vfs()/
+// st7789_drv_init() run exactly as they always have, unwrapped.
+#define TDP_SD_MOUNT_TIMEOUT_MS      6000UL
+#define TDP_DISPLAY_INIT_TIMEOUT_MS  3000UL
+
+static void run_mount_sd_vfs(void *arg)
+{
+    (void)arg;
+    mount_sd_vfs();
+}
+
+typedef struct { int rc; } display_init_ctx_t;
+
+static void run_st7789_drv_init(void *arg)
+{
+    display_init_ctx_t *c = (display_init_ctx_t *)arg;
+    c->rc = st7789_drv_init();
+}
+
 // ── app_main ──────────────────────────────────────────────────────────────────
 
 void app_main(void)
@@ -424,13 +449,29 @@ void app_main(void)
     gpio_set_level((gpio_num_t)TDP_LORA_CS, 1);
     gpio_set_pull_mode((gpio_num_t)TDP_SD_MISO, GPIO_PULLUP_ONLY);
 
+    // NVS is already up (nvs_flash_init() above) — safe to peek here.
+    // Computed once, reused for both SD and display below; Phase 1's own
+    // module loading (purr_kernel_load_static_modules()) does its own,
+    // separate peek for the same reason.
+    bool recovering = purr_crash_guard_pending_recovery(NULL, 0, NULL, 0);
+    if (recovering) {
+        ESP_LOGW(TAG, "recovering from a hang-triggered reboot — bounding SD/display bring-up this boot");
+    }
+
     // SD card slot is on the same BOARD_POWERON peripheral rail as touch/etc.
     // — mounting it before this GPIO went high meant the slot had no power
     // yet, so the mount failed every time regardless of correct wiring.
     // Must still run before st7789_drv_init() below — see mount_sd_vfs()'s
     // comment (SD's own spi_bus_initialize() call must win the shared bus's
     // pin config, in particular a real MISO pin).
-    mount_sd_vfs();
+    if (recovering) {
+        if (!purr_kernel_run_bounded("sd_mount", run_mount_sd_vfs, NULL, TDP_SD_MOUNT_TIMEOUT_MS)) {
+            ESP_LOGE(TAG, "SD mount did not respond within %lu ms post-recovery — continuing without SD",
+                     (unsigned long)TDP_SD_MOUNT_TIMEOUT_MS);
+        }
+    } else {
+        mount_sd_vfs();
+    }
     ensure_sd_dirs();
 
     // Composite USB CDC+MSC — PAUSED. Confirmed live: with
@@ -461,9 +502,77 @@ void app_main(void)
                      -1, TDP_DISPLAY_SCLK, TDP_DISPLAY_RST, TDP_DISPLAY_BL);
     // Default SPI2_HOST (st7789_set_spi_host() available if a future fix
     // needs to move this — see mount_sd_vfs()'s comment).
-    if (st7789_drv_init() != 0) {
+    //
+    // Clock-speed tuning (80/40/20/10MHz, all tried this session) only ever
+    // changed the ODDS of the shared-bus hang, never eliminated it — root
+    // cause is the SPI driver calls on both the display and radio side
+    // having no software timeout (see purr_crash_guard.c's new hang->reboot
+    // path). Deliberately back at the driver's 80MHz default here — this is
+    // now the FASTEST repro condition on purpose, to exercise that recovery
+    // path (hang -> reboot -> staged bring-up -> notify/dump) under test,
+    // not an attempt to avoid the hang.
+    st7789_set_spi_freq(80 * 1000 * 1000);
+    if (recovering) {
+        // On a normal cold boot, display-init failure is fatal (below) —
+        // the rest of the OS assumes a working screen. But on a recovery
+        // boot specifically, if the bus is STILL bad, purr_kernel_panic()
+        // would just reboot again straight back into this same state
+        // (pending-recovery isn't cleared until after Phase 1 — see
+        // below), looping forever. Degrade instead: log and continue with
+        // no display registered — purr_kernel_register_display() (called
+        // from inside st7789_drv_init() only on success) never runs, so
+        // s_display stays NULL, which the rest of the kernel already
+        // tolerates via its existing `if (disp)` guards.
+        // Heap-allocated, NOT a stack local — this is the actual bug that
+        // caused a real, live infinite reboot loop tonight. If
+        // st7789_drv_init() doesn't hang forever but just finishes some
+        // time after the timeout window (plausible right after a bus
+        // reset — slow, not permanently stuck), the zombie helper task
+        // writes into `dctx->rc` AFTER purr_kernel_run_bounded() already
+        // returned false and app_main() moved on. A stack local at that
+        // point is stale memory now holding something else — a silent
+        // stack corruption hitting at a near-identical point on every
+        // boot, which is exactly what was observed. load_one_static()'s
+        // own bounded call (purr_kernel.c) already did this correctly;
+        // this call site didn't — fixed to match.
+        display_init_ctx_t *dctx = (display_init_ctx_t *)calloc(1, sizeof(*dctx));
+        if (!dctx) {
+            ESP_LOGE(TAG, "display init: ctx alloc failed — falling back to unbounded call");
+            if (st7789_drv_init() != 0) {
+                ESP_LOGE(TAG, "display init failed post-recovery (unbounded fallback) — continuing without display");
+            }
+        } else {
+            dctx->rc = -1;
+            bool ok = purr_kernel_run_bounded("display_init", run_st7789_drv_init, dctx, TDP_DISPLAY_INIT_TIMEOUT_MS);
+            if (!ok) {
+                ESP_LOGE(TAG, "display init did not respond within %lu ms post-recovery — continuing without display",
+                         (unsigned long)TDP_DISPLAY_INIT_TIMEOUT_MS);
+                // Deliberately NOT freed — see purr_kernel_run_bounded()'s
+                // doc comment. The zombie task may still write into this
+                // later; freeing it here would just move the same bug
+                // from "stack" to "heap" (a use-after-free instead of a
+                // stack corruption) rather than fixing it.
+            } else {
+                if (dctx->rc != 0) {
+                    ESP_LOGE(TAG, "display init failed post-recovery (rc=%d) — continuing without display", dctx->rc);
+                }
+                free(dctx);
+            }
+        }
+    } else if (st7789_drv_init() != 0) {
         purr_kernel_panic("ST7789 display init failed");
     }
+
+    // Perf mode: bulk-transfer PSRAM buffer for push_pixels — collapses
+    // per-row spi_device_transmit() calls into one per flush (see
+    // st7789.h's doc comment). DISABLED for now — confirmed live this
+    // session to produce visible corruption (black rectangular chunks),
+    // root cause not yet found (driver-level esp_cache_msync() on the DMA
+    // send path looked correct on inspection, so the bug is likely in this
+    // buffer's own bookkeeping, not a cache-coherency issue — needs offline
+    // debugging, not more live iteration on a broken screen). Re-enable
+    // once the corruption is understood and fixed.
+    st7789_set_perf_mode(false);
 
     // Touch — GT911 I2C (creates I2C bus on port 0)
     // GT911 needs ~300ms from BOARD_POWERON before I2C responds.
@@ -526,6 +635,16 @@ void app_main(void)
     extern void purr_register_static_modules(void);
     purr_register_static_modules();
     purr_kernel_load_static_modules();
+
+    // Ends the "recovering" window — every device (SD/display above,
+    // radio/UI/everything else via load_one_static()'s own gating inside
+    // purr_kernel_load_static_modules()) has now had its one bounded
+    // bring-up attempt for this boot. Must run AFTER the call above, not
+    // before — load_one_static() needs the flag still set while Phase 1
+    // is running.
+    if (recovering) {
+        purr_crash_guard_clear_pending_recovery();
+    }
 
     // bt_mgr no longer brings the NimBLE controller/host up here (or
     // anywhere in boot) — confirmed live that doing so unconditionally at

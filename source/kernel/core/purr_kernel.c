@@ -418,6 +418,16 @@ static void panic_dump_logs(const char *entity_name, const char *reason)
     }
 }
 
+// Public wrapper — panic_dump_logs() itself stays static/unchanged (its
+// only other call site is the manual "TAP:DUMP LOGS" panic-screen button
+// below). This lets purr_crash_guard_check_reset_reason() trigger the same
+// dump automatically once a recovery boot has confirmed SD is actually
+// available again, without touching that existing tap-to-dump call site.
+void purr_kernel_panic_dump_logs(const char *entity_name, const char *reason)
+{
+    panic_dump_logs(entity_name, reason);
+}
+
 // Three visual states share one rendering core (built ONLY on
 // catcall_display_t/catcall_touch_t — no LVGL/MiniWin dependency, since
 // this must still work when the broken thing IS the active UI backend):
@@ -612,11 +622,38 @@ void purr_kernel_register_module_static(const purr_module_header_t *hdr)
     }
 }
 
+// Generic bound for any P2/P3 module's init() during a post-hang recovery
+// boot — covers the radio (sx1262_rl) without any radio-specific plumbing
+// here, since it's just "whichever guarded module happens to touch the
+// still-possibly-wedged SPI bus." Starting point, needs real-hardware
+// tuning.
+#define MODULE_INIT_TIMEOUT_MS 5000UL
+
+typedef struct {
+    const purr_module_header_t *hdr;
+    int                          rc;
+} module_init_ctx_t;
+
+static void run_module_init(void *arg)
+{
+    module_init_ctx_t *c = (module_init_ctx_t *)arg;
+    c->rc = c->hdr->init();
+}
+
 // Caller must hold module_registry_lock() — called both from boot
 // (purr_kernel_load_static_modules(), before the mutex could possibly have
 // any contention) and from purr_kernel_enable_static_module() (runtime,
 // where contention is the whole reason the lock exists).
-static int load_one_static(const purr_module_header_t *hdr)
+//
+// recovering: true only when this boot is recovering from a hang-
+// triggered reboot (see purr_crash_guard_pending_recovery()) — gates
+// whether hdr->init() runs bounded (purr_kernel_run_bounded()) or exactly
+// as it always has. purr_kernel_enable_static_module() (the runtime
+// re-enable path) always passes false — this is boot-sequence-only by
+// design. Never applied to P1/REQUIRED modules (guarded below is already
+// false for those) — a required module's init hang is a different,
+// unrelated scenario and stays fully blocking.
+static int load_one_static(const purr_module_header_t *hdr, bool recovering)
 {
     if (s_module_count >= MAX_MODULES) {
         ESP_LOGE(TAG, "module table full, cannot load %s", hdr->name);
@@ -658,7 +695,24 @@ static int load_one_static(const purr_module_header_t *hdr)
 
     if (call_init && hdr->init) {
         if (guarded) purr_crash_guard_mark_start(hdr->name);
-        int rc = hdr->init();
+        int rc;
+        if (recovering && guarded) {
+            module_init_ctx_t *ictx = (module_init_ctx_t *)calloc(1, sizeof(*ictx));
+            if (ictx) {
+                ictx->hdr = hdr;
+                ictx->rc  = -1;
+                bool ok = purr_kernel_run_bounded(hdr->name, run_module_init, ictx, MODULE_INIT_TIMEOUT_MS);
+                rc = ok ? ictx->rc : -1;
+                // Deliberately NOT freed on timeout — see purr_kernel_run_bounded()'s
+                // doc comment; the (possibly still-running) helper task may write
+                // into ictx->rc later, harmlessly, since nothing reads it again.
+                if (ok) free(ictx);
+            } else {
+                rc = hdr->init();   // alloc failed — fall back to unbounded rather than skip
+            }
+        } else {
+            rc = hdr->init();
+        }
         bool declined = (rc == PURR_MODULE_INIT_DECLINED);
         // A decline isn't a crash-loop symptom — see PURR_MODULE_INIT_DECLINED's
         // doc comment. Report it to the guard as "ok" (clears the mark_start()
@@ -715,7 +769,7 @@ int purr_kernel_enable_static_module(const char *name)
         module_registry_unlock();
         return -1;
     }
-    int rc = load_one_static(hdr);
+    int rc = load_one_static(hdr, /*recovering=*/false);
     module_registry_unlock();
     return rc;
 }
@@ -753,6 +807,16 @@ int purr_kernel_load_static_modules(void)
     qsort(s_static_reg, s_static_reg_count,
           sizeof(s_static_reg[0]), cmp_reg_priority);
 
+    // Computed once, not per-module — this boot is either recovering from
+    // a hang or it isn't; re-reading NVS per module would be redundant and
+    // could only ever flip mid-loop if purr_crash_guard_clear_pending_
+    // recovery() were called concurrently, which it isn't (that only
+    // happens after this whole function returns — see kernel_tdp_boot.c).
+    bool recovering = purr_crash_guard_pending_recovery(NULL, 0, NULL, 0);
+    if (recovering) {
+        ESP_LOGW(TAG, "recovering from a hang-triggered reboot — bounding P2/P3 module init this boot");
+    }
+
     int n = s_static_reg_count;
     uint8_t prev_priority = 0;
     for (int i = 0; i < n; i++) {
@@ -765,7 +829,7 @@ int purr_kernel_load_static_modules(void)
         prev_priority = hdr->load_priority;
 
         module_registry_lock();
-        int rc = load_one_static(hdr);
+        int rc = load_one_static(hdr, recovering);
         module_registry_unlock();
         if (rc != 0 && hdr->load_priority == PURR_PRIORITY_REQUIRED) {
             char reason[96];
@@ -1185,6 +1249,100 @@ void purr_kernel_reboot(void) {
     ESP_LOGW(TAG, "kernel reboot requested");
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_restart();
+}
+
+// ── Bounded-timeout execution — see purr_kernel.h's doc comment ────────────
+
+typedef struct {
+    purr_bounded_fn_t fn;
+    void             *arg;
+    SemaphoreHandle_t done;
+} bounded_ctx_t;
+
+static void bounded_trampoline(void *arg)
+{
+    bounded_ctx_t *ctx = (bounded_ctx_t *)arg;
+    ctx->fn(ctx->arg);
+    // Give and get out — do NOT touch ctx again after this. Confirmed
+    // live this session as a real, hit-in-practice race: this task can
+    // run on the OTHER core the instant xTaskCreateWithCaps() returns,
+    // and if fn() finishes fast (the SD-mount case did), this task could
+    // reach xSemaphoreGive()+delete+free BEFORE the waiter in
+    // purr_kernel_run_bounded() ever executes its own xSemaphoreTake()
+    // call — which would then be taking an already-deleted semaphore on
+    // already-freed memory. That use-after-free is what corrupted a
+    // spinlock and crashed with "assert failed: spinlock_acquire
+    // (lock->count == 0)" inside xSemaphoreTake() itself. Cleanup now
+    // belongs entirely to the waiter (below), and only after it has
+    // actually taken the semaphore — never to this task.
+    xSemaphoreGive(ctx->done);
+    vTaskDelete(NULL);
+}
+
+bool purr_kernel_run_bounded(const char *label, purr_bounded_fn_t fn, void *arg, uint32_t timeout_ms)
+{
+    bounded_ctx_t *ctx = (bounded_ctx_t *)calloc(1, sizeof(*ctx));
+    if (ctx) ctx->done = xSemaphoreCreateBinary();
+    if (!ctx || !ctx->done) {
+        // Can't set up the bounded path — fall back to running inline
+        // rather than silently skipping fn() altogether.
+        ESP_LOGW(TAG, "run_bounded: alloc failed for '%s', running inline (unbounded)", label ? label : "?");
+        if (ctx) free(ctx);
+        fn(arg);
+        return true;
+    }
+    ctx->fn  = fn;
+    ctx->arg = arg;
+
+    // Internal RAM stack, not PSRAM — fn() may itself touch NVS (e.g. a
+    // module init() calling purr_crash_guard_mark_start()/mark_stop()),
+    // and a PSRAM-backed stack executing while flash cache is briefly
+    // disabled is a confirmed hard crash on this codebase (see
+    // purr_crash_guard.c's worker_task() doc comment for the same
+    // constraint).
+    //
+    // 8192 bytes, not a smaller guess — confirmed live this session that
+    // 4096 was NOT enough: wrapping st7789_drv_init() (GPIO+SPI init plus
+    // ESP_LOG formatting calls, several stack frames deep) overflowed a
+    // 4096-byte stack, crashing the helper task before it could ever
+    // clear the pending-recovery flag — which meant every subsequent boot
+    // re-entered the same bounded path and crashed again, forever (an
+    // actual infinite reboot loop, only broken by erasing NVS by hand).
+    // fn() here can be ANY P2/P3 module's init() too (load_one_static()
+    // reuses this same helper), not just the display — 8192 matches this
+    // codebase's own convention for tasks that do comparably heavy init
+    // work (cupcake_task, mesh_task both use 8192-byte stacks).
+    // xTaskCreateWithCaps()'s stack parameter is BYTES on ESP-IDF, not
+    // words like vanilla FreeRTOS — worth stating explicitly since that
+    // mismatch is exactly what caused the original bug.
+    TaskHandle_t task = NULL;
+    xTaskCreateWithCaps(bounded_trampoline, "bounded", 8192, ctx, 5, &task, MALLOC_CAP_INTERNAL);
+    if (!task) {
+        ESP_LOGW(TAG, "run_bounded: task create failed for '%s', running inline (unbounded)", label ? label : "?");
+        vSemaphoreDelete(ctx->done);
+        free(ctx);
+        fn(arg);
+        return true;
+    }
+
+    if (xSemaphoreTake(ctx->done, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
+        // Only the waiter tears down, and only here — after the
+        // semaphore is actually taken, so bounded_trampoline is
+        // guaranteed to be past its xSemaphoreGive() call (it never
+        // touches ctx again after that point, see its own comment).
+        vSemaphoreDelete(ctx->done);
+        free(ctx);
+        return true;
+    }
+
+    // Timeout — fn()'s task may be genuinely, permanently stuck (this
+    // session's confirmed failure mode: a blocking SPI call with no
+    // software timeout). Deliberately leak ctx/done rather than free them
+    // here — if the task ever does resume, bounded_trampoline still needs
+    // them. See purr_kernel.h's doc comment.
+    ESP_LOGE(TAG, "run_bounded: '%s' did not complete within %lu ms — leaving it running, continuing",
+             label ? label : "?", (unsigned long)timeout_ms);
+    return false;
 }
 
 void purr_kernel_shutdown(void) {

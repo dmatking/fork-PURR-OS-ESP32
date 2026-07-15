@@ -228,6 +228,17 @@ static void mesh_task(void *arg)
                         // this codebase doesn't track yet (voltage, channel/
                         // air utilization — see mesh_router.h's node-list-
                         // enrichment plan for what's actually consumed).
+                        //
+                        // DISABLED (diagnostic) — suspected in a live UI hang
+                        // (cupcake_task unresponsive, no user interaction
+                        // required to trigger it) reported the same night
+                        // this branch was added. No confirmed mechanism found
+                        // by code review (pb_decode() here is a bounded,
+                        // ~150-200 byte local decode of data already received,
+                        // triggers no new radio/SPI activity) — disabled to
+                        // test by elimination rather than continued reading.
+                        // Re-enable once ruled in/out.
+#if 0
                         if (portnum == (int)meshtastic_PortNum_TELEMETRY_APP) {
                             meshtastic_Telemetry tm = meshtastic_Telemetry_init_zero;
                             pb_istream_t ts = pb_istream_from_buffer(payload, payload_len);
@@ -237,6 +248,7 @@ static void mesh_task(void *arg)
                                 mesh_router_node_set_battery(from, (uint8_t)tm.variant.device_metrics.battery_level);
                             }
                         }
+#endif
 
                         for (int rcb = 0; rcb < MESH_MAX_RX_CB; rcb++) {
                             if (s_rx_cbs[rcb]) s_rx_cbs[rcb](from, to, channel_idx, portnum, payload, payload_len);

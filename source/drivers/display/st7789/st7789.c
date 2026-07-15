@@ -20,6 +20,7 @@
 #include "driver/ledc.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "../../kernel/core/purr_module.h"
@@ -60,6 +61,7 @@
 #define ST7789_SPI_HOST  SPI2_HOST
 static spi_host_device_t s_spi_host = ST7789_SPI_HOST;
 #define ST7789_CLK_HZ    (80 * 1000 * 1000)
+static uint32_t s_spi_freq_hz = ST7789_CLK_HZ;
 
 // LEDC backlight
 #define BL_SPEED_MODE  LEDC_LOW_SPEED_MODE
@@ -131,6 +133,14 @@ static uint16_t            s_row_off  = 0;
 // Row buffer — 320 px × 2 bytes
 static uint16_t s_row_buf[ST7789_WIDTH];
 
+// ── Perf mode: optional PSRAM bulk-transfer buffer ──────────────────────
+// See st7789_set_perf_mode()'s doc comment in st7789.h. NULL unless/until
+// enabled; push_pixels() falls back to the row-by-row s_row_buf path
+// whenever this is NULL or the dirty rect doesn't fit, so every existing
+// device (and any device without PSRAM) is completely unaffected.
+static uint16_t *s_bulk_buf    = NULL;
+static size_t    s_bulk_buf_px = 0;   // capacity, in pixels
+
 // ── Public configure API ──────────────────────────────────────────────────────
 
 void st7789_configure(int cs, int dc, int mosi, int miso, int sclk, int rst, int bl)
@@ -147,6 +157,43 @@ void st7789_configure(int cs, int dc, int mosi, int miso, int sclk, int rst, int
 void st7789_set_spi_host(spi_host_device_t host)
 {
     s_spi_host = host;
+}
+
+void st7789_set_spi_freq(uint32_t freq_hz)
+{
+    s_spi_freq_hz = freq_hz;
+}
+
+void st7789_set_perf_mode(bool enable)
+{
+    if (!enable) {
+        if (s_bulk_buf) {
+            heap_caps_free(s_bulk_buf);
+            s_bulk_buf    = NULL;
+            s_bulk_buf_px = 0;
+            ESP_LOGI(TAG, "perf mode disabled — back to row-by-row push");
+        }
+        return;
+    }
+    if (s_bulk_buf) return;   // already on
+
+    if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) {
+        ESP_LOGW(TAG, "perf mode requested but no PSRAM on this device — staying on row-by-row push");
+        return;
+    }
+
+    size_t px = (size_t)s_width * (size_t)s_height;
+    uint16_t *buf = (uint16_t *)heap_caps_malloc(px * sizeof(uint16_t),
+                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+    if (!buf) {
+        ESP_LOGW(TAG, "perf mode: %u-pixel PSRAM buffer alloc failed — staying on row-by-row push",
+                 (unsigned)px);
+        return;
+    }
+    s_bulk_buf    = buf;
+    s_bulk_buf_px = px;
+    ESP_LOGI(TAG, "perf mode enabled — %u-pixel PSRAM bulk buffer (%u bytes)",
+             (unsigned)px, (unsigned)(px * sizeof(uint16_t)));
 }
 
 // ── Low-level SPI helpers ─────────────────────────────────────────────────────
@@ -366,7 +413,7 @@ static esp_err_t st7789_init(const display_config_t *cfg)
     }
 
     spi_device_interface_config_t dev_cfg = {
-        .clock_speed_hz = ST7789_CLK_HZ,
+        .clock_speed_hz = s_spi_freq_hz,
         .mode           = 0,
         .spics_io_num   = s_pins.cs_pin,
         .queue_size     = 1,
@@ -421,9 +468,29 @@ static esp_err_t st7789_push_pixels(int x, int y, int w, int h, const uint16_t *
     set_addr_window((uint16_t)x, (uint16_t)y,
                     (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
 
+    int cols = (w <= ST7789_WIDTH) ? w : ST7789_WIDTH;
+    size_t px = (size_t)cols * (size_t)h;
+
+    // Bulk path: byte-swap the whole dirty rect into one PSRAM buffer and
+    // send it as a single SPI transaction, instead of one per row. Same
+    // swap math as the fallback below, just writing into a bigger
+    // contiguous buffer. Falls through to the row-by-row path whenever
+    // perf mode is off or the rect is larger than the buffer (shouldn't
+    // happen — the buffer is sized for a full frame — but never assume).
+    if (s_bulk_buf && px <= s_bulk_buf_px) {
+        for (int r = 0; r < h; r++) {
+            const uint16_t *src = data + r * w;
+            uint16_t *dst = s_bulk_buf + (size_t)r * (size_t)cols;
+            for (int i = 0; i < cols; i++) {
+                dst[i] = (uint16_t)((src[i] >> 8) | (src[i] << 8));
+            }
+        }
+        spi_write_data(s_bulk_buf, px * 2);
+        return ESP_OK;
+    }
+
     for (int r = 0; r < h; r++) {
         const uint16_t *src = data + r * w;
-        int cols = (w <= ST7789_WIDTH) ? w : ST7789_WIDTH;
         for (int i = 0; i < cols; i++) {
             s_row_buf[i] = (uint16_t)((src[i] >> 8) | (src[i] << 8));
         }

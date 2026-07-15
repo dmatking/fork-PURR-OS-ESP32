@@ -19,6 +19,7 @@
 // app's normal "build UI and return" lifecycle, and non-looping .meow
 // scripts) never counts, no matter how quickly it completes.
 
+#include <stddef.h>
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -55,6 +56,29 @@ bool purr_crash_guard_is_disabled(const char *entity_name);
 // for an unclean reset and, if the previous boot left a breadcrumb behind,
 // records a strike against whatever was active when the device went down.
 void purr_crash_guard_check_reset_reason(void);
+
+// A genuine hang (mark_hang()) now reboots outright instead of parking on
+// a panic screen that might itself hang trying to draw on a wedged
+// display — see purr_crash_guard.c's record_strike_and_maybe_panic() for
+// why. That reboot is a clean esp_restart(), so check_reset_reason()'s
+// own esp_reset_reason()-based "unclean reset" check won't catch it; this
+// separate marker is how the next boot finds out a recovery is in
+// progress.
+//
+// purr_crash_guard_pending_recovery() — non-destructive peek. Call early
+// in boot (before bringing up SD/display/radio) to decide whether to use
+// bounded-timeout bring-up instead of today's unwrapped calls. name_out/
+// reason_out may be NULL if you only need the bool. Returns false (and
+// leaves outputs untouched) if nothing is pending.
+bool purr_crash_guard_pending_recovery(char *name_out, size_t name_sz,
+                                        char *reason_out, size_t reason_sz);
+
+// Call exactly once, after every device has had its one bounded bring-up
+// attempt for this boot (kernel_tdp_boot.c, right after
+// purr_kernel_load_static_modules() returns) — ends the "recovering"
+// window so a later purr_kernel_enable_static_module() call or a
+// subsequent unrelated boot never sees a stale pending-recovery flag.
+void purr_crash_guard_clear_pending_recovery(void);
 
 #ifdef __cplusplus
 }
