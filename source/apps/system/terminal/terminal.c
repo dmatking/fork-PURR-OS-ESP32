@@ -229,6 +229,12 @@ static void on_send(purr_wid_t wid, purr_event_t event, void *user) {
     }
 }
 
+// Physical-keyboard Enter: MiniWin fires the textarea callback with
+// PURR_EVENT_ACTIVATED instead of inserting a newline — submit, same as Send.
+static void on_input_event(purr_wid_t wid, purr_event_t event, void *user) {
+    if (event == PURR_EVENT_ACTIVATED) on_send(wid, event, user);
+}
+
 // ── App init / deinit ─────────────────────────────────────────────────────────
 
 static int terminal_init(void) {
@@ -240,6 +246,7 @@ static int terminal_init(void) {
     s_in   = purr_win_textarea(s_win, 80, 10);
     s_send = purr_win_button(s_win, "Send", on_send, NULL);
 
+    purr_win_textarea_on_change(s_in, on_input_event, NULL);
     purr_win_textarea_focus(s_in);
     // win_show() must come first — Cupcake's win_show() raises the app
     // window to the front (lv_obj_move_foreground()), so calling it after

@@ -374,7 +374,19 @@ static void win_message_func(const mw_message_t *msg)
                 mw_paint_control(s_wids[idx].mw_ctrl);
             }
         } else if (key == '\r' || key == '\n') {
-            mw_ta_append(focused_ta, "\n");
+            // Enter = submit when the app registered a textarea callback
+            // (PURR_EVENT_ACTIVATED — same meaning as a list's confirm):
+            // Terminal runs the command exactly as its Send button would.
+            // Only textareas with no callback get a literal newline — and
+            // note mw_ta_append("\n") into a one-line-high input box locked
+            // the whole UI solid on tab5 (first device with a physical
+            // keyboard driving MiniWin), so the submit path isn't just
+            // nicer UX, it's the one that's actually known-safe.
+            if (s_wids[idx].cb) {
+                s_wids[idx].cb(focused_ta, PURR_EVENT_ACTIVATED, s_wids[idx].user);
+            } else {
+                mw_ta_append(focused_ta, "\n");
+            }
         } else if (key >= 0x20 && key <= 0x7E) {
             char ch[2] = { (char)key, '\0' };
             mw_ta_append(focused_ta, ch);
@@ -694,10 +706,15 @@ static purr_wid_t mw_ta_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
     s_ta_data[slot].fg_colour = MW_HAL_LCD_BLACK;
     s_ta_data[slot].bg_colour = MW_HAL_LCD_WHITE;
 
-    int16_t disp_w = mw_hal_lcd_get_display_width();
-    int16_t disp_h = mw_hal_lcd_get_display_height();
-    int16_t width  = (int16_t)((disp_w * w_pct) / 100 - 8);
-    int16_t height = (int16_t)((disp_h * h_pct) / 100);
+    // Percent-of-CLIENT-AREA, not percent-of-display: sizing against the
+    // full display over-allocates by the title bar + (WinCE desktop) taskbar
+    // strip, so a stack that sums near 100% (terminal's 75% output + 10%
+    // input + Send button) pushed its last controls past the window's client
+    // rect — invisible below the bottom edge, "hidden under the taskbar" on
+    // tab5 where the tall-screen proportions made it obvious.
+    mw_util_rect_t client = mw_get_window_client_rect(wh);
+    int16_t width  = (int16_t)((client.width  * w_pct) / 100 - 8);
+    int16_t height = (int16_t)((client.height * h_pct) / 100);
     // Was hardcoded to (4, 28), ignoring layout_place() entirely — every
     // other widget type (list/button/label) goes through layout_place() to
     // get a position that accounts for an active row/col layout or the
@@ -793,11 +810,12 @@ static purr_wid_t mw_list_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
     }
     if (slot < 0) return 0;
 
-    int16_t disp_w = mw_hal_lcd_get_display_width();
-    int16_t disp_h = mw_hal_lcd_get_display_height();
-    int16_t width  = (int16_t)((disp_w * w_pct) / 100 - 8);
+    // Percent of the window's client area — see mw_ta_create()'s comment for
+    // why display-based percentages overflow the window.
+    mw_util_rect_t client = mw_get_window_client_rect(wh);
+    int16_t width  = (int16_t)((client.width * w_pct) / 100 - 8);
     if (width < MW_UI_LIST_BOX_MIN_WIDTH) width = MW_UI_LIST_BOX_MIN_WIDTH;
-    int16_t avail_h    = (int16_t)((disp_h * h_pct) / 100);
+    int16_t avail_h    = (int16_t)((client.height * h_pct) / 100);
     int16_t num_lines  = (int16_t)(avail_h / MW_UI_LIST_BOX_ROW_HEIGHT);
     if (num_lines < 1) num_lines = 1;
 
