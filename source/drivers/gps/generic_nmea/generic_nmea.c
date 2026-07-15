@@ -181,6 +181,14 @@ static const catcall_gps_t s_catcall = {
     .deinit          = nmea_deinit,
 };
 
+// purr_module_header_t.deinit is void(*)(void); nmea_deinit returns esp_err_t.
+// GCC 13 let the mismatch through as a warning, GCC 14 (IDF 5.5 toolchain)
+// makes it a hard error — same wrapper shape every other driver already uses.
+static void nmea_drv_deinit(void)
+{
+    nmea_deinit();
+}
+
 PURR_MODULE_REGISTER(generic_nmea) = {
     .magic             = PURR_MODULE_MAGIC,
     .abi_version       = PURR_MODULE_ABI_VERSION,
@@ -192,5 +200,5 @@ PURR_MODULE_REGISTER(generic_nmea) = {
     .provided_catcalls = CATCALL_FLAG_GPS,
     .required_catcalls = 0,
     .init              = nmea_init,
-    .deinit            = nmea_deinit,
+    .deinit            = nmea_drv_deinit,
 };
