@@ -674,8 +674,13 @@ static int cmp_reg_priority(const void *a, const void *b)
     const purr_module_header_t *ha = *(const purr_module_header_t **)a;
     const purr_module_header_t *hb = *(const purr_module_header_t **)b;
     // Primary: load_priority (1=REQUIRED first). Secondary: module_type (DRIVER < SYSTEM < UI < APP).
-    int ka = (int)ha->load_priority * 10 + (int)ha->module_type;
-    int kb = (int)hb->load_priority * 10 + (int)hb->module_type;
+    // An UNSET load_priority (0) must sort LAST, not first — a module that
+    // forgot to declare one used to jump ahead of the P1 display driver
+    // (miniwin, before it declared P2) and fail against missing catcalls.
+    int pa = ha->load_priority ? ha->load_priority : PURR_PRIORITY_OPTIONAL + 1;
+    int pb = hb->load_priority ? hb->load_priority : PURR_PRIORITY_OPTIONAL + 1;
+    int ka = pa * 10 + (int)ha->module_type;
+    int kb = pb * 10 + (int)hb->module_type;
     return ka - kb;
 }
 
