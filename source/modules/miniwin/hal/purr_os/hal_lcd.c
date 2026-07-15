@@ -7,10 +7,14 @@
 #include "../../../../kernel/core/purr_kernel.h"
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 
-// Line buffer for row-at-a-time push_pixels calls.
-// 480px * 2 bytes covers the widest display we ship on.
-static uint16_t s_line_buf[480];
+// Line buffer for row-at-a-time push_pixels calls. Sized from the display's
+// actual width at init (a fixed 480 overflowed on 1280-wide panels — tab5);
+// the bitmap-clip loops below also flush-and-reset if a row ever exceeds it.
+#define LINE_BUF_MIN 480
+static uint16_t *s_line_buf = NULL;
+static int16_t   s_line_cap = 0;
 
 static int16_t s_width  = 240;
 static int16_t s_height = 320;
@@ -40,6 +44,15 @@ void mw_hal_lcd_init(void)
     disp->get_info(&info);
     s_width  = (int16_t)info.width;
     s_height = (int16_t)info.height;
+
+    int16_t cap = (s_width > LINE_BUF_MIN) ? s_width : LINE_BUF_MIN;
+    if (cap > s_line_cap) {
+        uint16_t *buf = realloc(s_line_buf, (size_t)cap * sizeof(uint16_t));
+        if (buf) {
+            s_line_buf = buf;
+            s_line_cap = cap;
+        }
+    }
 }
 
 int16_t mw_hal_lcd_get_display_width(void)  { return s_width;  }
@@ -70,7 +83,7 @@ void mw_hal_lcd_colour_bitmap_clip(int16_t image_start_x, int16_t image_start_y,
                                     const uint8_t *image_data)
 {
     const catcall_display_t *disp = purr_kernel_display();
-    if (!disp) return;
+    if (!disp || !s_line_buf) return;
 
     for (int16_t y = 0; y < (int16_t)bitmap_height; y++) {
         int16_t screen_y = image_start_y + y;
@@ -88,6 +101,11 @@ void mw_hal_lcd_colour_bitmap_clip(int16_t image_start_x, int16_t image_start_y,
                               ((uint32_t)px_src[1] <<  8) |
                                (uint32_t)px_src[0];
 
+            if (row_len == s_line_cap) {
+                disp->push_pixels(row_start, screen_y, row_len, 1, s_line_buf);
+                row_start = screen_x;
+                row_len   = 0;
+            }
             if (row_start < 0) row_start = screen_x;
             s_line_buf[row_len++] = rgb888_to_rgb565(rgb888);
         }
@@ -107,7 +125,7 @@ void mw_hal_lcd_monochrome_bitmap_clip(int16_t image_start_x, int16_t image_star
                                         const uint8_t *image_data)
 {
     const catcall_display_t *disp = purr_kernel_display();
-    if (!disp) return;
+    if (!disp || !s_line_buf) return;
 
     uint16_t fg565 = rgb888_to_rgb565((uint32_t)fg_colour);
     uint16_t bg565 = rgb888_to_rgb565((uint32_t)bg_colour);
@@ -127,6 +145,11 @@ void mw_hal_lcd_monochrome_bitmap_clip(int16_t image_start_x, int16_t image_star
             uint8_t byte = image_data[y * row_bytes + x / 8];
             uint8_t bit  = (byte >> (7 - (x % 8))) & 1u;
 
+            if (row_len == s_line_cap) {
+                disp->push_pixels(row_start, screen_y, row_len, 1, s_line_buf);
+                row_start = screen_x;
+                row_len   = 0;
+            }
             if (row_start < 0) row_start = screen_x;
             s_line_buf[row_len++] = bit ? fg565 : bg565;
         }
