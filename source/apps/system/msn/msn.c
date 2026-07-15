@@ -43,6 +43,18 @@
 #include "msn_backend.h"
 #include <mbedtls/sha256.h>
 
+// Cupcake-only: richer list rows (a real icon glyph per row, matching
+// Meshtastic's own device-ui look) instead of the plain-text-only rendering
+// every other backend gets. cupcake.h is always compiled (every UI backend's
+// component builds for every device — see modulestrap's component-manifest
+// comment), so this include is safe even on non-Cupcake devices; only the
+// actual cupcake_win_list_set_items_icon() *calls* below are guarded, since
+// LV_SYMBOL_* glyphs are meaningless (and their backing font absent) under
+// MiniWin/Pounce.
+#ifdef CONFIG_PURR_UI_BACKEND_CUPCAKE
+#include "cupcake.h"
+#endif
+
 #define MAX_CHATS      16
 #define CHAT_LOG_LEN   1024
 #define MAX_ROOMS      8   // matches MESH_MAX_CHANNELS / MC_MAX_CHANNELS
@@ -82,6 +94,12 @@ static char         s_buddy_id_strs[MAX_CHATS][24];
 static char         s_buddy_labels[MAX_CHATS][80];
 static const char   *s_buddy_label_ptrs[MAX_CHATS];
 static int           s_buddy_count = 0;
+#ifdef CONFIG_PURR_UI_BACKEND_CUPCAKE
+// Cupcake-only per-row icon glyphs — parallel to s_buddy_label_ptrs, only
+// ever populated/read when the active backend is Cupcake (see
+// refresh_buddy_list()).
+static const char   *s_buddy_icon_ptrs[MAX_CHATS];
+#endif
 
 // Per-buddy chat state (parallel arrays, indexed same as s_buddy_id_strs).
 static char        s_chat_logs[MAX_CHATS][CHAT_LOG_LEN];
@@ -94,8 +112,18 @@ static int         s_chat_scroll[MAX_CHATS];   // lines skipped from the top of 
 // ── Rooms (channel group chat) ───────────────────────────────────────────
 
 static char        s_room_names[MAX_ROOMS][12];
+// Separate from s_room_names — that buffer is the raw channel name (reused
+// as-is for window titles/room_path() elsewhere), too small to append a
+// display tag into without truncating real names longer than a few chars.
+static char        s_room_labels[MAX_ROOMS][24];
 static const char  *s_room_label_ptrs[MAX_ROOMS];
 static int          s_room_count = 0;
+#ifdef CONFIG_PURR_UI_BACKEND_CUPCAKE
+// Cupcake-only per-row icon glyphs — parallel to s_room_label_ptrs, only
+// ever populated/read when the active backend is Cupcake (see
+// refresh_room_list()).
+static const char  *s_room_icon_ptrs[MAX_ROOMS];
+#endif
 
 // Heap-allocated from PSRAM (not static arrays) — internal DRAM on this
 // board is already razor-thin (see cupcake_module.c's static-stack-sizing
@@ -173,9 +201,70 @@ static void load_tail_from_sd(const char *path, char *buf, size_t *len, size_t b
     fclose(f);
 }
 
+// ── Node status formatting (portable plain text, MUI-inspired) ────────────
+// catcall_ui_t has no image/icon widget at all (checked — label/button/list/
+// textarea/layout only), and MSN must keep working on non-LVGL backends
+// (MiniWin, Pounce) as well as every LVGL one — so unlike cupcake_ui.c's own
+// status bar (which can reach for LV_SYMBOL_BATTERY_* directly, being
+// backend-internal code), this stays plain ASCII rather than pulling LVGL
+// symbols or real bitmap icons into an app. A 5-step bar meter for signal,
+// "NN%" for battery, "Nh" for hop count — all omitted individually when the
+// backend reports its own "unknown" sentinel (MSN_RSSI_UNKNOWN/HOPS_UNKNOWN/
+// BATTERY_UNKNOWN, msn_backend.h) rather than showing a misleading zero.
+
+// RSSI thresholds are a reasonable LoRa-signal bucketing, not calibrated
+// against a specific measurement — real Meshtastic doesn't publish official
+// dBm-to-bar-count breakpoints for its own UI either.
+static const char *signal_bars(int8_t rssi_dbm) {
+    if (rssi_dbm == MSN_RSSI_UNKNOWN) return "[?]";
+    if (rssi_dbm > -60)  return "[####]";
+    if (rssi_dbm > -80)  return "[###.]";
+    if (rssi_dbm > -95)  return "[##..]";
+    if (rssi_dbm > -110) return "[#...]";
+    return "[....]";
+}
+
+// Appends "  <bars>  NN%  Nh" to buf (skipping battery/hops individually if
+// unknown) — shared by the buddy list and any future per-node detail view.
+static void append_node_status(char *buf, size_t buf_max, const msn_contact_t *info) {
+    size_t len = strlen(buf);
+    int n = snprintf(buf + len, buf_max - len, "  %s", signal_bars(info->rssi_dbm));
+    if (n > 0) len += (size_t)n;
+    if (info->battery_pct != MSN_BATTERY_UNKNOWN) {
+        n = snprintf(buf + len, buf_max - len, "  %d%%", info->battery_pct);
+        if (n > 0) len += (size_t)n;
+    }
+    if (info->hops_away != MSN_HOPS_UNKNOWN) {
+        snprintf(buf + len, buf_max - len, "  %dh", info->hops_away);
+    }
+}
+
+#ifdef CONFIG_PURR_UI_BACKEND_CUPCAKE
+// Per-node icon glyph for Cupcake's richer list rendering — battery level
+// takes priority (thresholds match cupcake_ui.c's own status-bar battery
+// icon selection, for a consistent look), falling back to a generic
+// signal-present glyph when battery is unknown but the node has been heard
+// at all, and no icon otherwise. LV_SYMBOL_* has no bar-graduated wifi
+// glyph, so unlike battery this can't reflect actual signal strength —
+// that's still carried by append_node_status()'s text suffix below.
+static const char *node_icon_symbol(const msn_contact_t *info) {
+    if (info->battery_pct != MSN_BATTERY_UNKNOWN) {
+        int pct = info->battery_pct;
+        if (pct > 80) return LV_SYMBOL_BATTERY_FULL;
+        if (pct > 55) return LV_SYMBOL_BATTERY_3;
+        if (pct > 30) return LV_SYMBOL_BATTERY_2;
+        if (pct > 10) return LV_SYMBOL_BATTERY_1;
+        return LV_SYMBOL_BATTERY_EMPTY;
+    }
+    if (info->rssi_dbm != MSN_RSSI_UNKNOWN) return LV_SYMBOL_WIFI;
+    return NULL;
+}
+#endif
+
 // ── Buddy list ────────────────────────────────────────────────────────────
 
 static void refresh_buddy_list(void) {
+    purr_kernel_ui_breadcrumb("msn:refresh_buddy");
     int n = s_backend->contact_count();
     if (n > MAX_CHATS) n = MAX_CHATS;
     s_buddy_count = n;
@@ -193,25 +282,62 @@ static void refresh_buddy_list(void) {
             snprintf(s_buddy_labels[i], sizeof(s_buddy_labels[i]), "%s (%lum ago)",
                      info.name, (unsigned long)age_min);
         }
+        append_node_status(s_buddy_labels[i], sizeof(s_buddy_labels[i]), &info);
         s_buddy_label_ptrs[i] = s_buddy_labels[i];
+#ifdef CONFIG_PURR_UI_BACKEND_CUPCAKE
+        s_buddy_icon_ptrs[i] = node_icon_symbol(&info);
+#endif
     }
 
-    if (s_buddy_list) purr_win_list_set_items(s_buddy_list, s_buddy_label_ptrs, s_buddy_count);
+    if (s_buddy_list) {
+        purr_kernel_ui_breadcrumb("msn:buddy_list_set_items");
+#ifdef CONFIG_PURR_UI_BACKEND_CUPCAKE
+        cupcake_win_list_set_items_icon(s_buddy_list, s_buddy_label_ptrs, s_buddy_icon_ptrs, s_buddy_count);
+#else
+        purr_win_list_set_items(s_buddy_list, s_buddy_label_ptrs, s_buddy_count);
+#endif
+    }
 }
 
 // ── Room list ─────────────────────────────────────────────────────────────
 
 static void refresh_room_list(void) {
+    purr_kernel_ui_breadcrumb("msn:refresh_room");
     int n = s_backend->channel_count();
     if (n > MAX_ROOMS) n = MAX_ROOMS;
     s_room_count = n;
 
     for (int i = 0; i < n; i++) {
         s_backend->channel_name(i, s_room_names[i], sizeof(s_room_names[i]));
-        s_room_label_ptrs[i] = s_room_names[i];
+        // Index 0 is always the fixed default channel (LongFast for
+        // meshtastic, the analogous primary for meshcore — both backends'
+        // channel_add() only ever appends starting at index 1) — every
+        // channel here is actually PSK-encrypted including the default, so
+        // this isn't an "encrypted or not" claim, just "the public default
+        // every device speaks out of the box" vs. "a private room only
+        // people who know the passphrase can join," which is the real
+        // distinction MUI's lock/key icons communicate.
+        snprintf(s_room_labels[i], sizeof(s_room_labels[i]), "%s %s",
+                 s_room_names[i], i == 0 ? "(default)" : "(private)");
+        s_room_label_ptrs[i] = s_room_labels[i];
+#ifdef CONFIG_PURR_UI_BACKEND_CUPCAKE
+        // No lock/key glyph exists in this LVGL build's symbol set (checked
+        // lv_symbol_def.h) — WIFI for the public default channel (broadcast
+        // metaphor) and EYE_CLOSE for a private/PSK room ("not visible
+        // without the passphrase") is the closest available substitute for
+        // MUI's own lock/key icons.
+        s_room_icon_ptrs[i] = (i == 0) ? LV_SYMBOL_WIFI : LV_SYMBOL_EYE_CLOSE;
+#endif
     }
 
-    if (s_room_list) purr_win_list_set_items(s_room_list, s_room_label_ptrs, s_room_count);
+    if (s_room_list) {
+        purr_kernel_ui_breadcrumb("msn:room_list_set_items");
+#ifdef CONFIG_PURR_UI_BACKEND_CUPCAKE
+        cupcake_win_list_set_items_icon(s_room_list, s_room_label_ptrs, s_room_icon_ptrs, s_room_count);
+#else
+        purr_win_list_set_items(s_room_list, s_room_label_ptrs, s_room_count);
+#endif
+    }
 }
 
 // Always-present status line — this and the Refresh/Add Room row below it
@@ -219,15 +345,35 @@ static void refresh_room_list(void) {
 // *only* widget in the window, so 0 discovered peers meant a fully empty
 // box with nothing to look at or tap.
 static void refresh_status_label(void) {
+    purr_kernel_ui_breadcrumb("msn:refresh_status");
     if (!s_status_lbl) return;
     if (!s_backend->ready()) {
         purr_win_label_set(s_status_lbl, "Mesh: starting...");
     } else if (!s_backend->is_alive()) {
         purr_win_label_set(s_status_lbl, "Mesh: not responding");
     } else {
-        char buf[64];
+        // Best-signal rollup across known nodes — MUI's own header shows a
+        // single signal-strength summary rather than making the user open
+        // the node list to gauge mesh health at a glance; this is the same
+        // idea in one label. MSN_RSSI_UNKNOWN sorts last on purpose (never
+        // wins "best") since a backend that can't report signal at all
+        // (MeshCore, today) shouldn't make every node look terrible.
+        int8_t best_rssi = MSN_RSSI_UNKNOWN;
+        for (int i = 0; i < s_buddy_count; i++) {
+            msn_contact_t info;
+            if (!s_backend->contact_at(i, &info)) continue;
+            if (info.rssi_dbm != MSN_RSSI_UNKNOWN &&
+                (best_rssi == MSN_RSSI_UNKNOWN || info.rssi_dbm > best_rssi)) {
+                best_rssi = info.rssi_dbm;
+            }
+        }
+        char buf[80];
         snprintf(buf, sizeof(buf), "%s: ready (%d node%s)",
                  s_backend->name, s_buddy_count, s_buddy_count == 1 ? "" : "s");
+        if (best_rssi != MSN_RSSI_UNKNOWN) {
+            size_t len = strlen(buf);
+            snprintf(buf + len, sizeof(buf) - len, "  %s", signal_bars(best_rssi));
+        }
         purr_win_label_set(s_status_lbl, buf);
     }
 }
@@ -361,6 +507,7 @@ static void on_chat_send(purr_wid_t w, purr_event_t e, void *user) {
 
 static void open_chat(int idx) {
     if (idx < 0 || idx >= s_buddy_count) return;
+    purr_kernel_ui_breadcrumb("msn:open_chat");
     if (s_chat_win[idx]) {
         purr_win_show(s_chat_win[idx]);
         return;
@@ -374,6 +521,7 @@ static void open_chat(int idx) {
         load_tail_from_sd(path, s_chat_logs[idx], &s_chat_loglen[idx], CHAT_LOG_LEN);
     }
 
+    purr_kernel_ui_breadcrumb("msn:open_chat:win_create");
     s_chat_win[idx] = purr_win_create(s_buddy_labels[idx]);
     s_chat_out[idx] = purr_win_textarea(s_chat_win[idx], 100, 75);
     purr_wid_t row = purr_win_row(s_chat_win[idx], 4);
@@ -382,16 +530,21 @@ static void open_chat(int idx) {
     purr_win_button(s_chat_win[idx], "v", on_chat_scroll_click, (void *)(intptr_t)idx);
     purr_win_layout_end(row);
 
+    purr_kernel_ui_breadcrumb("msn:open_chat:render");
     render_chat_view(idx);
     purr_win_textarea_focus(s_chat_in[idx]);
     // win_show() first — see terminal.c's terminal_init() for why (Cupcake's
     // win_show() raises the window above whatever kb_show() just showed).
+    purr_kernel_ui_breadcrumb("msn:open_chat:show");
     purr_win_show(s_chat_win[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_chat:kb_show");
     purr_win_keyboard_show(s_chat_win[idx], s_chat_in[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_chat:done");
 }
 
 static void on_buddy_list_event(purr_wid_t w, purr_event_t e, void *user) {
     (void)w; (void)user;
+    purr_kernel_ui_breadcrumb("msn:on_buddy_list_event");
     if (e != PURR_EVENT_ACTIVATED) return;
     int idx = purr_win_list_get_selected(s_buddy_list);
     open_chat(idx);
@@ -416,6 +569,7 @@ static void on_room_send(purr_wid_t w, purr_event_t e, void *user) {
 
 static void open_room(int idx) {
     if (idx < 0 || idx >= s_room_count) return;
+    purr_kernel_ui_breadcrumb("msn:open_room");
     if (s_room_win[idx]) {
         purr_win_show(s_room_win[idx]);
         return;
@@ -433,6 +587,7 @@ static void open_room(int idx) {
         load_tail_from_sd(path, s_room_logs[idx], &s_room_loglen[idx], CHAT_LOG_LEN);
     }
 
+    purr_kernel_ui_breadcrumb("msn:open_room:win_create");
     s_room_win[idx] = purr_win_create(s_room_names[idx]);
     s_room_out[idx] = purr_win_textarea(s_room_win[idx], 100, 75);
     purr_wid_t row = purr_win_row(s_room_win[idx], 4);
@@ -441,14 +596,19 @@ static void open_room(int idx) {
     purr_win_button(s_room_win[idx], "v", on_room_scroll_click, (void *)(intptr_t)idx);
     purr_win_layout_end(row);
 
+    purr_kernel_ui_breadcrumb("msn:open_room:render");
     render_room_view(idx);
     purr_win_textarea_focus(s_room_in[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_room:show");
     purr_win_show(s_room_win[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_room:kb_show");
     purr_win_keyboard_show(s_room_win[idx], s_room_in[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_room:done");
 }
 
 static void on_room_list_event(purr_wid_t w, purr_event_t e, void *user) {
     (void)w; (void)user;
+    purr_kernel_ui_breadcrumb("msn:on_room_list_event");
     if (e != PURR_EVENT_ACTIVATED) return;
     int idx = purr_win_list_get_selected(s_room_list);
     open_room(idx);

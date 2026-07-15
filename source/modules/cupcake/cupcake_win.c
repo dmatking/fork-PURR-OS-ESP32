@@ -83,6 +83,18 @@ static void wid_delete_cb(lv_event_t *e) {
     free_wid(wid);
 }
 
+// Breadcrumbed wrapper around the deferred window delete queued by
+// ck_win_destroy() — lv_obj_del_async() itself is vendored LVGL and can't
+// carry a breadcrumb, but it still runs inside the same lv_timer_handler()
+// pass (just outside the originating click callback's stack), so if the
+// actual lv_obj_del() teardown is where a hang lives, this is the only way
+// to tell that apart from "something else in that frame hung instead."
+static void win_del_async_cb(void *obj) {
+    purr_kernel_ui_breadcrumb("win_del_async:begin");
+    lv_obj_del((lv_obj_t *)obj);
+    purr_kernel_ui_breadcrumb("win_del_async:end");
+}
+
 static purr_wid_t alloc_wid(lv_obj_t *obj) {
     for (int i = 0; i < MAX_WIDS; i++) {
         if (!s_wids[i]) {
@@ -190,7 +202,21 @@ static void ck_win_destroy(purr_win_t h) {
         lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
         s_keyboard_owner_win = 0;
     }
-    if (w) lv_obj_del(w);
+    // Deferred, not lv_obj_del(w) directly — this runs synchronously inside
+    // app_manager_stop(), which itself runs from inside an LVGL click event
+    // (the nav bar's Back button, the Running Apps panel's Kill button,
+    // etc. — see cupcake_ui.c's call sites). Deleting a window's whole
+    // object tree mid-dispatch, before lv_timer_handler()'s own redraw/anim
+    // passes for this same frame have run, is exactly what LVGL's own docs
+    // warn against for lv_obj_del() called from an event callback — use
+    // lv_obj_del_async() instead, which defers the actual teardown to the
+    // start of the next lv_timer_handler() tick, outside any event's call
+    // stack. Confirmed live: closing an app (e.g. Terminal) could hang
+    // cupcake_task forever partway through the very next lv_timer_handler()
+    // call after app_manager_stop() itself had already returned and logged
+    // "stopped: <app>" — i.e. the hang was downstream of this synchronous
+    // delete, not inside app_manager_stop() itself.
+    if (w) lv_async_call(win_del_async_cb, w);
     if (h >= 1 && h <= MAX_WINS) {
         s_active_layout[h - 1] = NULL;
         s_close_hooks[h - 1].cb = NULL;
@@ -390,11 +416,31 @@ static void list_btn_event_cb(lv_event_t *e) {
     }
 }
 
+// Diagnostic only — pinpoints whether a hang is inside LVGL's own scroll/
+// gesture processing itself (as opposed to anything this file's other
+// breadcrumbs already cover: window teardown, list rebuild, MSN's refresh
+// path). Confirmed live: a hang reproduced with none of those breadcrumbs
+// set, meaning it never left plain "timer_handler" — this narrows it down
+// further without needing to patch vendored LVGL.
+static void list_scroll_breadcrumb_cb(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_SCROLL_BEGIN)      purr_kernel_ui_breadcrumb("list:scroll_begin");
+    else if (code == LV_EVENT_SCROLL)       purr_kernel_ui_breadcrumb("list:scroll");
+    else if (code == LV_EVENT_SCROLL_END)   purr_kernel_ui_breadcrumb("list:scroll_end");
+    else if (code == LV_EVENT_PRESSED)      purr_kernel_ui_breadcrumb("list:pressed");
+    else if (code == LV_EVENT_RELEASED)     purr_kernel_ui_breadcrumb("list:released");
+}
+
 static purr_wid_t ck_list_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
     lv_obj_t *parent = content_parent(h);
     if (!parent) return 0;
     lv_obj_t *list = lv_list_create(parent);
     lv_obj_set_size(list, LV_PCT(w_pct), LV_PCT(h_pct));
+    lv_obj_add_event_cb(list, list_scroll_breadcrumb_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+    lv_obj_add_event_cb(list, list_scroll_breadcrumb_cb, LV_EVENT_SCROLL, NULL);
+    lv_obj_add_event_cb(list, list_scroll_breadcrumb_cb, LV_EVENT_SCROLL_END, NULL);
+    lv_obj_add_event_cb(list, list_scroll_breadcrumb_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(list, list_scroll_breadcrumb_cb, LV_EVENT_RELEASED, NULL);
     purr_wid_t wid = alloc_wid(list);
     if (wid >= 1 && wid <= MAX_WIDS) {
         s_list_meta[wid - 1].cb = NULL;
@@ -404,21 +450,62 @@ static purr_wid_t ck_list_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
     return wid;
 }
 
-static void ck_list_set_items(purr_wid_t wid, const char **items, int count) {
-    lv_obj_t *list = get_wid(wid);
-    if (!list || wid < 1 || wid > MAX_WIDS) return;
-    lv_obj_clean(list);
-    s_list_meta[wid - 1].selected_idx = -1;
-    for (int i = 0; i < count; i++) {
-        lv_obj_t *btn = lv_list_add_btn(list, NULL, (items && items[i]) ? items[i] : "");
-        cb_ctx_t *ctx = heap_caps_malloc(sizeof(cb_ctx_t), MALLOC_CAP_DEFAULT);
-        if (ctx) {
-            ctx->cb = NULL;
-            ctx->user = NULL;
-            ctx->wid = wid;
-            lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_CLICKED, ctx);
+// Rebuilding a list's rows means lv_obj_clean()-ing every existing row —
+// synchronous, immediate deletion of whatever's there right now. Several
+// callers (e.g. msn.c's buddy_refresh_task()) call purr_win_list_set_items()
+// on a periodic timer from their own background task, not from cupcake_task
+// — if that lands while the user is mid-touch/mid-scroll on the very list
+// being rebuilt, cupcake_task's own indev processing for that same list is
+// running concurrently on another core, serialized only by the ui_lock
+// between individual LVGL calls, not across the whole gesture. Confirmed
+// live: scrolling MSN's buddy list while its background refresh timer fires
+// hung cupcake_task. Deferring the actual rebuild onto cupcake_task's own
+// tick (lv_async_call, same pattern ck_win_destroy() uses) means list
+// mutation always happens from the one task already driving lv_timer_handler()
+// and its indev reads, never interleaved with an in-flight gesture on the
+// same object from a different task.
+typedef struct { purr_wid_t wid; const char **items; const char **icons; int count; } list_set_ctx_t;
+
+static void ck_list_set_items_async_cb(void *user) {
+    list_set_ctx_t *sctx = (list_set_ctx_t *)user;
+    purr_kernel_ui_breadcrumb("list_set_items:begin");
+    lv_obj_t *list = get_wid(sctx->wid);
+    if (list && sctx->wid >= 1 && sctx->wid <= MAX_WIDS) {
+        lv_obj_clean(list);
+        s_list_meta[sctx->wid - 1].selected_idx = -1;
+        for (int i = 0; i < sctx->count; i++) {
+            const char *icon = (sctx->icons && sctx->icons[i]) ? sctx->icons[i] : NULL;
+            lv_obj_t *btn = lv_list_add_btn(list, icon, (sctx->items && sctx->items[i]) ? sctx->items[i] : "");
+            cb_ctx_t *ctx = heap_caps_malloc(sizeof(cb_ctx_t), MALLOC_CAP_DEFAULT);
+            if (ctx) {
+                ctx->cb = NULL;
+                ctx->user = NULL;
+                ctx->wid = sctx->wid;
+                lv_obj_add_event_cb(btn, list_btn_event_cb, LV_EVENT_CLICKED, ctx);
+            }
         }
     }
+    purr_kernel_ui_breadcrumb("list_set_items:end");
+    heap_caps_free(sctx);
+}
+
+static void ck_list_set_items_ex(purr_wid_t wid, const char **items, const char **icons, int count) {
+    if (wid < 1 || wid > MAX_WIDS) return;
+    list_set_ctx_t *sctx = heap_caps_malloc(sizeof(list_set_ctx_t), MALLOC_CAP_DEFAULT);
+    if (!sctx) return;
+    sctx->wid = wid;
+    sctx->items = items;
+    sctx->icons = icons;
+    sctx->count = count;
+    lv_async_call(ck_list_set_items_async_cb, sctx);
+}
+
+static void ck_list_set_items(purr_wid_t wid, const char **items, int count) {
+    ck_list_set_items_ex(wid, items, NULL, count);
+}
+
+void cupcake_win_list_set_items_icon(purr_wid_t wid, const char **items, const char **icons, int count) {
+    ck_list_set_items_ex(wid, items, icons, count);
 }
 
 static void ck_list_clear(purr_wid_t wid) {
