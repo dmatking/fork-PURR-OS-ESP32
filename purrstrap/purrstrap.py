@@ -777,11 +777,19 @@ def _sdkconfig_lines(device, cfg):
         except ValueError:
             die(f"{device}: device.pcat has psram=true but psram_mb is missing or not an integer")
         lines.append("")
-        lines.append("CONFIG_SPIRAM=y")
-        lines.append("CONFIG_SPIRAM_MODE_OCT=y")
-        lines.append("CONFIG_SPIRAM_SPEED_80M=y")
-        lines.append(f"CONFIG_SPIRAM_SIZE={psram_bytes}")
-        lines.append("CONFIG_SPIRAM_USE_MALLOC=y")
+        if cfg.get("device.chip", "") == "esp32p4":
+            # The P4's PSRAM is hex-mode with its own Kconfig symbol set (and
+            # CONFIG_IDF_EXPERIMENTAL_FEATURES for 200 MHz) — the S3-shaped
+            # OCT/80M symbols below don't exist there. Mode/speed live in the
+            # device's hand-written sdkconfig_<device>.overrides instead.
+            lines.append("CONFIG_SPIRAM=y")
+            lines.append("CONFIG_SPIRAM_USE_MALLOC=y")
+        else:
+            lines.append("CONFIG_SPIRAM=y")
+            lines.append("CONFIG_SPIRAM_MODE_OCT=y")
+            lines.append("CONFIG_SPIRAM_SPEED_80M=y")
+            lines.append(f"CONFIG_SPIRAM_SIZE={psram_bytes}")
+            lines.append("CONFIG_SPIRAM_USE_MALLOC=y")
 
     if cfg.get("device.kernel_type", "native") == "arduino":
         # CONFIG_FREERTOS_HZ=1000 is deliberately NOT re-emitted here — it's
@@ -891,7 +899,7 @@ def _build_kernel_spine(device, cfg, out_dir):
         return None
 
     chip = cfg.get("device.chip", "esp32")
-    valid_chips = ("esp32", "esp32s3", "esp32c3", "esp32s2", "esp32h2")
+    valid_chips = ("esp32", "esp32s3", "esp32c3", "esp32s2", "esp32h2", "esp32c6", "esp32p4")
     if chip not in valid_chips:
         chip = "esp32"
 
@@ -1005,6 +1013,15 @@ def _build_kernel_spine(device, cfg, out_dir):
 
     return firmware_out if os.path.isfile(firmware_out) else None
 
+def _bootloader_offset(chip):
+    # Second-stage bootloader offset differs per chip: 0x1000 on the original
+    # ESP32, 0x2000 on the ESP32-P4, 0x0 on every other target shipped so far.
+    if chip == "esp32p4":
+        return "0x2000"
+    if chip in ("esp32s3", "esp32s2", "esp32c3", "esp32c6", "esp32h2"):
+        return "0x0"
+    return "0x1000"
+
 def _merge_flash_image(device, cfg, out_dir, firmware_bin, flash_bin):
     """
     Use esptool merge_bin to combine firmware + SPIFFS into one flashable image.
@@ -1016,7 +1033,7 @@ def _merge_flash_image(device, cfg, out_dir, firmware_bin, flash_bin):
     partitions    = os.path.join(out_dir, "partition-table.bin")
 
     chip = cfg.get("device.chip", "esp32")
-    bl_offset = "0x0" if chip in ("esp32s3", "esp32s2", "esp32c3", "esp32c6", "esp32h2") else "0x1000"
+    bl_offset = _bootloader_offset(chip)
 
     parts = []
     if os.path.isfile(bootloader):   parts += [bl_offset,        bootloader]
@@ -1165,7 +1182,7 @@ def cmd_flash(args):
         cfg_flash, _ = resolve_device(args.device)
         chip     = cfg_flash.get("device.chip", "esp32s3")
         flash_mb = cfg_flash.get("device.flash_mb", "4")
-        bl_offset = "0x0" if chip in ("esp32s3", "esp32s2", "esp32c3", "esp32c6", "esp32h2") else "0x1000"
+        bl_offset = _bootloader_offset(chip)
         info(f"flashing bootloader+partition-table+firmware+SPIFFS (NVS untouched) ...")
         erase_flag = ["--erase-all"] if getattr(args, "erase", False) else []
         cmd = _esptool + [
