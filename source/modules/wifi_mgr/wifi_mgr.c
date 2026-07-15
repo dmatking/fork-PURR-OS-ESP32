@@ -9,6 +9,53 @@
 #include "wifi_mgr.h"
 #include "../../kernel/core/purr_kernel.h"
 #include "../../kernel/core/purr_module.h"
+#include "soc/soc_caps.h"
+#include "sdkconfig.h"
+
+// Chips with no native radio (esp32p4/tab5): esp_wifi's headers exist but its
+// library has no implementations, so any pulled-in esp_wifi_* call is an
+// undefined reference at link time — and the Settings app's WiFi window calls
+// this module's API unconditionally, which is what pulls it in even on devices
+// whose device.pcat never registers wifi_mgr. Compile the whole module down to
+// a not-supported stub there instead. When esp-hosted lands (Phase 2 of the
+// tab5 port), CONFIG_ESP_WIFI_REMOTE_ENABLED flips this back to the real
+// implementation with the C6 co-processor behind the same esp_wifi_* API.
+#if !SOC_WIFI_SUPPORTED && !defined(CONFIG_ESP_WIFI_REMOTE_ENABLED)
+
+#include "esp_log.h"
+
+static const char *TAG = "wifi_mgr";
+
+int  wifi_mgr_init(void) {
+    ESP_LOGW(TAG, "no WiFi on this chip (and no esp_wifi_remote) — stubbed out");
+    return PURR_MODULE_INIT_DECLINED;
+}
+void wifi_mgr_deinit(void) {}
+int  wifi_mgr_scan(void) { return -1; }
+int  wifi_mgr_scan_count(void) { return 0; }
+bool wifi_mgr_scan_at(int idx, wifi_scan_result_t *out) { (void)idx; (void)out; return false; }
+void wifi_mgr_connect(const char *ssid, const char *password) { (void)ssid; (void)password; }
+void wifi_mgr_disconnect(void) {}
+wifi_mgr_status_t wifi_mgr_status(void) { return WIFI_MGR_FAILED; }
+const char *wifi_mgr_ip_str(void) { return ""; }
+
+PURR_MODULE_REGISTER(wifi_mgr) = {
+    .magic             = PURR_MODULE_MAGIC,
+    .abi_version       = PURR_MODULE_ABI_VERSION,
+    .module_type       = PURR_MOD_SYSTEM,
+    .load_priority     = PURR_PRIORITY_IMPORTANT,
+    .name              = "wifi_mgr",
+    .version           = "1.0.0",
+    .kernel_min        = "0.11.1",
+    .kernel_max        = "",
+    .provided_catcalls = 0,
+    .required_catcalls = 0,
+    .init              = wifi_mgr_init,
+    .deinit            = wifi_mgr_deinit,
+};
+
+#else  // ── real implementation ─────────────────────────────────────────────
+
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -188,3 +235,5 @@ PURR_MODULE_REGISTER(wifi_mgr) = {
     .init              = wifi_mgr_init,
     .deinit            = wifi_mgr_deinit,
 };
+
+#endif  // !SOC_WIFI_SUPPORTED && !CONFIG_ESP_WIFI_REMOTE_ENABLED

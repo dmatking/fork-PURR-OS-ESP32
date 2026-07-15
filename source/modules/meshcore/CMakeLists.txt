@@ -15,6 +15,20 @@
 # change to CoreOS/main/CMakeLists.txt needed, this is an ordinary
 # component-to-component REQUIRES.
 
+# esp32p4 (tab5): no LoRa radio and no arduino-esp32 (CoreOS/main's manifest
+# rule excludes it for this target, so the espressif__arduino-esp32 component
+# this REQUIRES below doesn't exist) — register an empty component instead of
+# failing at configure time. tab5's device.pcat never lists meshcore, so
+# nothing references purr_module_meshcore there.
+# (idf_build_get_property, not ${IDF_TARGET} — the plain variable is unset
+# during IDF's early requirements-expansion pass, which is exactly when the
+# unresolvable REQUIRES would fail.)
+idf_build_get_property(purr_idf_target IDF_TARGET)
+if("${purr_idf_target}" STREQUAL "esp32p4")
+    idf_component_register()
+    return()
+endif()
+
 idf_component_register(
     SRCS
         meshcore_module.cpp

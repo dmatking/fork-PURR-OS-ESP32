@@ -4,6 +4,13 @@ dependencies:
     version: ">=8.3.0,<9.0.0"
   espressif/arduino-esp32:
     version: ">=3.0.0"
+    # esp32p4 (tab5): excluded. Native-kernel devices never call into Arduino —
+    # the dependency is only consumed when PURR_KERNEL_TYPE=arduino adds
+    # espressif__arduino-esp32 to REQUIRES — and letting the component solver
+    # try to pick an arduino-esp32 for the P4 target just adds a version-
+    # resolution failure mode (P4 support only exists in very recent releases).
+    rules:
+      - if: "target != esp32p4"
   # espressif/esp_tinyusb — pinned/dormant USB MSC work (source/modules/usb_msc,
   # #if 0'd out at its only call site in kernel_tdp_boot.c) doesn't need this
   # right now, and the dependency was actively breaking every plain-ESP32
