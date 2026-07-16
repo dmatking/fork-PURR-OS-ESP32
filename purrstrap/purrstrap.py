@@ -45,7 +45,7 @@ C_YLW  = "\033[93m"
 C_CYN  = "\033[96m"
 C_WHT  = "\033[97m"
 
-PURROS_VERSION = "1.0.0-dp5"
+PURROS_VERSION = "1.0.0-dp7"
 KITT_VERSION   = "1.0.0"
 
 def info(msg):        print(f"{C_GRN}[purrstrap]{C_RST} {msg}")
@@ -183,6 +183,23 @@ def resolve_device(device_slug):
     cfg = parse_pcat(pcat_path)
     apply_radio_companion_defaults(cfg)
     return cfg, pcat_path
+
+# 2nd-stage bootloader flash offset — chip-specific, dictated by the ROM
+# bootloader (not configurable in ESP-IDF itself). Confirmed against IDF's
+# own default in components/bootloader/Kconfig.projbuild:
+#   default 0x1000 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S2
+#   default 0x2000 if IDF_TARGET_ESP32P4 || IDF_TARGET_ESP32C5
+#   default 0x0    (everything else — esp32s3, esp32c3, esp32c6, esp32h2, ...)
+# Single source of truth for both call sites (_merge_flash_image() and
+# cmd_flash()) — they used to each carry their own copy of this mapping,
+# and esp32s2 was wrong in both (mapped to 0x0 instead of 0x1000), just
+# never exercised since no esp32s2 device.pcat exists in this tree yet.
+def bootloader_offset(chip):
+    if chip in ("esp32", "esp32s2"):
+        return "0x1000"
+    if chip in ("esp32p4", "esp32c5"):
+        return "0x2000"
+    return "0x0"
 
 # ── Radio companion capability defaults ──────────────────────────────────────
 # Every device with WiFi gets ESP-NOW proximity discovery + pairing "for
@@ -741,6 +758,7 @@ UI_BACKEND_MAP = {
     "cupcake":   "CUPCAKE",
     "lvgldebug": "LVGLDEBUG",
     "pounce":    "POUNCE",
+    "nougat":    "NOUGAT",
 }
 
 def _pcat_bool(cfg, key):

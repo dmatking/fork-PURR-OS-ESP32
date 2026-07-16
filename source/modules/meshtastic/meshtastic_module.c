@@ -34,6 +34,7 @@
 #include <pb_decode.h>
 #include "meshtastic/portnums.pb.h"
 #include "meshtastic/mesh.pb.h"
+#include "meshtastic/telemetry.pb.h"
 
 static const char *TAG = "meshtastic";
 
@@ -174,7 +175,7 @@ static void mesh_task(void *arg)
                 if (decoded) {
                     if (!mesh_router_dedup_seen(from, pkt_id)) {
                         mesh_router_dedup_add(from, pkt_id);
-                        mesh_router_node_touch(from, (int8_t)rssi, channel_idx);
+                        mesh_router_node_touch(from, (int8_t)rssi, channel_idx, hop_limit);
 
                         ESP_LOGI(TAG, "rx from=%08lX to=%08lX ch=%d port=%d len=%u rssi=%d snr=%.1f",
                                  (unsigned long)from, (unsigned long)to, channel_idx,
@@ -221,6 +222,33 @@ static void mesh_task(void *arg)
                                 }
                             }
                         }
+
+                        // TELEMETRY_APP carries DeviceMetrics.battery_level
+                        // (0-100, >100 means "powered") among other metrics
+                        // this codebase doesn't track yet (voltage, channel/
+                        // air utilization — see mesh_router.h's node-list-
+                        // enrichment plan for what's actually consumed).
+                        //
+                        // DISABLED (diagnostic) — suspected in a live UI hang
+                        // (cupcake_task unresponsive, no user interaction
+                        // required to trigger it) reported the same night
+                        // this branch was added. No confirmed mechanism found
+                        // by code review (pb_decode() here is a bounded,
+                        // ~150-200 byte local decode of data already received,
+                        // triggers no new radio/SPI activity) — disabled to
+                        // test by elimination rather than continued reading.
+                        // Re-enable once ruled in/out.
+#if 0
+                        if (portnum == (int)meshtastic_PortNum_TELEMETRY_APP) {
+                            meshtastic_Telemetry tm = meshtastic_Telemetry_init_zero;
+                            pb_istream_t ts = pb_istream_from_buffer(payload, payload_len);
+                            if (pb_decode(&ts, meshtastic_Telemetry_fields, &tm) &&
+                                tm.which_variant == meshtastic_Telemetry_device_metrics_tag &&
+                                tm.variant.device_metrics.has_battery_level) {
+                                mesh_router_node_set_battery(from, (uint8_t)tm.variant.device_metrics.battery_level);
+                            }
+                        }
+#endif
 
                         for (int rcb = 0; rcb < MESH_MAX_RX_CB; rcb++) {
                             if (s_rx_cbs[rcb]) s_rx_cbs[rcb](from, to, channel_idx, portnum, payload, payload_len);
@@ -382,6 +410,14 @@ int mesh_manager_node_at(int idx, mesh_node_info_t *out)
     out->rssi        = n->rssi;
     out->last_ms     = n->last_ms;
     out->channel_idx = n->channel_idx;
+    out->battery_pct = n->battery_pct;
+    // Approximation, not a real wire field — see mesh_node_t.hop_limit_at_
+    // last_heard's doc comment. 0 (never heard, hop_limit_at_last_heard
+    // still its zero-init default) reads as "0 hops away", indistinguishable
+    // from a genuine direct neighbor — acceptable since both cases show the
+    // same "no relay involved" meaning to the user.
+    out->hops_away = (n->hop_limit_at_last_heard <= MESH_HOP_LIMIT)
+                          ? (int)(MESH_HOP_LIMIT - n->hop_limit_at_last_heard) : 0;
     if (n->long_name[0]) {
         strncpy(out->long_name, n->long_name, sizeof(out->long_name) - 1);
         out->long_name[sizeof(out->long_name) - 1] = '\0';

@@ -16,6 +16,7 @@ static const char *TAG = "crash_guard";
 
 #define NVS_NS            "purr_crash"
 #define NVS_KEY_BREADCRUMB "cur"
+#define NVS_KEY_PENDING_RECOVERY "rec"
 #define STRIKE_THRESHOLD  5
 
 // Entity names come from purr_module_header_t.name (char[32]) or
@@ -82,6 +83,63 @@ static void clear_breadcrumb(void)
     nvs_close(h);
 }
 
+// ── Pending-recovery marker ──────────────────────────────────────────────
+//
+// A genuine hang (force_panic path below) reboots via purr_kernel_reboot()
+// (esp_restart()), which produces a *clean* ESP_RST_SW reset reason next
+// boot — NOT one of the "unclean" reasons purr_crash_guard_check_reset_
+// reason() already looks for. Without this separate marker, the very
+// reboot this guard triggers would look like an ordinary clean boot and
+// the reason would never surface. Same NVS namespace/blob pattern as
+// entry_t above, just a fixed key instead of a per-entity hash — there's
+// only ever one pending recovery at a time (this boot's, if any).
+typedef struct {
+    char name[32];
+    char reason[64];
+} pending_recovery_t;
+
+static void save_pending_recovery(const char *entity_name, const char *reason)
+{
+    pending_recovery_t p = {0};
+    strncpy(p.name, entity_name ? entity_name : "", sizeof(p.name) - 1);
+    strncpy(p.reason, reason ? reason : "", sizeof(p.reason) - 1);
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_blob(h, NVS_KEY_PENDING_RECOVERY, &p, sizeof(p));
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+bool purr_crash_guard_pending_recovery(char *name_out, size_t name_sz,
+                                        char *reason_out, size_t reason_sz)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return false;
+    pending_recovery_t p = {0};
+    size_t sz = sizeof(p);
+    esp_err_t err = nvs_get_blob(h, NVS_KEY_PENDING_RECOVERY, &p, &sz);
+    nvs_close(h);
+    if (err != ESP_OK || sz != sizeof(p) || p.name[0] == '\0') return false;
+    if (name_out && name_sz) {
+        strncpy(name_out, p.name, name_sz - 1);
+        name_out[name_sz - 1] = '\0';
+    }
+    if (reason_out && reason_sz) {
+        strncpy(reason_out, p.reason, reason_sz - 1);
+        reason_out[reason_sz - 1] = '\0';
+    }
+    return true;
+}
+
+void purr_crash_guard_clear_pending_recovery(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_key(h, NVS_KEY_PENDING_RECOVERY);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 // Increments entity_name's strike count, persists it, and — once the
 // threshold is hit (or force_panic is set, for the hang case) — shows the
 // blue panic screen. purr_kernel_panic_ex() is noreturn when it actually
@@ -104,7 +162,37 @@ static void record_strike_and_maybe_panic(const char *entity_name, const char *r
     ESP_LOGW(TAG, "strike %u/%d for '%s': %s", e.count, STRIKE_THRESHOLD,
              entity_name, reason ? reason : "");
 
-    if (force_panic || e.count >= STRIKE_THRESHOLD) {
+    if (force_panic) {
+        // A genuine hang — the task that would need to render a panic
+        // screen may itself be the thing wedged on the same shared SPI
+        // bus the display uses (confirmed live: display/radio/SD all sit
+        // on tdeck_plus's SPI2_HOST). purr_kernel_panic_ex() below would
+        // call into the display driver to draw the blue screen — if THAT
+        // call also hangs, the device is left fully dead with zero
+        // user-visible feedback and no way back short of a manual power
+        // cycle, which is the actual bug being fixed here. So: never
+        // attempt to render for the hang case. Persist the reason (NVS
+        // only, no SPI/display touch — safe even mid-wedge) and reboot
+        // outright; purr_kernel_reboot() -> esp_restart() performs a full
+        // digital-core reset, which resets the wedged SPI2 peripheral's
+        // hardware state in lockstep with clearing all software/driver
+        // bookkeeping — the only combination that reliably un-sticks a
+        // task parked inside a blocking SPI call with no software
+        // timeout. The next boot's kernel_tdp_boot.c reads this back via
+        // purr_crash_guard_pending_recovery() to stage bring-up and
+        // surface the reason once it's actually safe to touch the bus
+        // again.
+        char panic_reason[128];
+        snprintf(panic_reason, sizeof(panic_reason), "%.32s: %.64s (strike %u/%d)",
+                 entity_name, reason ? reason : "unknown", e.count, STRIKE_THRESHOLD);
+        save_pending_recovery(entity_name, panic_reason);
+        purr_kernel_reboot();
+        // noreturn in practice — purr_kernel_reboot() delays 100ms then
+        // calls esp_restart().
+        return;
+    }
+
+    if (e.count >= STRIKE_THRESHOLD) {
         char panic_reason[128];
         snprintf(panic_reason, sizeof(panic_reason), "%.32s: %.64s (strike %u/%d)",
                  entity_name, reason ? reason : "unknown", e.count, STRIKE_THRESHOLD);
@@ -213,6 +301,25 @@ bool purr_crash_guard_is_disabled(const char *entity_name)
 
 void purr_crash_guard_check_reset_reason(void)
 {
+    // Surface the reason for a hang-triggered reboot (see
+    // record_strike_and_maybe_panic()'s force_panic branch) — independent
+    // of the esp_reset_reason() check below, since that reboot is a clean
+    // esp_restart() and would otherwise never be attributed to anything.
+    // By the time kernel_tdp_boot.c calls this (after SD mount + display
+    // init in Phase 0), both have already had their bounded bring-up
+    // attempt for this boot, so it's safe to touch SD/notify here even if
+    // the underlying bus is still bad — purr_kernel_notify() is RAM-only,
+    // and purr_kernel_panic_dump_logs() is internally gated on
+    // purr_kernel_sd_available(), which correctly reflects this boot's
+    // real (possibly degraded) SD state.
+    char pend_name[32], pend_reason[64];
+    if (purr_crash_guard_pending_recovery(pend_name, sizeof(pend_name),
+                                           pend_reason, sizeof(pend_reason))) {
+        ESP_LOGW(TAG, "recovered from hang: '%s': %s", pend_name, pend_reason);
+        purr_kernel_notify("Recovered from crash", pend_reason, pend_name);
+        purr_kernel_panic_dump_logs(pend_name, pend_reason);
+    }
+
     esp_reset_reason_t r = esp_reset_reason();
     bool unclean = (r == ESP_RST_PANIC || r == ESP_RST_INT_WDT ||
                     r == ESP_RST_TASK_WDT || r == ESP_RST_WDT ||

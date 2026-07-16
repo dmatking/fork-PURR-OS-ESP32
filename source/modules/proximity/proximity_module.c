@@ -97,6 +97,21 @@ static int                 s_device_count = 0;
 
 static frame_handler_slot_t s_handlers[MAX_FRAME_HANDLERS];
 
+// ── ESP-NOW send-status callback ────────────────────────────────────────
+// esp_now_send() returning ESP_OK only means "handed to the radio driver"
+// — this is the only way to find out whether a peer actually 802.11-ACKed
+// it. Diagnostic-only for now (just logs); a failure here on a unicast
+// frame very likely means a channel mismatch — ESP-NOW is channel-bound,
+// and peer.channel = 0 ("ride whatever channel STA is currently on," see
+// proximity_add_peer()) drifts if this device's WiFi is actively scanning/
+// reconnecting to an AP the other peer isn't also on.
+static void on_espnow_send(const uint8_t *mac, esp_now_send_status_t status) {
+    if (status != ESP_NOW_SEND_SUCCESS && mac) {
+        ESP_LOGW(TAG, "send to %02X:%02X:%02X:%02X:%02X:%02X FAILED (no ACK — likely channel mismatch)",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }
+}
+
 // ── ESP-NOW recv callback ───────────────────────────────────────────────
 // Runs in WiFi-driver task context (confirmed via ESP-IDF's own docs) —
 // minimal work only: copy raw bytes into a queue item, no validation, no
@@ -384,6 +399,7 @@ int proximity_init(void) {
     }
 
     esp_now_register_recv_cb(on_espnow_recv);
+    esp_now_register_send_cb(on_espnow_send);
 
     s_rx_queue = xQueueCreate(8, sizeof(rx_queue_item_t));
     if (!s_rx_queue) {
@@ -446,6 +462,7 @@ void proximity_deinit(void) {
         s_task = NULL;
     }
     esp_now_unregister_recv_cb();
+    esp_now_unregister_send_cb();
     esp_now_deinit();
     if (s_rx_queue) {
         vQueueDelete(s_rx_queue);

@@ -79,6 +79,16 @@ menu "PURR OS"
                 root for the full design. EXPERIMENTAL — landing opt-in via
                 the tdeck_plus_pounce device, not the default tdeck_plus.
 
+        config PURR_UI_BACKEND_NOUGAT
+            bool "Nougat (LVGL 9, Android 7.1.2-style chrome)"
+            help
+                Cupcake's nav bar/status bar/recents/home screen ported 1:1
+                in spirit onto LVGL v9 — the only UI backend built against
+                v9 rather than v8 (every other backend above stays on v8;
+                see CoreOS/CMakeLists.txt's EXCLUDE_COMPONENTS and
+                idf_component.yml's per-target lvgl/lvgl version resolution).
+                First and only device: M5Stack Tab5 (ESP32-P4).
+
     endchoice
 
     config PURR_UI_WINCE_SHELL

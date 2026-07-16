@@ -711,10 +711,12 @@ void app_manager_stop(int idx)
     // (self-completed or force-deleted) is it ever safe to call deinit().
     bool hung = false;
     if (ctx->done) {
+        purr_kernel_ui_breadcrumb("appstop:wait_done");
         if (xSemaphoreTake(ctx->done, pdMS_TO_TICKS(2000)) == pdTRUE) {
             ctx->task = NULL;
         } else if (ctx->task) {
             ESP_LOGW(TAG, "force-deleting task for '%s'", app->name);
+            purr_kernel_ui_breadcrumb("appstop:force_delete");
             // Must match how this task's stack was created (see
             // native_task()'s matching comment) — static-stack apps
             // (settings/fileman) use plain vTaskDelete(); everything else
@@ -731,6 +733,7 @@ void app_manager_stop(int idx)
 
     // Now safe: the task is guaranteed to no longer be running.
     if (ctx->mod && ctx->mod->deinit) {
+        purr_kernel_ui_breadcrumb("appstop:deinit");
         ctx->mod->deinit();
     }
 
@@ -744,6 +747,7 @@ void app_manager_stop(int idx)
     // one place that's guaranteed to run after every app's task has fully
     // stopped, regardless of tier, so it's the right spot for the net.
     if (app->window) {
+        purr_kernel_ui_breadcrumb("appstop:win_destroy");
         purr_win_destroy(app->window);
         app->window = 0;
     }
@@ -753,6 +757,7 @@ void app_manager_stop(int idx)
 
     app->state = APP_STATE_STOPPED;
     ESP_LOGI(TAG, "stopped: %s", app->name);
+    purr_kernel_ui_breadcrumb("appstop:done");
 }
 
 const char *app_manager_get_pending_meow_path(void) { return s_meow_pending_path; }

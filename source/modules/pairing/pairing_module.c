@@ -18,6 +18,7 @@
 #include "../../kernel/core/purr_module.h"
 #include "esp_random.h"
 #include "esp_log.h"
+#include "esp_wifi.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -97,18 +98,38 @@ static void send_msg(const uint8_t *mac, pairing_msg_type_t type, const char *na
     if (name) {
         strncpy(msg.name, name, sizeof(msg.name) - 1);
     }
-    proximity_send_unicast(mac, PROXIMITY_FRAME_PAIRING, (const uint8_t *)&msg, sizeof(msg));
+    // Diagnostic: current WiFi channel at send time — compare against the
+    // peer's own logged channel to confirm/rule out a channel mismatch
+    // (see on_espnow_send()'s comment in proximity_module.c).
+    uint8_t chan = 0; wifi_second_chan_t second;
+    esp_wifi_get_channel(&chan, &second);
+    ESP_LOGI(TAG, "sending msg_type=%d to %02X:%02X:%02X:%02X:%02X:%02X on channel %d",
+             (int)type, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (int)chan);
+    bool ok = proximity_send_unicast(mac, PROXIMITY_FRAME_PAIRING, (const uint8_t *)&msg, sizeof(msg));
+    if (!ok) {
+        ESP_LOGW(TAG, "proximity_send_unicast() returned false for msg_type=%d", (int)type);
+    }
 }
 
 static void pairing_on_frame(const uint8_t *mac, int8_t rssi, const uint8_t *payload, size_t len) {
     (void)rssi;
-    if (len != sizeof(pairing_wire_msg_t)) return;
+    if (len != sizeof(pairing_wire_msg_t)) {
+        ESP_LOGW(TAG, "pairing frame from %02X:%02X:%02X:%02X:%02X:%02X wrong size (%u, expected %u)",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                 (unsigned)len, (unsigned)sizeof(pairing_wire_msg_t));
+        return;
+    }
 
     pairing_wire_msg_t msg;
     memcpy(&msg, payload, sizeof(msg));
     char name[sizeof(msg.name) + 1];
     memcpy(name, msg.name, sizeof(msg.name));
     name[sizeof(msg.name)] = 0;
+
+    uint8_t chan = 0; wifi_second_chan_t second;
+    esp_wifi_get_channel(&chan, &second);
+    ESP_LOGI(TAG, "recv msg_type=%d from %02X:%02X:%02X:%02X:%02X:%02X (\"%s\") on channel %d, our state=%d",
+             (int)msg.msg_type, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], name, (int)chan, (int)s_state);
 
     switch ((pairing_msg_type_t)msg.msg_type) {
     case PAIRING_MSG_REQUEST:
@@ -281,6 +302,20 @@ int pairing_init(void) {
     // consistent with "only pairing_task() touches NVS" — plain
     // xTaskCreatePinnedToCore (not WithCaps), core 1 alongside the mesh/
     // radio-companion tasks it's conceptually part of (see mc_persist_task).
+    //
+    // Tried un-pinning this (leaving it tskNO_AFFINITY) on the theory that
+    // it was adding to core 1 contention against cupcake's UI task — live
+    // hardware testing showed the opposite: the "UI TASK UNRESPONSIVE"
+    // crash-guard hang tripped FASTER unpinned (~33s) than pinned (~89s).
+    // An unpinned task can still land on core 1 (and migrate there
+    // unpredictably), so pinning it deterministically seems to help, not
+    // hurt. The underlying stall is still unexplained — see the "Remote
+    // radio companion" plan notes / meshtastic's own mesh_task pinning
+    // comment; leading suspect is CPU monopolization somewhere in the
+    // sx1262_rl/RadioLib radio-polling path (a documented precedent exists
+    // in sx1262.c's wait_busy() for the old hand-rolled driver — same
+    // "UI TASK UNRESPONSIVE" signature, fixed there already; sx1262_rl's
+    // RadioLib-vendored busy-wait hasn't been audited the same way yet).
     BaseType_t ok = xTaskCreatePinnedToCore(pairing_task, "pairing", 3072, NULL, 2, &s_task, 1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "failed to create pairing task — persistence disabled");

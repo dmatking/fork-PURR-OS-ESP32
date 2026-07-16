@@ -53,6 +53,20 @@ else()
     set(DRIVER_REQUIRES st7789 gt911 trackball bbq20)
 endif()
 
+# Tab5 (ESP32-P4) baked-in Layer 0 driver — matches T-Deck Plus's own
+# pattern above (specialized kernel #includes the driver header + calls
+# its init directly, bypassing the module loader), but kept its own
+# PURR_DEVICE-keyed branch rather than folded into DRIVER_REQUIRES: unlike
+# st7789/gt911/trackball/bbq20 (harmlessly unreferenced-but-linkable on
+# every other native-kernel device), m5tab5_bsp.c #includes
+# esp_lcd_mipi_dsi.h (MIPI-DSI/DPI panel APIs), which are only meaningful
+# on a target with DSI PHY hardware. Requiring it unconditionally risks
+# failing to compile on every other device.
+set(TAB5_REQUIRES "")
+if(PURR_DEVICE STREQUAL "tab5")
+    set(TAB5_REQUIRES m5tab5_bsp)
+endif()
+
 # USB MSC (composite CDC+MSC, share the SD card over USB on panic) — pinned/
 # dormant (source/modules/usb_msc/DISABLED.md), module.pcat renamed so
 # modulestrap no longer discovers it, so the component doesn't exist in the
@@ -87,5 +101,6 @@ idf_component_register(
         ${DRIVER_REQUIRES}
         ${EXTRA_REQUIRES}
         ${USB_MSC_REQUIRES}
+        ${TAB5_REQUIRES}
         miniwin
 )

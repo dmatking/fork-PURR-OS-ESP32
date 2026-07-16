@@ -343,7 +343,53 @@ void EspHal::noTone(uint32_t pin) {
   tonePrevFreq = -1;
 }
 
-void EspHal::yield() { taskYIELD(); }
+// EspHal::yield() is called from every RadioLib busy-wait loop this
+// project's radio drivers hit — Module::SPIcommand()'s per-transaction
+// BUSY-pin wait (runs on every single SPI command to the radio),
+// SX126x::receive()'s IRQ poll, scanChannel()'s CAD poll, etc. RadioLib's
+// own Hal::yield() doc comment says it exists "to prevent blocking other
+// threads," but a plain taskYIELD() does NOT do that under FreeRTOS's
+// priority scheduler: it only switches to a READY task of EQUAL priority,
+// so a higher-priority caller (meshtastic's mesh_task, priority 4, pinned
+// to core 1 alongside cupcake's UI task) spinning on yield() while waiting
+// on the radio's BUSY pin starves every lower-priority task on that core —
+// including the UI — for the entire wait. Live-confirmed on hardware: this
+// tripped cupcake's "UI TASK UNRESPONSIVE" crash-guard hang-watchdog
+// repeatedly during active pairing/mesh traffic. Same failure class
+// already fixed once in sx1262.c's own wait_busy() (short spin, then a
+// real vTaskDelay(1) yield for the remainder) — applied here at the
+// yield() level instead, since every RadioLib busy-wait loop funnels
+// through this one function and none of the call sites can be edited
+// without diverging from the vendored source.
+//
+// A hybrid, not a flat vTaskDelay(1): BUSY normally clears within
+// microseconds (per sx1262.c's own comment), and every wait loop calls
+// yield() on every iteration including the fast/common case — switching
+// unconditionally to a 1-tick vTaskDelay (10ms at this project's default
+// CONFIG_FREERTOS_HZ=100) would add tens of milliseconds to every single
+// SPI command, a real throughput regression. So: keep spinning via
+// taskYIELD() for a short window per distinct wait (YIELD_SPIN_US), then
+// fall back to a real vTaskDelay(1) for the remainder — cedes the CPU for
+// genuinely long waits without taxing the common microsecond-scale case.
+// A gap since the previous call (longer than the spin window) is treated
+// as a new, unrelated wait starting fresh, not a continuation.
+#define YIELD_SPIN_US 300
+static int64_t s_yield_first_call_us = 0;
+static int64_t s_yield_last_call_us = 0;
+
+void EspHal::yield() {
+  int64_t now = esp_timer_get_time();
+  if (s_yield_last_call_us == 0 || (now - s_yield_last_call_us) > YIELD_SPIN_US) {
+    s_yield_first_call_us = now;
+  }
+  s_yield_last_call_us = now;
+
+  if (now - s_yield_first_call_us < YIELD_SPIN_US) {
+    taskYIELD();
+  } else {
+    vTaskDelay(1);
+  }
+}
 
 void EspHal::pullUpDown(uint32_t pin, bool enable, bool up) {
   if (pin == RADIOLIB_NC) {

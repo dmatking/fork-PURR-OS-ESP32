@@ -1,0 +1,27 @@
+# drivers/display/m5tab5_bsp/driver.pcat
+
+name            = "m5tab5_bsp"
+version         = "0.1.0"
+type            = "display"
+catcall_version = 1
+idf_min         = "5.3.0"
+chip            = ["esp32p4"]
+kernel_min      = "0.11.1"
+
+module_type     = "PURR_MOD_DRIVER"
+provides        = ["display", "touch"]
+
+required_catcalls = [
+    "catcall_display_t.init",
+    "catcall_display_t.push_pixels",
+    "catcall_display_t.fill_rect",
+    "catcall_display_t.set_brightness",
+    "catcall_display_t.get_info",
+    "catcall_display_t.deinit",
+    "catcall_touch_t.init",
+    "catcall_touch_t.read_point",
+    "catcall_touch_t.is_pressed",
+    "catcall_touch_t.deinit",
+]
+
+notes = "M5Stack Tab5 (ESP32-P4) MIPI-DSI display + touch, native driver (no espp dependency — direct esp_lcd/i2c_master calls). Auto-detects ILI9881C (original) vs ST7123 (newer) hardware revision at boot. DCS init tables and MIPI-DSI/DPI timing sourced from espp/m5stack-tab5's real source (read-only reference, cross-checked byte-for-byte against M5Stack's own M5GFX) — not guessed. Baked-in Layer 0 driver, used only by kernel_tab5_boot.c."
