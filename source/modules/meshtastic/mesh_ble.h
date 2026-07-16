@@ -7,13 +7,12 @@
 // what makes MeshChat's mesh a "real" Meshtastic mesh from a phone's point
 // of view too, not just PURR-to-PURR.
 //
-// The service/characteristic UUIDs in mesh_ble.c were verified byte-for-byte
-// against a live fetch of meshtastic/firmware's src/BluetoothCommon.h
-// (MESH_SERVICE_UUID/TORADIO_UUID/FROMRADIO_UUID/FROMNUM_UUID) — all four
-// match exactly. Real firmware also defines LOGRADIO_UUID/LEGACY_LOGRADIO_UUID
-// (streaming debug logs to the phone app) — not implemented here, not
-// needed for the toradio/fromradio/fromnum text-message flow this file
-// provides.
+// IMPORTANT: the service/characteristic UUIDs below are reproduced from
+// memory of Meshtastic's public BLE spec, not fetched from a live copy of
+// the Meshtastic firmware source during this session — verify them against
+// current github.com/meshtastic/firmware (BluetoothPhoneAPI / NimbleBluetooth)
+// before relying on this for real phone interop. A single wrong hex digit
+// makes the whole service invisible to the app.
 
 #include <stdint.h>
 #include <stdbool.h>

@@ -65,31 +65,13 @@ typedef struct {
     uint8_t  public_key[32];
     bool     has_public_key;   // once true, DMs to/from this node use real
                                 // Meshtastic's PKI encryption, not channel_idx
-    // hop_limit *remaining* on the most recent packet heard from this node
-    // (mesh_router_decode()'s own *hop_limit output) — not persisted (reset
-    // to MESH_HOP_LIMIT on load, same rationale as rssi/last_ms below).
-    // hops-away = MESH_HOP_LIMIT - hop_limit_at_last_heard, an approximation
-    // since every sender in this codebase always originates at the same
-    // fixed MESH_HOP_LIMIT (mesh_radio.h) — there's no hop_start field on
-    // the wire to read directly (see mesh_router.c's PacketHeader comment).
-    uint8_t  hop_limit_at_last_heard;
-    // 0-100 from a decoded TELEMETRY_APP DeviceMetrics.battery_level, or -1
-    // if never heard. Not persisted — same staleness rationale as rssi.
-    int8_t   battery_pct;
 } mesh_node_t;
 
 // channel_idx: which channel this packet was heard on (from
 // mesh_router_decode()'s output) — updates the node's "home channel" for
 // DMing, since a node heard on a private room's channel can't be reached
-// on the primary channel's PSK. hop_limit: the packet's *remaining*
-// hop_limit (mesh_router_decode()'s own output) — stored for the hops-away
-// approximation (see mesh_node_t.hop_limit_at_last_heard above).
-void mesh_router_node_touch(uint32_t id, int8_t rssi, int channel_idx, uint8_t hop_limit);
-
-// Called when a decoded TELEMETRY_APP packet's DeviceMetrics carries
-// has_battery_level — no-op if the node isn't tracked yet (same "touch()
-// always runs first" precondition as node_set_name()/node_set_pubkey()).
-void mesh_router_node_set_battery(uint32_t id, uint8_t pct);
+// on the primary channel's PSK.
+void mesh_router_node_touch(uint32_t id, int8_t rssi, int channel_idx);
 
 // Called when a NODEINFO_APP packet is decoded (see mesh_task()'s RX loop in
 // meshtastic_module.c) — fills in the display name for a node already

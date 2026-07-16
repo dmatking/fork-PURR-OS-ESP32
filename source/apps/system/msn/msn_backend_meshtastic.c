@@ -25,9 +25,6 @@ static bool backend_contact_at(int idx, msn_contact_t *out) {
     strncpy(out->name, info.long_name, sizeof(out->name) - 1);
     out->name[sizeof(out->name) - 1] = 0;
     out->channel_idx = info.channel_idx;
-    out->rssi_dbm    = info.rssi;
-    out->hops_away   = info.hops_away;
-    out->battery_pct = info.battery_pct;   // already -1-if-unknown, same convention as MSN_BATTERY_UNKNOWN
 
     if (info.last_ms == 0) {
         out->last_seen_ms_ago = MSN_LAST_SEEN_UNKNOWN;

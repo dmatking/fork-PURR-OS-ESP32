@@ -246,13 +246,10 @@ static void lp_navbar_back_click_cb(lv_event_t *e)
     // Android's own back stack would — matches Home's identical guard above.
     if (lp_recents_is_open()) { lp_recents_close(); return; }
     if (s_lp_foreground_idx < 0) return;
-    purr_kernel_ui_breadcrumb("navbar:back_stop_app");
     app_manager_stop(s_lp_foreground_idx);
-    purr_kernel_ui_breadcrumb("navbar:back_post_stop");
     s_lp_foreground_idx = -1;
     lp_show_navbar(false);
     lp_show_status(false);
-    purr_kernel_ui_breadcrumb("navbar:back_done");
 }
 
 static void lp_navbar_recents_click_cb(lv_event_t *e)
@@ -261,55 +258,26 @@ static void lp_navbar_recents_click_cb(lv_event_t *e)
     lp_recents_open();
 }
 
-// Name label height reserved below each launcher tile's icon square — see
-// build_lp_launcher_tile()'s comment for the layout shape. Sized for
-// lv_font_montserrat_14 (the only Montserrat size this build compiles in by
-// default, per LVGL's own Kconfig — 10/12/16+ are opt-in and would be link
-// errors if referenced without enabling them).
-#define LP_LAUNCHER_LABEL_H 20
-
-// Square icon + name label, used by the Lollipop launcher's scrollable grid.
-// The clickable/tinted square stays exactly LP_LAUNCHER_TILE (matches the
-// dock/nav-bar icon sizing this grid was built around); the outer tile
-// itself is taller by LP_LAUNCHER_LABEL_H so a centered, truncating name
-// label fits below the square without shrinking the icon or changing the
-// column count (flex-wrap sizes rows off each item's own height, so a
-// uniformly taller item just means fewer rows fit per screen — no other
-// layout math changes).
+// Icon-only square tile, used by the Lollipop launcher's scrollable grid —
+// deliberately no name label (see LP_LAUNCHER_TILE's comment: "small
+// squares", the thing distinguishing this from Cupcake's old drawer tiles).
 static void build_lp_launcher_tile(lv_obj_t *parent, int app_idx, const char *name, lv_event_cb_t click_cb)
 {
     lv_obj_t *tile = lv_obj_create(parent);
     lv_obj_remove_style_all(tile);
-    lv_obj_set_size(tile, LP_LAUNCHER_TILE, LP_LAUNCHER_TILE + LP_LAUNCHER_LABEL_H);
+    lv_obj_set_size(tile, LP_LAUNCHER_TILE, LP_LAUNCHER_TILE);
+    lv_obj_set_style_radius(tile, 10, 0);
+    lv_obj_set_style_bg_color(tile, cupcake_tint_color(name, 0x18), 0);
+    lv_obj_set_style_bg_opa(tile, LV_OPA_60, 0); // lets a wallpaper show through behind icons
     lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(tile, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(tile, click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)app_idx);
 
-    lv_obj_t *icon_bg = lv_obj_create(tile);
-    lv_obj_remove_style_all(icon_bg);
-    lv_obj_set_size(icon_bg, LP_LAUNCHER_TILE, LP_LAUNCHER_TILE);
-    lv_obj_set_pos(icon_bg, 0, 0);
-    lv_obj_set_style_radius(icon_bg, 10, 0);
-    lv_obj_set_style_bg_color(icon_bg, cupcake_tint_color(name, 0x18), 0);
-    lv_obj_set_style_bg_opa(icon_bg, LV_OPA_60, 0); // lets a wallpaper show through behind icons
-    lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(icon_bg, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *icon = lv_img_create(icon_bg);
+    lv_obj_t *icon = lv_img_create(tile);
     lv_img_set_src(icon, icon_for_app(name));
     lv_img_set_zoom(icon, ICON_ZOOM(ICON_PX_LAUNCHER));
     lv_obj_center(icon);
     lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *lbl = lv_label_create(tile);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(lbl, LP_LAUNCHER_TILE);
-    lv_label_set_text(lbl, name);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
-    lv_obj_set_pos(lbl, 0, LP_LAUNCHER_TILE + 2);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 }
 
 // Round button with a centered LVGL built-in symbol glyph (LV_SYMBOL_*),
@@ -1044,25 +1012,11 @@ static void ck_refresh_status_notif_box(void)
     }
 }
 
-// Deferred, not a direct ck_refresh_status_notif_box() call — that function
-// calls lv_obj_clean() on the notif box, and this callback runs from inside
-// an LVGL click-event dispatch (the Clear button's LV_EVENT_CLICKED), the
-// same "synchronous rebuild mid-dispatch" shape that hung cupcake_task
-// elsewhere tonight (see cupcake_win.c's ck_list_set_items_async_cb()
-// comment for the full mechanism). lv_async_call() defers the actual
-// lv_obj_clean()+rebuild to the start of the next lv_timer_handler() tick,
-// outside this event's call stack.
-static void ck_notif_clear_refresh_cb(void *user)
-{
-    (void)user;
-    ck_refresh_status_notif_box();
-}
-
 static void ck_notif_clear_cb(lv_event_t *e)
 {
     (void)e;
     purr_kernel_notify_clear();
-    lv_async_call(ck_notif_clear_refresh_cb, NULL);
+    ck_refresh_status_notif_box();
 }
 
 // ── Running Apps (task manager, in the drag-down panel) ─────────────────────

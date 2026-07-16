@@ -56,7 +56,6 @@ static void cupcake_task(void *arg)
     while (1) {
         purr_kernel_ui_lock();
         lv_tick_inc(5);
-        purr_kernel_ui_breadcrumb("timer_handler");
         int64_t t0 = esp_timer_get_time();
         lv_timer_handler();
         int64_t handler_us = esp_timer_get_time() - t0;
@@ -70,11 +69,7 @@ static void cupcake_task(void *arg)
             ESP_LOGW(TAG, "lv_timer_handler() took %lldms (tick=%lu)",
                      (long long)(handler_us / 1000), (unsigned long)tick);
         }
-        if (++tick % 40 == 0) {
-            purr_kernel_ui_breadcrumb("ui_tick");
-            cupcake_ui_tick();  // ~200ms
-        }
-        purr_kernel_ui_breadcrumb("idle");
+        if (++tick % 40 == 0) cupcake_ui_tick();  // ~200ms
         purr_kernel_ui_unlock();
         purr_kernel_ui_heartbeat();
         vTaskDelay(pdMS_TO_TICKS(5));

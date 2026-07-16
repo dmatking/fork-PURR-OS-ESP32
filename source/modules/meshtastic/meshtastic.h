@@ -108,12 +108,6 @@ typedef struct {
     uint32_t last_ms;         // esp_timer_get_time()/1000 at last packet heard
     int      channel_idx;     // channel this node was last heard on — pass
                                // to mesh_manager_send_text() to DM them
-    int      hops_away;       // approximated from the most recent packet's
-                               // remaining hop_limit vs. this codebase's
-                               // fixed MESH_HOP_LIMIT — not a real wire
-                               // field, see mesh_router.h's doc comment.
-    int8_t   battery_pct;     // 0-100 from the node's last TELEMETRY_APP
-                               // DeviceMetrics, or -1 if never heard.
 } mesh_node_info_t;
 
 // Enumerate known nodes by index (0..mesh_manager_node_count()-1). Returns

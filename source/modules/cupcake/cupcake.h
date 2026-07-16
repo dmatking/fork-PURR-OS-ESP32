@@ -9,7 +9,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "lvgl.h"
-#include "../../kernel/catcalls/catcall_ui.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,20 +62,6 @@ bool cupcake_ui_is_locked(void);
 // Does NOT clear the locked state — that's a separate, deliberate dismiss
 // gesture on the overlay itself.
 void cupcake_ui_wake(void);
-
-// Icon-enhanced variant of purr_win_list_set_items() — same deferred-rebuild
-// behavior as the portable version (see ck_list_set_items_async_cb()'s
-// comment in cupcake_win.c), but each row also gets an icon glyph, matching
-// lv_list_add_btn()'s own (list, icon, txt) shape. icons[i] is an LV_SYMBOL_*
-// string constant or NULL for no icon — a font glyph, not a bitmap asset, so
-// this doesn't need any new catcall_ui_t image-widget capability.
-//
-// Only meaningful when Cupcake (LVGL) is the active UI backend — this header
-// is only usable by app code that both REQUIRES the cupcake component and
-// guards every call behind #ifdef CONFIG_PURR_UI_BACKEND_CUPCAKE, falling
-// back to the portable purr_win_list_set_items() otherwise (see msn.c).
-void cupcake_win_list_set_items_icon(purr_wid_t wid, const char **items,
-                                      const char **icons, int count);
 
 #ifdef __cplusplus
 }
