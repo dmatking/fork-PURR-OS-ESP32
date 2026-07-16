@@ -182,7 +182,15 @@ int cupcake_hal_init(void)
 
     lv_init();
 
-    size_t buf_bytes = sizeof(lv_color_t) * CUPCAKE_BUF_WIDTH * CUPCAKE_BUF_LINES;
+    // Size from the ACTUAL display width, not the compile-time
+    // CUPCAKE_BUF_WIDTH (480): lv_disp_draw_buf_init() below declares
+    // s_disp_w * CUPCAKE_BUF_LINES pixels, so on any panel wider than 480
+    // LVGL rendered past the allocation — ~100KB of background pixels
+    // sprayed over the PSRAM heap per frame on tab5's 640-wide surface,
+    // corrupting TLSF free-list metadata (Store access fault in
+    // remove_free_block on the next allocation, confirmed live). The two
+    // expressions only ever agreed by accident on <=480px devices.
+    size_t buf_bytes = sizeof(lv_color_t) * s_disp_w * CUPCAKE_BUF_LINES;
     s_buf1 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
     s_buf2 = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
     if (!s_buf1 || !s_buf2) {

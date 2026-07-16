@@ -152,6 +152,15 @@ void app_main(void)
         ESP_LOGW(TAG, "app_manager not loaded — no apps will run");
     }
 
+    // Boot-ready gate. The specialized T-Deck kernels set this at the end of
+    // their boot (kernel_tdp_boot.c:546) and LVGL-family UI tasks (cupcake's
+    // cupcake_task, cardstack's) spin on purr_kernel_boot_ready() before
+    // building their home screens — but this generic boot never set it, so
+    // any of those UIs on a native-kernel device waited forever with a blank
+    // panel and zero log output (confirmed live: cupcake on tab5). MiniWin
+    // doesn't check it, which is why every native MiniWin device masked this.
+    purr_kernel_set_boot_ready(true);
+
     ESP_LOGI(TAG, "boot complete — %u bytes free", (unsigned)purr_kernel_free_ram());
 
     // Kernel spine parks here. All work happens in module FreeRTOS tasks.
