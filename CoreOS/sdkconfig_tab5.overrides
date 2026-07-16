@@ -1,13 +1,10 @@
 # sdkconfig_tab5.overrides — hand-maintained ESP32-P4 quirks device.pcat can't
 # express. Chained after the generated sdkconfig_tab5 (see purrstrap.py).
-#
-# Adapted from an external contributor's Tab5 port (originally verified against
-# ESP-IDF 5.5.4) to this project's pinned 5.3.5 — every symbol below was
-# individually confirmed to exist in the 5.3.5 tree first. One rename: 5.3.5's
-# P4 revision choice is named ESP32P4_REV_MIN (options _0/_1/_100) directly,
-# not gated behind a ESP32P4_SELECTS_REV_LESS_V3 symbol the way later IDF
-# versions structure it — CONFIG_ESP32P4_REV_MIN_100 alone selects it here.
+# Values from the working Tab5 donor projects (lvgl-primer / ssh-terminal).
 
+# Silicon revision — Tab5 ships P4 rev v1.x; REV_MIN_* depends on the
+# SELECTS_REV_LESS_V3 choice symbol existing first.
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y
 
 CONFIG_ESP_DEFAULT_CPU_FREQ_360=y
@@ -26,9 +23,7 @@ CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 # MANDATORY with a live MIPI-DSI panel: without auto-suspend, every 4KB flash
 # erase (NVS writes, SPIFFS, future OTA) disables interrupts 30-50ms, the DSI
 # frame DMA misses its re-arm ISR and underruns, and the panel flashes
-# blue/cyan. Confirmed live in the donor Tab5 project (5.5.4) — not yet
-# re-confirmed under 5.3.5 on real hardware, but the Kconfig symbol and its
-# effect are IDF-version-independent flash-driver behavior, not P4-specific.
+# blue/cyan. Confirmed live in the donor Tab5 SSH-terminal project.
 CONFIG_SPI_FLASH_AUTO_SUSPEND=y
 
 # Console on UART with USB-Serial-JTAG secondary — matches how the Tab5 is

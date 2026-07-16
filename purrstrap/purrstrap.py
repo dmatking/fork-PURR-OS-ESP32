@@ -1031,6 +1031,15 @@ def _build_kernel_spine(device, cfg, out_dir):
 
     return firmware_out if os.path.isfile(firmware_out) else None
 
+def _bootloader_offset(chip):
+    # Second-stage bootloader offset differs per chip: 0x1000 on the original
+    # ESP32, 0x2000 on the ESP32-P4, 0x0 on every other target shipped so far.
+    if chip == "esp32p4":
+        return "0x2000"
+    if chip in ("esp32s3", "esp32s2", "esp32c3", "esp32c6", "esp32h2"):
+        return "0x0"
+    return "0x1000"
+
 def _merge_flash_image(device, cfg, out_dir, firmware_bin, flash_bin):
     """
     Use esptool merge_bin to combine firmware + SPIFFS into one flashable image.
@@ -1042,7 +1051,7 @@ def _merge_flash_image(device, cfg, out_dir, firmware_bin, flash_bin):
     partitions    = os.path.join(out_dir, "partition-table.bin")
 
     chip = cfg.get("device.chip", "esp32")
-    bl_offset = bootloader_offset(chip)
+    bl_offset = _bootloader_offset(chip)
 
     parts = []
     if os.path.isfile(bootloader):   parts += [bl_offset,        bootloader]
@@ -1191,7 +1200,7 @@ def cmd_flash(args):
         cfg_flash, _ = resolve_device(args.device)
         chip     = cfg_flash.get("device.chip", "esp32s3")
         flash_mb = cfg_flash.get("device.flash_mb", "4")
-        bl_offset = bootloader_offset(chip)
+        bl_offset = _bootloader_offset(chip)
         info(f"flashing bootloader+partition-table+firmware+SPIFFS (NVS untouched) ...")
         erase_flag = ["--erase-all"] if getattr(args, "erase", False) else []
         cmd = _esptool + [

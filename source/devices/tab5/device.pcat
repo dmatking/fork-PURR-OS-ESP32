@@ -2,27 +2,13 @@
 # M5Stack Tab5 — ESP32-P4, 5" 720x1280 MIPI-DSI (ST7123 display+touch), attachable
 # I2C keyboard, 32MB PSRAM. Used landscape (1280x720) — the st7123 driver rotates.
 #
-# EXPERIMENTAL / UNSTABLE: this device.pcat adopts a real-hardware-verified
-# driver (st7123 + tab5_kbd, ported from an external contributor's PR) that
-# was built and tested against ESP-IDF 5.5.4. This build targets the
-# project's pinned 5.3.5 instead — the specific esp_lcd_new_panel_dpi()/
-# ppa_do_scale_rotate_mirror() APIs the driver uses, and every P4-specific
-# Kconfig symbol below, were individually confirmed present in the pinned
-# 5.3.5 tree before attempting this, but the port itself has only been
-# build-verified here, NOT run on physical hardware under 5.3.5 — the
-# original author's own hardware verification was against 5.5.4. Treat any
-# release built from this as unstable until someone confirms it boots on a
-# real Tab5.
-#
-# Previous approach (native m5tab5_bsp driver, auto-detecting ILI9881C+GT911
-# vs. ST7123) is preserved at source/kernel/kernel_tab5_m5bsp_legacy/ and
-# source/drivers/display/m5tab5_bsp/ — never hardware-verified either, kept
-# for reference/revert only, not referenced by this device anymore.
-#
 # Radio is OFF for DP1: WiFi/BT live on an ESP32-C6 co-processor behind esp-hosted
 # (SDIO), which nothing in the tree brings up yet, and ESP-NOW does not exist on
 # the P4 at all (disabled in IDF) — so proximity/pairing can never run here. When
 # esp-hosted lands, set wifi = true AND radio_companion = false together.
+#
+# Requires ESP-IDF 5.5.4 (esp32p4 target + esp_lcd_dpi/PPA) — other devices stay
+# on the pinned 5.3.5; point IDF_PATH at the 5.5.4 install to build this one.
 
 [device]
 name        = "tab5"
@@ -54,7 +40,9 @@ bt          = false
 lora        = ""
 
 [modules]
-ui          = "miniwin"
+# Cupcake experiment (upstream author's request): does the LVGL v8 Android-
+# style UI work on the P4 at all? Normally miniwin here.
+ui          = "cupcake"
 app_manager = "app_manager"
 lua         = "lua_runtime"
 
@@ -74,7 +62,7 @@ taskmgr     = true
 display/st7123     = 1
 touch/st7123       = 1
 input/tab5_kbd     = 1
-miniwin            = 2
+cupcake            = 2
 app_manager        = 2
 driver_manager     = 2
 lua_runtime        = 2
@@ -100,7 +88,4 @@ kbd_sda       = 0
 kbd_scl       = 1
 kbd_int       = 50
 
-# Not wired up in this port (no specialized boot file to mount it) — the
-# previous m5tab5_bsp approach did bring up SD; revisit following T-Deck
-# Plus's mount_sd_vfs() pattern if SD support is wanted here later.
 sd_enabled    = false
