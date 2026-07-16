@@ -40,7 +40,9 @@ bt          = false
 lora        = ""
 
 [modules]
-ui          = "miniwin"
+# Cupcake experiment (upstream author's request): does the LVGL v8 Android-
+# style UI work on the P4 at all? Normally miniwin here.
+ui          = "cupcake"
 app_manager = "app_manager"
 lua         = "lua_runtime"
 
@@ -60,7 +62,7 @@ taskmgr     = true
 display/st7123     = 1
 touch/st7123       = 1
 input/tab5_kbd     = 1
-miniwin            = 2
+cupcake            = 2
 app_manager        = 2
 driver_manager     = 2
 lua_runtime        = 2
