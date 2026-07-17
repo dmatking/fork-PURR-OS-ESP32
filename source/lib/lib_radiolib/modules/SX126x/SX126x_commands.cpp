@@ -80,7 +80,30 @@ int16_t SX126x::standby(uint8_t mode, bool wakeup) {
     // send a NOP command - this pulls the NSS low to exit the sleep mode,
     // while preventing interference with possible other SPI transactions
     // see https://github.com/jgromes/RadioLib/discussions/1364
-    (void)this->mod->SPIwriteStream((uint16_t)RADIOLIB_SX126X_CMD_NOP, NULL, 0, false, false);
+    //
+    // PURR-specific deviation from upstream, do not revert without
+    // discussion: waitForGpio was `false` here — the only command in the
+    // entire SX126x layer that skips BUSY-pin checking (SET_SLEEP is the
+    // only other one, which is defensible; BUSY is meaningless during the
+    // sleep transition itself). Per the SX1262 datasheet, asserting NSS/
+    // clocking a byte while BUSY is high is undefined for the chip's SPI-
+    // slave logic. This NOP sits at the top of every transmit()/receive()/
+    // startReceive() call and is by far the hottest command in the whole
+    // driver on this project's boards (mesh_task polls every 10ms), and on
+    // a physical bus already confirmed to share SPI2_HOST with a display
+    // and SD card whose SPI calls have no way to recover if the radio's
+    // own transaction ever wedges (spi_device_acquire_bus()/
+    // spi_device_polling_transmit() are both incapable of timing out —
+    // see source/lib/lib_radiolib/hal/ESP-IDF/EspHal.cpp's own history).
+    // Turning waitForGpio on costs nothing in the normal case (BUSY should
+    // already be low while genuinely asleep) and adds real protection if
+    // BUSY is still high from a prior operation; it also makes the
+    // wake sequence match the datasheet (BUSY goes high for the wake
+    // duration, host should wait for it to clear before the next command
+    // — SET_STANDBY right below already waits by default, but was racing
+    // a NOP that told it nothing). Both waits this enables are bounded by
+    // the existing 1000ms spiConfig.timeout, same as every other command.
+    (void)this->mod->SPIwriteStream((uint16_t)RADIOLIB_SX126X_CMD_NOP, NULL, 0, true, false);
   }
 
   const uint8_t data[] = { mode };

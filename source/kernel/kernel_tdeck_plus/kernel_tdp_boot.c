@@ -660,8 +660,13 @@ void app_main(void)
     // (settings/about/terminal/fileman/calculator) have registered, so its
     // first scan always finds 0. Re-scan now that every priority tier above
     // has loaded — by here the registry is complete.
-    extern int app_manager_scan(void);
-    app_manager_scan();
+    // Reuses `recovering`, captured earlier in this same function (Phase 0)
+    // — by this point purr_crash_guard_clear_pending_recovery() has already
+    // run, so re-reading the NVS flag here would incorrectly say "not
+    // recovering" even on a boot that very much still is. See
+    // app_manager_scan_ex()'s comment for why SD gets skipped specifically.
+    extern int app_manager_scan_ex(bool include_sd);
+    app_manager_scan_ex(!recovering);
     purr_kernel_set_boot_ready(true);
 
     // ── Phase 2: SD extras ───────────────────────────────────────────────────

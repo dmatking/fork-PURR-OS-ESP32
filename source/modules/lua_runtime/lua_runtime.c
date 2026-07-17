@@ -31,6 +31,19 @@
 #include <stdio.h>
 #include <string.h>
 
+// Only exists when meshtastic is actually compiled in (mesh_radio.c's own
+// implementation is entirely #ifdef CONFIG_PURR_FEATURE_MESHTASTIC-gated) —
+// this module is shared across every device, including ones with meshtastic
+// disabled, so every use below is guarded the same way.
+#ifdef CONFIG_PURR_FEATURE_MESHTASTIC
+#include "../meshtastic/mesh_radio.h"
+#define LUA_RADIO_LOCK()   mesh_radio_lock()
+#define LUA_RADIO_UNLOCK() mesh_radio_unlock()
+#else
+#define LUA_RADIO_LOCK()   ((void)0)
+#define LUA_RADIO_UNLOCK() ((void)0)
+#endif
+
 static const char *TAG = "lua_rt";
 
 static lua_State *s_L = NULL;
@@ -219,12 +232,26 @@ static void register_sd_module(lua_State *L) {
 // .meow script never sees these globals at all — not hidden, just never
 // added to its Lua state.
 
+// mesh_radio_lock()/unlock() (meshtastic's mesh_radio.h) serialize every
+// caller of the shared RadioLib Module/SX126x object — its own doc comment
+// documents interleaved send/receive corrupting RadioLib's internal mode-
+// tracking state as a confirmed live root cause of intermittent radio
+// crashes. mesh_task() and mesh_router.c already take this lock around
+// every radio catcall; this .hiss binding is a second, independent caller
+// (runs on meow_task, pinned to the opposite CPU core from mesh_task) that
+// previously called straight through purr_kernel_radio() with no locking
+// at all — a genuine SMP race, not just scheduler jitter, since the two
+// tasks can be mid-command-sequence on the shared chip at the same instant.
+// No-op on targets without meshtastic compiled in (LUA_RADIO_LOCK() above).
+
 static int lua_radio_send(lua_State *L) {
     size_t len;
     const char *data = luaL_checklstring(L, 1, &len);
     const catcall_radio_t *radio = purr_kernel_radio();
     if (!radio || !radio->send) { lua_pushboolean(L, 0); lua_pushstring(L, "no radio"); return 2; }
+    LUA_RADIO_LOCK();
     esp_err_t ret = radio->send((const uint8_t *)data, len);
+    LUA_RADIO_UNLOCK();
     lua_pushboolean(L, ret == ESP_OK);
     return 1;
 }
@@ -235,7 +262,9 @@ static int lua_radio_receive(lua_State *L) {
     const catcall_radio_t *radio = purr_kernel_radio();
     if (!radio || !radio->receive) { lua_pushnil(L); return 1; }
     uint8_t buf[1024];
+    LUA_RADIO_LOCK();
     int n = radio->receive(buf, (size_t)max_len);
+    LUA_RADIO_UNLOCK();
     if (n <= 0) { lua_pushnil(L); return 1; }
     lua_pushlstring(L, (const char *)buf, (size_t)n);
     return 1;
@@ -243,19 +272,28 @@ static int lua_radio_receive(lua_State *L) {
 
 static int lua_radio_available(lua_State *L) {
     const catcall_radio_t *radio = purr_kernel_radio();
-    lua_pushboolean(L, radio && radio->data_available && radio->data_available());
+    LUA_RADIO_LOCK();
+    bool avail = radio && radio->data_available && radio->data_available();
+    LUA_RADIO_UNLOCK();
+    lua_pushboolean(L, avail);
     return 1;
 }
 
 static int lua_radio_rssi(lua_State *L) {
     const catcall_radio_t *radio = purr_kernel_radio();
-    lua_pushinteger(L, (radio && radio->rssi) ? radio->rssi() : 0);
+    LUA_RADIO_LOCK();
+    int rssi = (radio && radio->rssi) ? radio->rssi() : 0;
+    LUA_RADIO_UNLOCK();
+    lua_pushinteger(L, rssi);
     return 1;
 }
 
 static int lua_radio_snr(lua_State *L) {
     const catcall_radio_t *radio = purr_kernel_radio();
-    lua_pushnumber(L, (radio && radio->snr) ? (lua_Number)radio->snr() : 0.0);
+    LUA_RADIO_LOCK();
+    lua_Number snr = (radio && radio->snr) ? (lua_Number)radio->snr() : 0.0;
+    LUA_RADIO_UNLOCK();
+    lua_pushnumber(L, snr);
     return 1;
 }
 

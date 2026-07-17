@@ -34,6 +34,17 @@
 #include <stdio.h>
 #include <string.h>
 
+// Lock screen's node-count line — only meaningful when meshtastic is
+// actually compiled in (CONFIG_PURR_FEATURE_MESHTASTIC); guarded the same
+// way lua_runtime.c's/meshdiag.c's radio access is, since this module
+// builds for every device regardless of which mesh backend (or none) is
+// active. MeshCore-backed devices don't get a node count on the lock
+// screen yet — same scope limit, add the mc_manager_node_count()
+// equivalent later if needed.
+#ifdef CONFIG_PURR_FEATURE_MESHTASTIC
+#include "../meshtastic/meshtastic.h"
+#endif
+
 static const char *TAG = "cupcake_ui";
 
 // CUPCAKE_STATUS_PEEK_H and CUPCAKE_NAVBAR_H are defined in cupcake.h —
@@ -246,10 +257,13 @@ static void lp_navbar_back_click_cb(lv_event_t *e)
     // Android's own back stack would — matches Home's identical guard above.
     if (lp_recents_is_open()) { lp_recents_close(); return; }
     if (s_lp_foreground_idx < 0) return;
+    purr_kernel_ui_breadcrumb("navbar:back_stop_app");
     app_manager_stop(s_lp_foreground_idx);
+    purr_kernel_ui_breadcrumb("navbar:back_post_stop");
     s_lp_foreground_idx = -1;
     lp_show_navbar(false);
     lp_show_status(false);
+    purr_kernel_ui_breadcrumb("navbar:back_done");
 }
 
 static void lp_navbar_recents_click_cb(lv_event_t *e)
@@ -1012,11 +1026,25 @@ static void ck_refresh_status_notif_box(void)
     }
 }
 
+// Deferred, not a direct ck_refresh_status_notif_box() call — that function
+// calls lv_obj_clean() on the notif box, and this callback runs from inside
+// an LVGL click-event dispatch (the Clear button's LV_EVENT_CLICKED), the
+// same "synchronous rebuild mid-dispatch" shape that hung cupcake_task
+// elsewhere (see cupcake_win.c's ck_list_set_items_async_cb() comment for
+// the full mechanism). lv_async_call() defers the actual lv_obj_clean()+
+// rebuild to the start of the next lv_timer_handler() tick, outside this
+// event's call stack.
+static void ck_notif_clear_refresh_cb(void *user)
+{
+    (void)user;
+    ck_refresh_status_notif_box();
+}
+
 static void ck_notif_clear_cb(lv_event_t *e)
 {
     (void)e;
     purr_kernel_notify_clear();
-    ck_refresh_status_notif_box();
+    lv_async_call(ck_notif_clear_refresh_cb, NULL);
 }
 
 // ── Running Apps (task manager, in the drag-down panel) ─────────────────────
@@ -1326,6 +1354,14 @@ static void ck_lock_dismiss_cb(lv_event_t *e)
     // already "now" by the time we get here.
 }
 
+// Clock/nodes/messages labels — populated by ck_lock_refresh_info(),
+// called once on lock (ck_lock_check_idle()) and then every tick while
+// locked (cupcake_ui_tick()) so they stay live for anyone glancing at a
+// locked device, not just at the instant it locked.
+static lv_obj_t *s_lock_clock_lbl;
+static lv_obj_t *s_lock_nodes_lbl;
+static lv_obj_t *s_lock_msgs_lbl;
+
 static void ck_build_lock_screen(uint16_t w, uint16_t h)
 {
     s_lock_screen = lv_obj_create(lv_layer_top());
@@ -1340,11 +1376,62 @@ static void ck_build_lock_screen(uint16_t w, uint16_t h)
     lv_obj_add_event_cb(s_lock_screen, ck_lock_dismiss_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_lock_screen, ck_lock_dismiss_cb, LV_EVENT_RELEASED, NULL);
 
+    // No RTC/NTP anywhere in this codebase (checked — no sntp usage at
+    // all, and catcall_gps_t carries no time field either), so this is
+    // elapsed uptime formatted as a clock, not wall-clock time. Still
+    // genuinely useful at a glance (confirms the device is alive and how
+    // long it's been running) without claiming to be something it isn't.
+    s_lock_clock_lbl = lv_label_create(s_lock_screen);
+    lv_obj_set_style_text_color(s_lock_clock_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(s_lock_clock_lbl, &lv_font_montserrat_14, 0);
+    lv_label_set_text(s_lock_clock_lbl, "00:00:00");
+    lv_obj_set_style_text_align(s_lock_clock_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_lock_clock_lbl, LV_ALIGN_CENTER, 0, -40);
+
     lv_obj_t *lbl = lv_label_create(s_lock_screen);
     lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
     lv_label_set_text(lbl, "Locked\ntap to unlock");
     lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(lbl);
+
+    s_lock_nodes_lbl = lv_label_create(s_lock_screen);
+    lv_obj_set_style_text_color(s_lock_nodes_lbl, lv_color_white(), 0);
+    lv_label_set_text(s_lock_nodes_lbl, "");
+    lv_obj_set_style_text_align(s_lock_nodes_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_lock_nodes_lbl, LV_ALIGN_CENTER, 0, 40);
+
+    s_lock_msgs_lbl = lv_label_create(s_lock_screen);
+    lv_obj_set_style_text_color(s_lock_msgs_lbl, lv_color_white(), 0);
+    lv_label_set_text(s_lock_msgs_lbl, "");
+    lv_obj_set_style_text_align(s_lock_msgs_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_lock_msgs_lbl, LV_ALIGN_CENTER, 0, 64);
+}
+
+static void ck_lock_refresh_info(void)
+{
+    uint64_t up_s = purr_kernel_uptime_ms() / 1000ULL;
+    unsigned hh = (unsigned)((up_s / 3600ULL) % 24ULL);
+    unsigned mm = (unsigned)((up_s / 60ULL) % 60ULL);
+    unsigned ss = (unsigned)(up_s % 60ULL);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%02u:%02u:%02u", hh, mm, ss);
+    lv_label_set_text(s_lock_clock_lbl, buf);
+
+#ifdef CONFIG_PURR_FEATURE_MESHTASTIC
+    int nodes = mesh_manager_node_count();
+    snprintf(buf, sizeof(buf), "%d node%s", nodes, nodes == 1 ? "" : "s");
+    lv_label_set_text(s_lock_nodes_lbl, buf);
+#else
+    lv_label_set_text(s_lock_nodes_lbl, "");
+#endif
+
+    int n = purr_kernel_notify_count();
+    if (n > 0) {
+        snprintf(buf, sizeof(buf), "%d message%s", n, n == 1 ? "" : "s");
+    } else {
+        buf[0] = '\0';
+    }
+    lv_label_set_text(s_lock_msgs_lbl, buf);
 }
 
 bool cupcake_ui_is_locked(void) { return s_locked; }
@@ -1365,6 +1452,7 @@ static void ck_lock_check_idle(void)
     s_locked = true;
     const catcall_display_t *disp = purr_kernel_display();
     if (disp && disp->set_brightness) disp->set_brightness(0);
+    ck_lock_refresh_info();
     lv_obj_clear_flag(s_lock_screen, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_lock_screen);
 }
@@ -1399,6 +1487,7 @@ void cupcake_ui_tick(void)
     ck_refresh_status_taskmgr();
     ck_refresh_status_icons();
     ck_lock_check_idle();
+    if (s_locked) ck_lock_refresh_info();
 
     // Re-hide a swipe-revealed nav bar once its countdown expires — deadline
     // 0 means "no pending auto-hide" (home screen, or an app just opened

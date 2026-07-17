@@ -184,3 +184,32 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # CONFIG_TINYUSB_MSC_ENABLED=y
 # CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=n
 
+# Task Watchdog — re-enabled for THIS device only, scoped narrowly. Project-
+# wide default is CONFIG_ESP_TASK_WDT_EN=n (see CoreOS/sdkconfig.defaults's
+# own comment: disabled globally to avoid false positives from legitimately
+# long boot/module-init sequences under the default idle-task watch). Re-
+# enabling it wholesale here would reintroduce exactly that problem — SD
+# mount/display bring-up can legitimately run for seconds during a recovery
+# boot (see kernel_tdp_boot.c's bounded bring-up). So idle-task watching
+# stays explicitly OFF below, and only mesh_task (meshtastic_module.c) and
+# cupcake_task (cupcake_module.c) are subscribed directly, via their own
+# esp_task_wdt_add()/esp_task_wdt_reset() call sites — the two tasks every
+# hang tonight has actually implicated. A genuine hang in either now trips
+# a real ESP-IDF panic (register dump + backtrace over the console, safe
+# even if the shared SPI2 bus itself is wedged — a different peripheral)
+# instead of crash_guard's own polling-based detection rebooting blind with
+# only a hand-placed breadcrumb string for context. TIMEOUT_S=4 is
+# deliberately shorter than purr_kernel.c's UI_HANG_THRESHOLD_MS (6000ms)
+# so this wins the race for the cupcake case specifically.
+# purr_crash_guard_check_reset_reason() already treats ESP_RST_TASK_WDT as
+# an unclean reset and folds it into the same strike/recovery bookkeeping
+# as today's polling path (see purr_crash_guard.c) — now also saving the
+# pending-recovery marker on that path, so a watchdog-caught hang gets the
+# same staged/bounded bring-up on the next boot as a crash_guard-caught one.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=4
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+

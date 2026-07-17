@@ -176,6 +176,7 @@ static void load_tail_from_sd(const char *path, char *buf, size_t *len, size_t b
 // ── Buddy list ────────────────────────────────────────────────────────────
 
 static void refresh_buddy_list(void) {
+    purr_kernel_ui_breadcrumb("msn:refresh_buddy");
     int n = s_backend->contact_count();
     if (n > MAX_CHATS) n = MAX_CHATS;
     s_buddy_count = n;
@@ -196,12 +197,16 @@ static void refresh_buddy_list(void) {
         s_buddy_label_ptrs[i] = s_buddy_labels[i];
     }
 
-    if (s_buddy_list) purr_win_list_set_items(s_buddy_list, s_buddy_label_ptrs, s_buddy_count);
+    if (s_buddy_list) {
+        purr_kernel_ui_breadcrumb("msn:buddy_list_set_items");
+        purr_win_list_set_items(s_buddy_list, s_buddy_label_ptrs, s_buddy_count);
+    }
 }
 
 // ── Room list ─────────────────────────────────────────────────────────────
 
 static void refresh_room_list(void) {
+    purr_kernel_ui_breadcrumb("msn:refresh_room");
     int n = s_backend->channel_count();
     if (n > MAX_ROOMS) n = MAX_ROOMS;
     s_room_count = n;
@@ -211,7 +216,10 @@ static void refresh_room_list(void) {
         s_room_label_ptrs[i] = s_room_names[i];
     }
 
-    if (s_room_list) purr_win_list_set_items(s_room_list, s_room_label_ptrs, s_room_count);
+    if (s_room_list) {
+        purr_kernel_ui_breadcrumb("msn:room_list_set_items");
+        purr_win_list_set_items(s_room_list, s_room_label_ptrs, s_room_count);
+    }
 }
 
 // Always-present status line — this and the Refresh/Add Room row below it
@@ -219,6 +227,7 @@ static void refresh_room_list(void) {
 // *only* widget in the window, so 0 discovered peers meant a fully empty
 // box with nothing to look at or tap.
 static void refresh_status_label(void) {
+    purr_kernel_ui_breadcrumb("msn:refresh_status");
     if (!s_status_lbl) return;
     if (!s_backend->ready()) {
         purr_win_label_set(s_status_lbl, "Mesh: starting...");
@@ -361,6 +370,7 @@ static void on_chat_send(purr_wid_t w, purr_event_t e, void *user) {
 
 static void open_chat(int idx) {
     if (idx < 0 || idx >= s_buddy_count) return;
+    purr_kernel_ui_breadcrumb("msn:open_chat");
     if (s_chat_win[idx]) {
         purr_win_show(s_chat_win[idx]);
         return;
@@ -374,6 +384,7 @@ static void open_chat(int idx) {
         load_tail_from_sd(path, s_chat_logs[idx], &s_chat_loglen[idx], CHAT_LOG_LEN);
     }
 
+    purr_kernel_ui_breadcrumb("msn:open_chat:win_create");
     s_chat_win[idx] = purr_win_create(s_buddy_labels[idx]);
     s_chat_out[idx] = purr_win_textarea(s_chat_win[idx], 100, 75);
     purr_wid_t row = purr_win_row(s_chat_win[idx], 4);
@@ -382,16 +393,21 @@ static void open_chat(int idx) {
     purr_win_button(s_chat_win[idx], "v", on_chat_scroll_click, (void *)(intptr_t)idx);
     purr_win_layout_end(row);
 
+    purr_kernel_ui_breadcrumb("msn:open_chat:render");
     render_chat_view(idx);
     purr_win_textarea_focus(s_chat_in[idx]);
     // win_show() first — see terminal.c's terminal_init() for why (Cupcake's
     // win_show() raises the window above whatever kb_show() just showed).
+    purr_kernel_ui_breadcrumb("msn:open_chat:show");
     purr_win_show(s_chat_win[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_chat:kb_show");
     purr_win_keyboard_show(s_chat_win[idx], s_chat_in[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_chat:done");
 }
 
 static void on_buddy_list_event(purr_wid_t w, purr_event_t e, void *user) {
     (void)w; (void)user;
+    purr_kernel_ui_breadcrumb("msn:on_buddy_list_event");
     if (e != PURR_EVENT_ACTIVATED) return;
     int idx = purr_win_list_get_selected(s_buddy_list);
     open_chat(idx);
@@ -416,6 +432,7 @@ static void on_room_send(purr_wid_t w, purr_event_t e, void *user) {
 
 static void open_room(int idx) {
     if (idx < 0 || idx >= s_room_count) return;
+    purr_kernel_ui_breadcrumb("msn:open_room");
     if (s_room_win[idx]) {
         purr_win_show(s_room_win[idx]);
         return;
@@ -433,6 +450,7 @@ static void open_room(int idx) {
         load_tail_from_sd(path, s_room_logs[idx], &s_room_loglen[idx], CHAT_LOG_LEN);
     }
 
+    purr_kernel_ui_breadcrumb("msn:open_room:win_create");
     s_room_win[idx] = purr_win_create(s_room_names[idx]);
     s_room_out[idx] = purr_win_textarea(s_room_win[idx], 100, 75);
     purr_wid_t row = purr_win_row(s_room_win[idx], 4);
@@ -441,14 +459,19 @@ static void open_room(int idx) {
     purr_win_button(s_room_win[idx], "v", on_room_scroll_click, (void *)(intptr_t)idx);
     purr_win_layout_end(row);
 
+    purr_kernel_ui_breadcrumb("msn:open_room:render");
     render_room_view(idx);
     purr_win_textarea_focus(s_room_in[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_room:show");
     purr_win_show(s_room_win[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_room:kb_show");
     purr_win_keyboard_show(s_room_win[idx], s_room_in[idx]);
+    purr_kernel_ui_breadcrumb("msn:open_room:done");
 }
 
 static void on_room_list_event(purr_wid_t w, purr_event_t e, void *user) {
     (void)w; (void)user;
+    purr_kernel_ui_breadcrumb("msn:on_room_list_event");
     if (e != PURR_EVENT_ACTIVATED) return;
     int idx = purr_win_list_get_selected(s_room_list);
     open_room(idx);

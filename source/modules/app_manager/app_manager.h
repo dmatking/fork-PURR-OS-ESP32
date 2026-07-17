@@ -69,6 +69,12 @@ void app_manager_deinit(void);
 // Re-scan app paths and rebuild the registry (hot-reload from SD)
 int  app_manager_scan(void);
 
+// Same, but include_sd=false skips "/sdcard/..." scan paths — for
+// boot-recovery callers where SD may still be degraded post-hang and
+// scan_dir()'s opendir()/readdir() calls have no timeout of their own.
+// See app_manager_scan_ex()'s definition comment for the full story.
+int  app_manager_scan_ex(bool include_sd);
+
 // Launch an app by index or by path. Returns 0 on success.
 int  app_manager_launch_idx(int idx);
 int  app_manager_launch_path(const char *path);

@@ -22,6 +22,22 @@
 #include "purr_module.h"
 #include "meshtastic.h"
 
+// mesh_radio_lock()/unlock() only exist when CONFIG_PURR_FEATURE_MESHTASTIC
+// is actually enabled (mesh_radio.c's implementation is entirely gated on
+// it) — guarded the same way lua_runtime.c's .hiss radio.* binding is, for
+// the same reason (see that file's comment): interleaving a radio call
+// against mesh_task()'s own command sequence on the shared RadioLib object
+// is a confirmed-live source of corruption, and this task polls rssi()/
+// snr() unpinned, schedulable on either CPU core.
+#ifdef CONFIG_PURR_FEATURE_MESHTASTIC
+#include "../../modules/meshtastic/mesh_radio.h"
+#define MESHDIAG_RADIO_LOCK()   mesh_radio_lock()
+#define MESHDIAG_RADIO_UNLOCK() mesh_radio_unlock()
+#else
+#define MESHDIAG_RADIO_LOCK()   ((void)0)
+#define MESHDIAG_RADIO_UNLOCK() ((void)0)
+#endif
+
 #define KLOG_TAIL_SIZE 2048
 #define REFRESH_MS     2000
 
@@ -66,10 +82,12 @@ static void refresh_stats(void) {
         "lora hw: %s\n", purr_kernel_lora_available() ? "present" : "not detected");
 
     if (radio) {
+        MESHDIAG_RADIO_LOCK();
+        int rssi = radio->rssi ? radio->rssi() : 0;
+        float snr = radio->snr ? radio->snr() : 0.0f;
+        MESHDIAG_RADIO_UNLOCK();
         n += snprintf(buf + n, sizeof(buf) - n,
-            "radio rssi: %d dBm   snr: %.1f dB\n",
-            radio->rssi ? radio->rssi() : 0,
-            radio->snr ? radio->snr() : 0.0f);
+            "radio rssi: %d dBm   snr: %.1f dB\n", rssi, snr);
     } else {
         n += snprintf(buf + n, sizeof(buf) - n, "radio: no catcall registered\n");
     }

@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
@@ -198,30 +199,86 @@ void st7789_set_perf_mode(bool enable)
 
 // ── Low-level SPI helpers ─────────────────────────────────────────────────────
 
+// Bounded per-transaction timeout, same mechanism and same reasoning as
+// RadioLib's EspHal::spiTransfer() this session: spi_device_transmit()
+// (used here previously) is internally just spi_device_queue_trans() +
+// spi_device_get_trans_result(), both called with portMAX_DELAY -- if the
+// SPI peripheral's hardware transfer-complete condition never fires (the
+// confirmed, still-reproducible failure mode on this project's shared
+// display/SD/radio bus), that blocks the calling task (cupcake_task, on
+// this device -- the same task the crash-guard heartbeat watchdog
+// monitors) forever, with no way to recover short of a full reboot.
+//
+// dev_cfg.queue_size is 1 (see st7789_init(), below) -- confirmed live
+// this session on the radio's own bounded-transfer attempt that a queue
+// this small means a single timed-out, un-reclaimed transaction
+// permanently exhausts the only slot, failing every transfer after it for
+// the rest of the boot. The opportunistic non-blocking reclaim below
+// (checking whether an earlier abandoned transaction has since actually
+// finished) is the fix for that -- it only helps once the earlier
+// transaction is no longer stuck, but that's the same honest limitation
+// the radio-side version has.
+//
+// trans must be heap-allocated by the caller, never a stack local --
+// deliberately leaked on timeout (freed here only on success), since the
+// driver may still complete and write through it after this function has
+// already returned false. tx_data (inline, <=4 bytes) and tx_buffer
+// pointers into this driver's own static scratch buffers (s_row_buf,
+// s_bulk_buf) are both safe to reference even after a timeout for the
+// same reason -- neither is stack or short-lived heap memory.
+#define ST7789_SPI_TIMEOUT_MS 200
+
+static bool spi_transmit_bounded(spi_transaction_t *trans)
+{
+    spi_transaction_t *stale = NULL;
+    if (spi_device_get_trans_result(s_spi, &stale, 0) == ESP_OK && stale) {
+        free(stale);   // reclaim a previous timeout's slot, if it's since finished
+    }
+
+    esp_err_t ret = spi_device_queue_trans(s_spi, trans, pdMS_TO_TICKS(ST7789_SPI_TIMEOUT_MS));
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "display SPI queue_trans failed: %s", esp_err_to_name(ret));
+        free(trans);
+        return false;
+    }
+
+    spi_transaction_t *rtrans = NULL;
+    ret = spi_device_get_trans_result(s_spi, &rtrans, pdMS_TO_TICKS(ST7789_SPI_TIMEOUT_MS));
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "display SPI transfer timed out (%s) — bus may still be wedged", esp_err_to_name(ret));
+        // Deliberately NOT freed — see doc comment above.
+        return false;
+    }
+    free(trans);
+    return true;
+}
+
 static void spi_write_cmd(uint8_t cmd)
 {
     gpio_set_level((gpio_num_t)s_pins.dc_pin, 0);
-    spi_transaction_t t = {
-        .length  = 8,
-        .flags   = SPI_TRANS_USE_TXDATA,
-        .tx_data = { cmd, 0, 0, 0 },
-    };
-    spi_device_transmit(s_spi, &t);
+    spi_transaction_t *t = (spi_transaction_t *)calloc(1, sizeof(*t));
+    if (!t) return;   // OOM — drop this one write rather than block forever
+    t->length  = 8;
+    t->flags   = SPI_TRANS_USE_TXDATA;
+    t->tx_data[0] = cmd;
+    spi_transmit_bounded(t);
 }
 
 static void spi_write_data(const void *data, size_t len)
 {
     if (!len) return;
     gpio_set_level((gpio_num_t)s_pins.dc_pin, 1);
-    spi_transaction_t t = { .length = len * 8 };
+    spi_transaction_t *t = (spi_transaction_t *)calloc(1, sizeof(*t));
+    if (!t) return;   // OOM — drop this one write rather than block forever
+    t->length = len * 8;
     if (len <= 4) {
-        t.flags = SPI_TRANS_USE_TXDATA;
-        memcpy(t.tx_data, data, len);
+        t->flags = SPI_TRANS_USE_TXDATA;
+        memcpy(t->tx_data, data, len);
     } else {
-        t.flags     = 0;
-        t.tx_buffer = data;
+        t->flags     = 0;
+        t->tx_buffer = data;   // caller's own static buffer — see doc comment above
     }
-    spi_device_transmit(s_spi, &t);
+    spi_transmit_bounded(t);
 }
 
 static inline void spi_write_byte(uint8_t d) { spi_write_data(&d, 1); }
@@ -429,20 +486,26 @@ static esp_err_t st7789_init(const display_config_t *cfg)
     st7789_init_regs(madctl);
 
     // Clear GRAM before display on.
-    // Use DMA-capable heap buffer — static arrays are not safe for SPI DMA on S3.
+    // Reuses s_row_buf (static, zeroed here) rather than a heap-allocated-
+    // then-freed buffer — deliberate, not a downgrade: with bounded SPI
+    // transfers below, a timed-out transaction's descriptor may still be
+    // touched by the driver later, and a buffer freed immediately after
+    // this loop (the previous heap_caps_calloc()+free() pattern) would be
+    // a genuine use-after-free in that case. s_row_buf lives for the whole
+    // program, so it's always safe to reference even if a write to it
+    // times out. The ESP-IDF SPI driver already handles non-MALLOC_CAP_DMA
+    // source pointers transparently (an internal bounce-buffer copy — see
+    // spi_master.c's own tx_unaligned handling) so this isn't a
+    // correctness downgrade, and this path only runs once at boot.
     // Send DISPOFF first so the panel never shows un-cleared GRAM.
     spi_write_cmd(0x28); // DISPOFF
     vTaskDelay(pdMS_TO_TICKS(10));
     {
         const int ROW_BYTES = s_width * 2;
-        uint8_t *dma_buf = (uint8_t *)heap_caps_calloc(ROW_BYTES, 1,
-                                                        MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-        if (dma_buf) {
-            set_addr_window(0, 0, (uint16_t)(s_width - 1), (uint16_t)(s_height - 1));
-            for (int r = 0; r < s_height; r++) {
-                spi_write_data(dma_buf, (size_t)ROW_BYTES);
-            }
-            free(dma_buf);
+        memset(s_row_buf, 0, sizeof(s_row_buf));
+        set_addr_window(0, 0, (uint16_t)(s_width - 1), (uint16_t)(s_height - 1));
+        for (int r = 0; r < s_height; r++) {
+            spi_write_data(s_row_buf, (size_t)ROW_BYTES);
         }
     }
     s_ready = true;
@@ -461,9 +524,29 @@ static esp_err_t st7789_init(const display_config_t *cfg)
     return ESP_OK;
 }
 
+// set_addr_window() + the pixel-write loop below are together ONE logical
+// "draw this rect" operation on the chip — CASET, RASET, RAMWR, then every
+// row's data must land as one uninterrupted sequence, or the ST7789's
+// on-chip address-window state can be left inconsistent (a stray radio
+// transaction landing between CASET and RAMWR, say). Each individual
+// spi_write_cmd()/spi_write_data() call is already bounded on its own
+// (spi_transmit_bounded(), 200ms), but nothing previously stopped the
+// RADIO from interleaving a transaction of its OWN between any two of
+// these — the radio's EspHal.cpp does bracket ITS transfers with
+// spi_device_acquire_bus()/release_bus(), which incidentally serializes
+// against this driver too, but that's a one-sided guarantee from the
+// radio's side, not something this driver ever provided for its own
+// multi-transaction sequences. spi_device_acquire_bus(s_spi, ...) here
+// closes that gap directly, mirroring EspHal.cpp's own bracket pattern.
+// Every spi_write_cmd()/spi_write_data() call inside stays non-fatal on
+// its own timeout (neither returns a status this driver acts on), so the
+// only paths that need an explicit release are the existing return
+// statements below — nothing here bails out early on a failed transfer.
 static esp_err_t st7789_push_pixels(int x, int y, int w, int h, const uint16_t *data)
 {
     if (!s_ready || !data || w <= 0 || h <= 0) return ESP_ERR_INVALID_STATE;
+
+    spi_device_acquire_bus(s_spi, portMAX_DELAY);
 
     set_addr_window((uint16_t)x, (uint16_t)y,
                     (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
@@ -486,6 +569,7 @@ static esp_err_t st7789_push_pixels(int x, int y, int w, int h, const uint16_t *
             }
         }
         spi_write_data(s_bulk_buf, px * 2);
+        spi_device_release_bus(s_spi);
         return ESP_OK;
     }
 
@@ -496,9 +580,11 @@ static esp_err_t st7789_push_pixels(int x, int y, int w, int h, const uint16_t *
         }
         spi_write_data(s_row_buf, (size_t)(cols * 2));
     }
+    spi_device_release_bus(s_spi);
     return ESP_OK;
 }
 
+// See st7789_push_pixels()'s doc comment — same reasoning applies here.
 static esp_err_t st7789_fill_rect(int x, int y, int w, int h, uint16_t color)
 {
     if (!s_ready || w <= 0 || h <= 0) return ESP_ERR_INVALID_STATE;
@@ -507,11 +593,14 @@ static esp_err_t st7789_fill_rect(int x, int y, int w, int h, uint16_t color)
     uint16_t swapped = (uint16_t)((color >> 8) | (color << 8));
     for (int i = 0; i < cols; i++) s_row_buf[i] = swapped;
 
+    spi_device_acquire_bus(s_spi, portMAX_DELAY);
+
     set_addr_window((uint16_t)x, (uint16_t)y,
                     (uint16_t)(x + cols - 1), (uint16_t)(y + h - 1));
     for (int r = 0; r < h; r++) {
         spi_write_data(s_row_buf, (size_t)(cols * 2));
     }
+    spi_device_release_bus(s_spi);
     return ESP_OK;
 }
 

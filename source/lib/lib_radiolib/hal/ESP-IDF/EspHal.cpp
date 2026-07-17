@@ -18,6 +18,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
+#include <cstdlib>
+#include <cstring>
 #include <cinttypes> // For PRIu32
 
 // EspHal::delay() uses vTaskDelay(pdMS_TO_TICKS(ms)) for the bulk of the
@@ -218,8 +220,22 @@ void EspHal::spiBegin() {
            spiClockHz);
 }
 
+// REVERTED live tonight: removing spi_device_acquire_bus()'s exclusive
+// lock (see git history for the full reasoning — it was structurally
+// sound, RadioLib really does only wrap one spiTransfer() per begin/end
+// pair) made things measurably WORSE on real hardware, not better —
+// mesh_task started hitting the task watchdog in ~12s instead of the
+// 90-275s range every other fix tonight had reached. Best explanation:
+// acquire_bus() wasn't just unnecessary locking, it was also giving the
+// radio *guaranteed* bus access whenever it needed it. Without it, the
+// radio's transfers have to fairly contend with cupcake's own display
+// traffic (redrawing roughly every 5ms), and RadioLib's retry-heavy
+// BUSY-wait pattern apparently accumulates past the 4s task-watchdog
+// window under that honest contention alone — no wedge required. Back to
+// exclusive acquire + polling_transmit; the unbounded-wait risk this
+// carries is real (see the removed comment's own analysis) but evidently
+// still better in practice than losing the guaranteed-access property.
 void EspHal::spiBeginTransaction() {
-  // Acquire the SPI bus for this device
   if (spiDevice != nullptr) {
     spi_device_acquire_bus(spiDevice, portMAX_DELAY);
   }
@@ -247,7 +263,6 @@ void EspHal::spiTransfer(uint8_t *out, size_t len, uint8_t *in) {
 }
 
 void EspHal::spiEndTransaction() {
-  // Release the SPI bus
   if (spiDevice != nullptr) {
     spi_device_release_bus(spiDevice);
   }
@@ -374,12 +389,26 @@ void EspHal::noTone(uint32_t pin) {
 // A gap since the previous call (longer than the spin window) is treated
 // as a new, unrelated wait starting fresh, not a continuation.
 #define YIELD_SPIN_US 300
+// Deliberately much larger than YIELD_SPIN_US — this is what decides
+// whether a call is "still the same busy-wait, just a slower poll
+// iteration" vs. "a genuinely new, unrelated wait starting fresh". Using
+// YIELD_SPIN_US for both (the original bug here) meant any busy-wait loop
+// whose own iteration spacing approached 300us reset the window on every
+// single call, so `now - s_yield_first_call_us` was always ~0 and the
+// escalation to vTaskDelay(1) below could never actually trigger — silently
+// reintroducing the exact same-core CPU starvation of cupcake's UI task
+// this function exists to prevent, just gated on poll spacing instead of
+// wait length. 5ms is comfortably above any real per-iteration gap in this
+// project's busy-wait loops (BUSY-pin/IRQ polls check on the order of
+// microseconds) while still being far below the scale of an actual new,
+// unrelated wait starting later.
+#define YIELD_RESET_GAP_US 5000
 static int64_t s_yield_first_call_us = 0;
 static int64_t s_yield_last_call_us = 0;
 
 void EspHal::yield() {
   int64_t now = esp_timer_get_time();
-  if (s_yield_last_call_us == 0 || (now - s_yield_last_call_us) > YIELD_SPIN_US) {
+  if (s_yield_last_call_us == 0 || (now - s_yield_last_call_us) > YIELD_RESET_GAP_US) {
     s_yield_first_call_us = now;
   }
   s_yield_last_call_us = now;

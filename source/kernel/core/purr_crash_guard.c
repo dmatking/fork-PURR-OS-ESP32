@@ -340,18 +340,47 @@ void purr_crash_guard_check_reset_reason(void)
     size_t sz = sizeof(name);
     esp_err_t err = nvs_get_str(h, NVS_KEY_BREADCRUMB, name, &sz);
     nvs_close(h);
-    if (err != ESP_OK || name[0] == '\0') return;
+    bool have_breadcrumb = (err == ESP_OK && name[0] != '\0');
 
-    ESP_LOGW(TAG, "unclean reset (reason=%d) while '%s' was active", (int)r, name);
+    // No breadcrumb doesn't mean "nothing to do here" for the watchdog-
+    // class reasons specifically (PANIC/TASK_WDT/WDT/INT_WDT/CPU_LOCKUP —
+    // deliberately excluding BROWNOUT/PWR_GLITCH, which are power events
+    // with no task to blame). mesh_task/cupcake_task's own
+    // esp_task_wdt_add() subscriptions (see their own comments) don't go
+    // through mark_start()'s NVS breadcrumb — that's a per-iteration write
+    // and neither task's loop is a place to add flash wear/latency to. A
+    // TASK_WDT trip on THIS device only ever means one of those two tasks,
+    // so a generic "watchdog" fallback name is used instead of silently
+    // returning and losing the whole recovery signal.
+    bool watchdog_class = (r == ESP_RST_PANIC || r == ESP_RST_TASK_WDT ||
+                           r == ESP_RST_WDT || r == ESP_RST_INT_WDT ||
+                           r == ESP_RST_CPU_LOCKUP);
+    if (!have_breadcrumb && !watchdog_class) return;
+
+    const char *entity = have_breadcrumb ? name : "watchdog";
+    ESP_LOGW(TAG, "unclean reset (reason=%d) while '%s' was active", (int)r, entity);
 
     // Prefer whatever specific reason this entity was already struck for
     // (e.g. a breadcrumbed "UI TASK UNRESPONSIVE @ step" from mark_hang())
     // over the generic fallback — makes the *next* boot's recovery panic
     // say where, not just that something crashed.
     entry_t prev;
-    const char *reason = "unclean reset / hard crash";
-    if (load_entry(name, &prev) && prev.reason[0]) reason = prev.reason;
+    const char *reason = have_breadcrumb ? "unclean reset / hard crash"
+                                          : "task watchdog panic (see console backtrace)";
+    if (have_breadcrumb && load_entry(entity, &prev) && prev.reason[0]) reason = prev.reason;
 
-    record_strike_and_maybe_panic(name, reason, /*force_panic=*/false);
+    // Previously only record_strike_and_maybe_panic()'s force_panic branch
+    // (mark_hang()'s live-detection path) saved this — meaning a hang
+    // caught here instead (after the fact, via reset-reason inspection,
+    // which is the ONLY way a TWDT/panic reset can be attributed at all —
+    // there's no hook to run our own code before that kind of reset
+    // happens) left the *next* boot completely unprotected, running
+    // Phase 0's SD/display bring-up unbounded right after a boot that just
+    // proved the shared SPI2 bus can wedge. Confirmed live tonight: this
+    // exact gap let a hang-reboot-hang cascade run past what crash_guard's
+    // own bookkeeping could see. Saving it here closes that gap for both
+    // the breadcrumb-attributed case and the generic watchdog fallback.
+    save_pending_recovery(entity, reason);
+    record_strike_and_maybe_panic(entity, reason, /*force_panic=*/false);
     clear_breadcrumb();
 }

@@ -24,6 +24,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_mac.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -95,6 +96,20 @@ static void mesh_task(void *arg)
              (unsigned long)s_node_id, (unsigned long)freq_hz,
              MESH_SF, MESH_BW_HZ / 1000);
     purr_kernel_notify("Mesh ready", "Meshtastic mesh online", "meshtastic");
+
+    // Explicit self-subscribe, not the default idle-task watch (project-
+    // wide TWDT is off — see CoreOS/sdkconfig.defaults's own comment —
+    // specifically to avoid false positives from legitimately long boot/
+    // module-init sequences). This task is the other half of the fix: a
+    // real hang here (radio wedged on the shared SPI2 bus, same bus as
+    // display/SD) gets a full register/backtrace dump over the console
+    // before rebooting, instead of only ever showing up as a cupcake
+    // "UI TASK UNRESPONSIVE" symptom with no visibility into what mesh_task
+    // itself was actually doing. Timeout is set device-wide in
+    // sdkconfig_tdeck_plus.overrides, deliberately shorter than
+    // purr_kernel.c's own UI_HANG_THRESHOLD_MS so this wins the race and
+    // captures a real backtrace instead of crash_guard's blind reboot.
+    esp_task_wdt_add(NULL);
 
     // Announce ourselves on the mesh immediately, then on the interval above.
     uint32_t last_announce = (uint32_t)(esp_timer_get_time() / 1000ULL) - MESH_ANNOUNCE_INTERVAL_MS + 1000UL;
@@ -287,6 +302,7 @@ static void mesh_task(void *arg)
             }
         }
 
+        esp_task_wdt_reset();
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -475,6 +491,11 @@ int mesh_manager_init(void)
     // makes a PSRAM stack safe, not a requirement — an internal-RAM stack
     // is safe regardless (if anything, more so, since it doesn't share the
     // cache-disable hazard PSRAM access has).
+    // Tested forcing this to internal RAM this session as a diagnostic for
+    // possible PSRAM/DMA bus contention against cupcake_task's PSRAM+DMA
+    // display flushes — clean negative result (identical hang timing and
+    // signature with mesh_task fully off PSRAM), so back to the normal
+    // PSRAM-if-available rule.
     s_task_uses_psram_stack = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0;
     // Pinned to core 1 on both paths — deliberate, repo-wide grouping:
     // mesh_task/mc_task + the UI's own cupcake_task share core 1, while
@@ -485,9 +506,22 @@ int mesh_manager_init(void)
     // even its first log line without this); that rationale still holds
     // here, just now applied consistently to the PSRAM-caps path too
     // rather than being fallback-path-only.
+    //
+    // DIAGNOSTIC — priority bumped from 4 (same as cupcake_task) to 5.
+    // At equal priority, FreeRTOS time-slices between the two on their
+    // shared core, meaning the 1ms tick can preempt mesh_task mid-way
+    // through a held SPI bus lock and let cupcake_task try to touch the
+    // same bus before mesh_task's own critical section (acquire -> CS ->
+    // transfer -> CS -> release) has actually finished. A strictly higher
+    // priority means the scheduler never preempts mesh_task in favor of
+    // cupcake_task at all (only for an even-higher-priority task, and
+    // nothing else on this core is above 4) -- its own SPI sequence runs
+    // atomically instead. Testing whether this closes the still-
+    // unexplained SPI stall this project has chased all session. Revert
+    // to 4 if this doesn't change anything.
     BaseType_t ret = s_task_uses_psram_stack
-        ? xTaskCreatePinnedToCoreWithCaps(mesh_task, "meshtastic", 8192, NULL, 4, &s_task, 1, MALLOC_CAP_SPIRAM)
-        : xTaskCreatePinnedToCore(mesh_task, "meshtastic", 8192, NULL, 4, &s_task, 1);
+        ? xTaskCreatePinnedToCoreWithCaps(mesh_task, "meshtastic", 8192, NULL, 5, &s_task, 1, MALLOC_CAP_SPIRAM)
+        : xTaskCreatePinnedToCore(mesh_task, "meshtastic", 8192, NULL, 5, &s_task, 1);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "failed to create mesh task");
         return -1;

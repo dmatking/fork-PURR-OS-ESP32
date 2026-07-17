@@ -612,7 +612,7 @@ static int launch_native(app_entry_t *app, int idx)
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-int app_manager_scan(void)
+int app_manager_scan_ex(bool include_sd)
 {
     s_app_count = 0;
 
@@ -633,13 +633,31 @@ int app_manager_scan(void)
         s_app_count++;
     }
 
-    // Also scan filesystem paths for .meow / .paws / .claw files (SD extras)
+    // Also scan filesystem paths for .meow / .paws / .claw files (SD extras).
+    // scan_dir() has no timeout of its own — its opendir()/readdir() calls
+    // ride entirely on whatever bound the caller is under. include_sd=false
+    // (see app_manager_init()/kernel_tdp_boot.c's recovering-boot callers)
+    // skips "/sdcard/..." paths specifically: a hang-triggered reboot resets
+    // the ESP32 but not necessarily a still-degraded SD card/bus, and this
+    // was confirmed live as the source of app_manager repeatedly blowing its
+    // bounded module-init timeout during recovery boots, cascading into a
+    // reboot loop instead of ever actually recovering.
     for (int i = 0; s_scan_paths[i]; i++) {
+        if (!include_sd && strncmp(s_scan_paths[i], "/sdcard", 7) == 0) {
+            ESP_LOGW(TAG, "skipping SD app scan (%s) — recovering from a hang-triggered reboot",
+                     s_scan_paths[i]);
+            continue;
+        }
         scan_dir(s_scan_paths[i]);
     }
 
     ESP_LOGI(TAG, "scan complete: %d apps found", s_app_count);
     return s_app_count;
+}
+
+int app_manager_scan(void)
+{
+    return app_manager_scan_ex(true);
 }
 
 int app_manager_launch_idx(int idx)
@@ -939,7 +957,11 @@ int app_manager_init(void)
     memset(s_ctxs, 0, sizeof(app_task_ctx_t) * MAX_APPS);
     purr_kernel_set_window_created_cb(app_manager_on_window_created);
     purr_kernel_set_mem_pressure_cb(app_manager_kill_worst_offender);
-    app_manager_scan();
+    // See app_manager_scan_ex()'s comment — this call runs under
+    // load_one_static()'s own 5s bounded-init window on a recovering boot,
+    // with no timeout of its own around the SD readdir() calls otherwise.
+    bool recovering = purr_crash_guard_pending_recovery(NULL, 0, NULL, 0);
+    app_manager_scan_ex(!recovering);
     autorun_kitten();
     ESP_LOGI(TAG, "init complete");
     return 0;

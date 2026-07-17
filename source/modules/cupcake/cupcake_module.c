@@ -8,6 +8,7 @@
 #include "../../kernel/core/purr_kernel.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
@@ -52,10 +53,22 @@ static void cupcake_task(void *arg)
 
     cupcake_ui_init();
 
+    // Explicit self-subscribe, not the default idle-task watch — see
+    // mesh_task()'s matching comment in meshtastic_module.c for the full
+    // reasoning (project-wide TWDT is off by default specifically to avoid
+    // false positives from long boot/module-init sequences; this task
+    // opts in individually instead). cupcake_task is the one every UI hang
+    // tonight has ultimately surfaced as ("UI TASK UNRESPONSIVE @ ...") —
+    // this gets a real backtrace of whatever it's actually stuck in
+    // (lv_timer_handler, a widget callback, the shared-SPI-bus display
+    // driver itself) instead of just the breadcrumb string.
+    esp_task_wdt_add(NULL);
+
     uint32_t tick = 0;
     while (1) {
         purr_kernel_ui_lock();
         lv_tick_inc(5);
+        purr_kernel_ui_breadcrumb("timer_handler");
         int64_t t0 = esp_timer_get_time();
         lv_timer_handler();
         int64_t handler_us = esp_timer_get_time() - t0;
@@ -69,9 +82,14 @@ static void cupcake_task(void *arg)
             ESP_LOGW(TAG, "lv_timer_handler() took %lldms (tick=%lu)",
                      (long long)(handler_us / 1000), (unsigned long)tick);
         }
-        if (++tick % 40 == 0) cupcake_ui_tick();  // ~200ms
+        if (++tick % 40 == 0) {
+            purr_kernel_ui_breadcrumb("ui_tick");
+            cupcake_ui_tick();  // ~200ms
+        }
+        purr_kernel_ui_breadcrumb("idle");
         purr_kernel_ui_unlock();
         purr_kernel_ui_heartbeat();
+        esp_task_wdt_reset();
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
