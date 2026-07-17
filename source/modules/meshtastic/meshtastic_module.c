@@ -35,6 +35,7 @@
 #include <pb_decode.h>
 #include "meshtastic/portnums.pb.h"
 #include "meshtastic/mesh.pb.h"
+#include "meshtastic/telemetry.pb.h"
 
 static const char *TAG = "meshtastic";
 
@@ -65,6 +66,13 @@ static QueueHandle_t s_tx_queue = NULL;
 // (15 min), not the abbreviated "every 10 minutes" mentioned in the archived
 // plan doc; port from the real, working code, not the doc summary.
 #define MESH_ANNOUNCE_INTERVAL_MS (15UL * 60UL * 1000UL)
+
+// Backup-poll interval for mesh_task()'s interrupt-driven RX wait — matches
+// Meshtastic's own reasoning for keeping a slow poll even with a working
+// DIO1 interrupt (edge-triggered GPIO interrupts can miss an edge; see
+// sx1262_rl.cpp's ISR comment). Only used when the radio driver supports
+// wait_rx_signal(); a driver without it falls back to the old flat 10ms.
+#define MESH_RX_POLL_TIMEOUT_MS 500UL
 
 // ── Liveness heartbeat ────────────────────────────────────────────────────────
 // mesh_task() stamps this every loop iteration; mesh_manager_is_alive()
@@ -189,7 +197,7 @@ static void mesh_task(void *arg)
                 if (decoded) {
                     if (!mesh_router_dedup_seen(from, pkt_id)) {
                         mesh_router_dedup_add(from, pkt_id);
-                        mesh_router_node_touch(from, (int8_t)rssi, channel_idx);
+                        mesh_router_node_touch(from, (int8_t)rssi, channel_idx, hop_limit);
 
                         ESP_LOGI(TAG, "rx from=%08lX to=%08lX ch=%d port=%d len=%u rssi=%d snr=%.1f",
                                  (unsigned long)from, (unsigned long)to, channel_idx,
@@ -234,6 +242,21 @@ static void mesh_task(void *arg)
                                 if (user.public_key.size == 32) {
                                     mesh_router_node_set_pubkey(from, user.public_key.bytes);
                                 }
+                            }
+                        }
+
+                        // TELEMETRY_APP carries DeviceMetrics.battery_level
+                        // (0-100, >100 means "powered") among other metrics
+                        // this codebase doesn't track yet (voltage, channel/
+                        // air utilization — see mesh_router.h's node-list-
+                        // enrichment plan for what's actually consumed).
+                        if (portnum == (int)meshtastic_PortNum_TELEMETRY_APP) {
+                            meshtastic_Telemetry tm = meshtastic_Telemetry_init_zero;
+                            pb_istream_t ts = pb_istream_from_buffer(payload, payload_len);
+                            if (pb_decode(&ts, meshtastic_Telemetry_fields, &tm) &&
+                                tm.which_variant == meshtastic_Telemetry_device_metrics_tag &&
+                                tm.variant.device_metrics.has_battery_level) {
+                                mesh_router_node_set_battery(from, (uint8_t)tm.variant.device_metrics.battery_level);
                             }
                         }
 
@@ -303,7 +326,20 @@ static void mesh_task(void *arg)
         }
 
         esp_task_wdt_reset();
-        vTaskDelay(pdMS_TO_TICKS(10));
+
+        // Interrupt-driven wake instead of a flat vTaskDelay(10) — the
+        // radio's DIO1 ISR (sx1262_rl.cpp) signals this the moment a real
+        // RX event happens, so the unconditional every-10ms
+        // data_available() SPI transaction at the top of this loop only
+        // fires when something actually occurred, or MESH_RX_POLL_
+        // TIMEOUT_MS elapses as a backup-poll safety net (see that
+        // constant's own comment). Falls back to the exact old behavior
+        // if the active radio driver doesn't support wait_rx_signal.
+        if (!radio || !radio->wait_rx_signal) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } else {
+            radio->wait_rx_signal(MESH_RX_POLL_TIMEOUT_MS);
+        }
     }
 }
 
@@ -340,6 +376,14 @@ bool mesh_manager_send_text(uint32_t to, int channel_idx, const char *text)
         ESP_LOGW(TAG, "tx queue full — message dropped");
         return false;
     }
+    // mesh_task() may now be blocked in wait_rx_signal() for up to
+    // MESH_RX_POLL_TIMEOUT_MS with nothing queued — wake it immediately
+    // so this message doesn't sit for up to that long before it's
+    // actually drained and sent. Called from this task's own context
+    // (a UI button press), never an ISR, matching wake_rx_wait()'s
+    // contract.
+    const catcall_radio_t *radio = purr_kernel_radio();
+    if (radio && radio->wake_rx_wait) radio->wake_rx_wait();
     return true;
 }
 
@@ -398,11 +442,25 @@ int mesh_manager_node_at(int idx, mesh_node_info_t *out)
     out->rssi        = n->rssi;
     out->last_ms     = n->last_ms;
     out->channel_idx = n->channel_idx;
+    out->battery_pct = n->battery_pct;
+    // Approximation, not a real wire field — see mesh_node_t.hop_limit_at_
+    // last_heard's doc comment. 0 (never heard, hop_limit_at_last_heard
+    // still its zero-init default) reads as "0 hops away", indistinguishable
+    // from a genuine direct neighbor — acceptable since both cases show the
+    // same "no relay involved" meaning to the user.
+    out->hops_away = (n->hop_limit_at_last_heard <= MESH_HOP_LIMIT)
+                          ? (int)(MESH_HOP_LIMIT - n->hop_limit_at_last_heard) : 0;
     if (n->long_name[0]) {
         strncpy(out->long_name, n->long_name, sizeof(out->long_name) - 1);
         out->long_name[sizeof(out->long_name) - 1] = '\0';
     } else {
-        snprintf(out->long_name, sizeof(out->long_name), "!%08lX", (unsigned long)n->id);
+        // No NodeInfo heard from this node yet — "(pending)" makes clear
+        // this is a temporary placeholder that'll resolve to a real name
+        // once one arrives, not a garbled/broken ID. Keeps the hex handle
+        // alongside it (not replaced with a bare "Unknown") since it's
+        // still the only way to tell two not-yet-named nodes apart in a
+        // list.
+        snprintf(out->long_name, sizeof(out->long_name), "!%08lX (pending)", (unsigned long)n->id);
     }
     strncpy(out->short_name, n->short_name, sizeof(out->short_name) - 1);
     out->short_name[sizeof(out->short_name) - 1] = '\0';

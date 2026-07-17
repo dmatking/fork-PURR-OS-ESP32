@@ -146,30 +146,33 @@ void mesh_router_load_nodes(void)
             // "just seen" state for a node we haven't actually heard yet
             // this boot. Repopulated the instant it's heard again.
             for (int i = 0; i < s_nnode; i++) {
-                s_nodes[i].rssi    = 0;
-                s_nodes[i].last_ms = 0;
+                s_nodes[i].rssi                    = 0;
+                s_nodes[i].last_ms                 = 0;
+                s_nodes[i].hop_limit_at_last_heard = 0;
+                s_nodes[i].battery_pct             = -1;
             }
         }
     }
     nvs_close(h);
 }
 
-void mesh_router_node_touch(uint32_t id, int8_t rssi, int channel_idx)
+void mesh_router_node_touch(uint32_t id, int8_t rssi, int channel_idx, uint8_t hop_limit)
 {
     for (int i = 0; i < s_nnode; i++) {
         if (s_nodes[i].id == id) {
             // This runs on every single decoded packet from a known node —
-            // rssi/last_ms aren't even part of what gets persisted (reset
-            // on load, see mesh_router_load_nodes()'s comment), so saving
-            // here every time would mean an NVS write per packet on a busy
-            // mesh. Only channel_idx is persisted state, and only actually
-            // save when it *changes* (a node heard on a different channel
-            // than before) — the common case (same channel, every touch)
-            // costs nothing.
+            // rssi/last_ms/hop_limit_at_last_heard aren't even part of what
+            // gets persisted (reset on load, see mesh_router_load_nodes()'s
+            // comment), so saving here every time would mean an NVS write
+            // per packet on a busy mesh. Only channel_idx is persisted
+            // state, and only actually save when it *changes* (a node
+            // heard on a different channel than before) — the common case
+            // (same channel, every touch) costs nothing.
             bool channel_changed = s_nodes[i].channel_idx != channel_idx;
-            s_nodes[i].rssi        = rssi;
-            s_nodes[i].last_ms     = (uint32_t)(esp_timer_get_time() / 1000ULL);
-            s_nodes[i].channel_idx = channel_idx;
+            s_nodes[i].rssi                    = rssi;
+            s_nodes[i].last_ms                 = (uint32_t)(esp_timer_get_time() / 1000ULL);
+            s_nodes[i].channel_idx             = channel_idx;
+            s_nodes[i].hop_limit_at_last_heard = hop_limit;
             if (channel_changed) s_nodes_dirty = true;
             return;
         }
@@ -177,13 +180,31 @@ void mesh_router_node_touch(uint32_t id, int8_t rssi, int channel_idx)
     if (s_nnode < MAX_NODES) {
         // long_name/short_name start empty (static array, zero-initialized)
         // until a NodeInfo packet fills them in via node_set_name().
-        s_nodes[s_nnode].id          = id;
-        s_nodes[s_nnode].rssi        = rssi;
-        s_nodes[s_nnode].last_ms     = (uint32_t)(esp_timer_get_time() / 1000ULL);
-        s_nodes[s_nnode].channel_idx = channel_idx;
+        s_nodes[s_nnode].id                      = id;
+        s_nodes[s_nnode].rssi                    = rssi;
+        s_nodes[s_nnode].last_ms                 = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        s_nodes[s_nnode].channel_idx             = channel_idx;
+        s_nodes[s_nnode].hop_limit_at_last_heard = hop_limit;
+        s_nodes[s_nnode].battery_pct             = -1;   // unknown until a TELEMETRY_APP packet arrives
         s_nnode++;
         s_nodes_dirty = true;
     }
+}
+
+void mesh_router_node_set_battery(uint32_t id, uint8_t pct)
+{
+    for (int i = 0; i < s_nnode; i++) {
+        if (s_nodes[i].id == id) {
+            s_nodes[i].battery_pct = (int8_t)(pct > 100 ? 100 : pct);   // >100 on the wire means "powered", clamp for display
+            // Not persisted (s_nodes_dirty NOT set) — same staleness
+            // rationale as rssi/last_ms: this is live telemetry, not
+            // identity state worth an NVS write, and it's reset to -1 on
+            // every load anyway (see mesh_router_load_nodes()).
+            return;
+        }
+    }
+    // See mesh_router_node_set_name()'s matching comment — node_touch()
+    // always runs first for every decoded packet, including this one.
 }
 
 void mesh_router_node_set_name(uint32_t id, const char *long_name, const char *short_name)

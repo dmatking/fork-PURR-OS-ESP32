@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "esp_err.h"
 
-#define CATCALL_RADIO_VERSION 2
+#define CATCALL_RADIO_VERSION 3
 
 typedef struct {
     uint32_t frequency_hz;
@@ -33,4 +33,19 @@ typedef struct {
     esp_err_t  (*set_modulation)(uint8_t sf, uint32_t bw_hz, uint8_t cr);
     esp_err_t  (*set_sync_word)(uint8_t sync);
     esp_err_t  (*deinit)(void);
+    // Optional — NULL if the driver doesn't support it, in which case the
+    // caller must fall back to its own fixed-interval polling. Blocks up
+    // to timeout_ms waiting for an RX-ready signal (e.g. a radio IRQ pin
+    // edge), returning true if signaled, false on timeout. Lets a poll
+    // loop wait on a real hardware event instead of unconditionally
+    // re-checking data_available() (a full SPI transaction) on a fixed
+    // short interval — see sx1262_rl.cpp's implementation and
+    // meshtastic_module.c's mesh_task() for the reference use.
+    bool       (*wait_rx_signal)(uint32_t timeout_ms);
+    // Optional — NULL if unsupported. Wakes a task currently blocked in
+    // wait_rx_signal() immediately, without waiting for its timeout —
+    // used when something OTHER than an RX event needs that task to run
+    // again promptly (e.g. a newly-queued outgoing message). Safe to call
+    // from normal task context only, not from an ISR.
+    void       (*wake_rx_wait)(void);
 } catcall_radio_t;

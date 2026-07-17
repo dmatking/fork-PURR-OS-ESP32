@@ -15,6 +15,15 @@ extern "C" {
 
 #define MSN_LAST_SEEN_UNKNOWN 0xFFFFFFFFu
 
+// Sentinels for the three fields below — MeshCore's protocol doesn't carry
+// any of them (mc_contact_info_t has no rssi/hop/telemetry fields at all,
+// confirmed by reading meshcore_api.h), so its backend always reports
+// "unknown" via these; meshtastic's backend reports real values whenever
+// mesh_node_info_t has them.
+#define MSN_RSSI_UNKNOWN     (-128)   // out of any real dBm range (~-30 to -120)
+#define MSN_HOPS_UNKNOWN     (-1)
+#define MSN_BATTERY_UNKNOWN  (-1)
+
 typedef struct {
     char     id_str[24];   // stable string key (SD history path component) —
                             // hex node id (meshtastic) or hex pubkey prefix (meshcore)
@@ -27,6 +36,11 @@ typedef struct {
                                  // for meshcore) so msn.c can format an
                                  // "(online)"/"(Nm ago)" suffix generically
                                  // without knowing either clock's semantics.
+    int8_t   rssi_dbm;     // MSN_RSSI_UNKNOWN if not available.
+    int      hops_away;    // MSN_HOPS_UNKNOWN if not available (see
+                            // mesh_router.h's doc comment on how meshtastic
+                            // approximates this — it's not a real wire field).
+    int8_t   battery_pct;  // 0-100, MSN_BATTERY_UNKNOWN if not available.
 } msn_contact_t;
 
 // channel_idx == -1 means the message was a direct message (from/to a contact),

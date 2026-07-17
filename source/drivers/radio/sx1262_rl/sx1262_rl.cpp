@@ -19,6 +19,7 @@
 extern "C" {
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "driver/spi_master.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -89,6 +90,51 @@ static SX1262 *s_radio  = nullptr;
 static float s_last_rssi;
 static float s_last_snr;
 
+// ── Interrupt-driven RX signal ───────────────────────────────────────────
+//
+// meshtastic_module.c's mesh_task() used to poll data_available() (a real
+// SPI getIrqFlags() transaction) unconditionally every 10ms, forever —
+// confirmed this session, via a direct comparison against Meshtastic's own
+// official firmware (which runs stably on this same shared-SPI2-bus
+// hardware), that this is a large, unforced source of SPI traffic/bus
+// contention their reference design doesn't have: they wake a worker task
+// off a DIO1 GPIO edge interrupt instead, only touching the radio via SPI
+// when something actually happened. This is the PURR-OS side of that same
+// pattern — sx1262_rl_wait_rx_signal() below is what mesh_task() now
+// blocks on instead of a flat vTaskDelay(10).
+//
+// The ISR itself must never touch SPI/RadioLib state (mesh_task() does
+// all the actual SPI work, same as before) and must only call ISR-safe
+// FreeRTOS primitives — xSemaphoreGiveFromISR(), not mesh_radio_lock()'s
+// blocking xSemaphoreTake(..., portMAX_DELAY), which is illegal from
+// interrupt context.
+static SemaphoreHandle_t s_rx_sem = nullptr;
+
+static void IRAM_ATTR sx1262_rl_dio1_isr(void)
+{
+    BaseType_t woken = pdFALSE;
+    xSemaphoreGiveFromISR(s_rx_sem, &woken);
+    portYIELD_FROM_ISR(woken);
+}
+
+extern "C" bool sx1262_rl_wait_rx_signal(uint32_t timeout_ms)
+{
+    if (!s_rx_sem) return false;
+    return xSemaphoreTake(s_rx_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+// Task-context-only wake — see catcall_radio_t.wake_rx_wait's doc comment.
+// A plain xSemaphoreGive() (not the ISR variant) is correct here since
+// this is only ever called from a normal task (e.g. mesh_manager_send_
+// text(), itself called from a UI button press), never from interrupt
+// context. Reuses the same semaphore as the RX ISR — mesh_task() doesn't
+// need to know WHY it woke up, only that it should go check both RX and
+// its TX queue again.
+extern "C" void sx1262_rl_wake_rx_wait(void)
+{
+    if (s_rx_sem) xSemaphoreGive(s_rx_sem);
+}
+
 static uint8_t clamp_coding_rate(uint8_t cr)
 {
     // catcall_radio_t uses 5..8 for CR4/5..CR4/8 — same raw convention
@@ -144,6 +190,21 @@ static esp_err_t sx1262_rl_init(const radio_config_t *cfg)
         ESP_LOGE(TAG, "startReceive() failed, code %d", state);
         return ESP_FAIL;
     }
+
+    // Attached AFTER startReceive() succeeds, not before — starting RX
+    // clears stale on-chip interrupt-pending bits (confirmed via
+    // Meshtastic's own SX126xInterface::startReceive(), which documents
+    // this exact ordering requirement), so attaching the host-side GPIO
+    // interrupt first risks it firing once immediately on leftover stale
+    // state. This is a one-time host-side GPIO attach (EspHal::
+    // attachInterrupt() -> gpio_isr_handler_add()) — subsequent
+    // startReceive() re-arms elsewhere in this file (set_frequency etc.)
+    // only touch the on-chip IRQ mask over SPI, they don't need to redo
+    // this attach.
+    if (!s_rx_sem) {
+        s_rx_sem = xSemaphoreCreateBinary();
+    }
+    s_radio->setDio1Action(sx1262_rl_dio1_isr);
 
     ESP_LOGI(TAG, "init OK (RadioLib)  freq=%luHz SF%u BW%lu CR4/%u pwr=%ddBm tcxo=%.1fV",
              (unsigned long)freq_hz, sf, (unsigned long)(bw_hz / 1000), cr, power,
@@ -290,6 +351,8 @@ static const catcall_radio_t s_catcall = {
     .set_modulation  = sx1262_rl_set_modulation,
     .set_sync_word   = sx1262_rl_set_sync_word,
     .deinit          = sx1262_rl_deinit,
+    .wait_rx_signal  = sx1262_rl_wait_rx_signal,
+    .wake_rx_wait    = sx1262_rl_wake_rx_wait,
 };
 
 // ── Module lifecycle ──────────────────────────────────────────────────────

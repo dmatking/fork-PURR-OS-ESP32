@@ -464,7 +464,7 @@ static purr_wid_t ck_list_create(purr_win_t h, uint16_t w_pct, uint16_t h_pct) {
 // mutation always happens from the one task already driving lv_timer_handler()
 // and its indev reads, never interleaved with an in-flight gesture on the
 // same object from a different task.
-typedef struct { purr_wid_t wid; const char **items; int count; } list_set_ctx_t;
+typedef struct { purr_wid_t wid; const char **items; const char **icons; int count; } list_set_ctx_t;
 
 static void ck_list_set_items_async_cb(void *user) {
     list_set_ctx_t *sctx = (list_set_ctx_t *)user;
@@ -474,7 +474,8 @@ static void ck_list_set_items_async_cb(void *user) {
         lv_obj_clean(list);
         s_list_meta[sctx->wid - 1].selected_idx = -1;
         for (int i = 0; i < sctx->count; i++) {
-            lv_obj_t *btn = lv_list_add_btn(list, NULL, (sctx->items && sctx->items[i]) ? sctx->items[i] : "");
+            const char *icon = (sctx->icons && sctx->icons[i]) ? sctx->icons[i] : NULL;
+            lv_obj_t *btn = lv_list_add_btn(list, icon, (sctx->items && sctx->items[i]) ? sctx->items[i] : "");
             cb_ctx_t *ctx = heap_caps_malloc(sizeof(cb_ctx_t), MALLOC_CAP_DEFAULT);
             if (ctx) {
                 ctx->cb = NULL;
@@ -488,14 +489,29 @@ static void ck_list_set_items_async_cb(void *user) {
     heap_caps_free(sctx);
 }
 
-static void ck_list_set_items(purr_wid_t wid, const char **items, int count) {
+static void ck_list_set_items_ex(purr_wid_t wid, const char **items, const char **icons, int count) {
     if (wid < 1 || wid > MAX_WIDS) return;
     list_set_ctx_t *sctx = heap_caps_malloc(sizeof(list_set_ctx_t), MALLOC_CAP_DEFAULT);
     if (!sctx) return;
     sctx->wid = wid;
     sctx->items = items;
+    sctx->icons = icons;
     sctx->count = count;
     lv_async_call(ck_list_set_items_async_cb, sctx);
+}
+
+static void ck_list_set_items(purr_wid_t wid, const char **items, int count) {
+    ck_list_set_items_ex(wid, items, NULL, count);
+}
+
+// icons[i] is an LV_SYMBOL_* string constant (a font glyph baked into
+// LVGL's own symbol font, not a bitmap asset) or NULL for no icon, matching
+// lv_list_add_btn()'s own (list, icon, txt) shape. See cupcake.h's doc
+// comment on the caller-facing contract, including the same deferred-
+// rebuild lifetime requirement as items — both arrays must stay valid
+// until the next lv_timer_handler() tick actually consumes them.
+void cupcake_win_list_set_items_icon(purr_wid_t wid, const char **items, const char **icons, int count) {
+    ck_list_set_items_ex(wid, items, icons, count);
 }
 
 static void ck_list_clear(purr_wid_t wid) {
