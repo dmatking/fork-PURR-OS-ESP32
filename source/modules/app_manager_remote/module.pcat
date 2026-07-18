@@ -1,0 +1,15 @@
+# modules/app_manager_remote/module.pcat
+# Responder side of the Remote Apps (Milkbar) protocol — lets a paired
+# device list/launch/stop THIS device's apps over proximity_rpc. Separate
+# from app_manager itself so devices without WiFi/proximity_rpc never pull
+# this in; auto-added by purrstrap.py's apply_radio_companion_defaults()
+# alongside proximity/pairing/proximity_rpc.
+
+name              = "app_manager_remote"
+version           = "1.0.0"
+module_type       = "PURR_MOD_SYSTEM"
+kernel_min        = "0.11.1"
+kernel_max        = ""
+
+provides          = ["app_manager_remote"]
+required_catcalls = []

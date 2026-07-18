@@ -52,9 +52,13 @@ static const char *TAG = "cupcake_ui";
 // buttons) clear of the status hotzone and nav bar.
 #define CUPCAKE_STATUS_EXPANDED_H 220
 #define MAX_LAUNCHER_TILES 64
-// Icon-only, no name label underneath — "small squares", deliberately
-// smaller than Cupcake's old 136x80 icon+label drawer tiles they replace.
-#define LP_LAUNCHER_TILE   64
+// Small square + a name label underneath — most apps share the same
+// fallback icon (icon_for_app()'s tools-icon default), so without a label
+// the "All Apps" grid is unreadable beyond the handful of apps with a real
+// bundled icon. Width stays the old icon-only 64px; height grows to fit
+// one line of label text below the icon.
+#define LP_LAUNCHER_TILE_W  64
+#define LP_LAUNCHER_TILE_H  84
 #define LP_NAVBTN_SIZE     32
 
 // Home-screen-only favorites row (2 apps, apps-launcher button, 2 more apps)
@@ -272,14 +276,13 @@ static void lp_navbar_recents_click_cb(lv_event_t *e)
     lp_recents_open();
 }
 
-// Icon-only square tile, used by the Lollipop launcher's scrollable grid —
-// deliberately no name label (see LP_LAUNCHER_TILE's comment: "small
-// squares", the thing distinguishing this from Cupcake's old drawer tiles).
+// Icon + name-label tile, used by the Lollipop launcher's scrollable grid —
+// see LP_LAUNCHER_TILE_W/_H's comment for why the label was added back.
 static void build_lp_launcher_tile(lv_obj_t *parent, int app_idx, const char *name, lv_event_cb_t click_cb)
 {
     lv_obj_t *tile = lv_obj_create(parent);
     lv_obj_remove_style_all(tile);
-    lv_obj_set_size(tile, LP_LAUNCHER_TILE, LP_LAUNCHER_TILE);
+    lv_obj_set_size(tile, LP_LAUNCHER_TILE_W, LP_LAUNCHER_TILE_H);
     lv_obj_set_style_radius(tile, 10, 0);
     lv_obj_set_style_bg_color(tile, cupcake_tint_color(name, 0x18), 0);
     lv_obj_set_style_bg_opa(tile, LV_OPA_60, 0); // lets a wallpaper show through behind icons
@@ -290,8 +293,18 @@ static void build_lp_launcher_tile(lv_obj_t *parent, int app_idx, const char *na
     lv_obj_t *icon = lv_img_create(tile);
     lv_img_set_src(icon, icon_for_app(name));
     lv_img_set_zoom(icon, ICON_ZOOM(ICON_PX_LAUNCHER));
-    lv_obj_center(icon);
+    lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 6);
     lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *lbl = lv_label_create(tile);
+    lv_label_set_text(lbl, name);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(lbl, LP_LAUNCHER_TILE_W - 6);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
 }
 
 // Round button with a centered LVGL built-in symbol glyph (LV_SYMBOL_*),

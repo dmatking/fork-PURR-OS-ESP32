@@ -77,6 +77,19 @@ typedef struct {
 const msn_backend_t *msn_backend_meshtastic(void);  // msn_backend_meshtastic.c
 const msn_backend_t *msn_backend_meshcore(void);    // msn_backend_meshcore.c
 
+// ── Home-base relay status/control (msn_backend_meshtastic.c only, this
+// pass — see homebase.h and the home-base relay plan) ──────────────────────
+// backend_send_text() in msn_backend_meshtastic.c automatically relays
+// through the paired home base (when in range) instead of sending on the
+// local radio; these let msn.c's chooser UI show that state and offer a
+// manual "Force local radio" override. Free functions rather than vtable
+// entries because this is scoped to the Meshtastic backend only this pass
+// (see the plan) — MeshCore relay would extend msn_backend_meshcore.c and
+// this same small API later, not the vtable itself.
+bool msn_mt_relay_is_active(void);         // true if the NEXT send would go through the home base right now
+void msn_mt_relay_set_force_local(bool force);
+bool msn_mt_relay_get_force_local(void);
+
 #ifdef __cplusplus
 }
 #endif

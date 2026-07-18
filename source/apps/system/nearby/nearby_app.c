@@ -26,11 +26,17 @@
 
 #define REFRESH_MS 2000
 #define MAX_ROWS   PROXIMITY_MAX_DEVICES
+#define MAX_PAIRED_ROWS PAIRING_MAX_DEVICES
 
 static purr_win_t s_win        = 0;
 static purr_wid_t s_list       = 0;
 static purr_wid_t s_status_lbl = 0;
-static purr_wid_t s_pair_status_lbl = 0;
+// Trust-list display — was a single "Paired with: X" label back when only
+// one device could be paired at a time; now a proper list (see pairing.h's
+// multi-device trust list) so "Unpair" can act on whichever row is
+// selected instead of always the one-and-only pairing.
+static purr_wid_t s_paired_list      = 0;
+static purr_wid_t s_paired_status_lbl = 0;
 
 // Pairing confirm dialog (initiator side) — open while pairing_get_state()
 // == PAIRING_STATE_PENDING_OUTGOING, mirrors msn.c's own backend-switch
@@ -51,6 +57,9 @@ static SemaphoreHandle_t s_refresh_done = NULL;
 
 static char        s_row_bufs[MAX_ROWS][64];
 static const char *s_row_ptrs[MAX_ROWS];
+
+static char        s_paired_row_bufs[MAX_PAIRED_ROWS][32];
+static const char *s_paired_row_ptrs[MAX_PAIRED_ROWS];
 
 static void close_pair_dialog(void) {
     if (s_pair_win) {
@@ -96,16 +105,21 @@ static void refresh(void) {
         close_pair_dialog();
     }
 
-    if (s_pair_status_lbl) {
-        if (pairing_is_paired()) {
-            char name[20];
-            pairing_get_paired_name(name, sizeof(name));
-            char buf[48];
-            snprintf(buf, sizeof(buf), "Paired with: %s", name);
-            purr_win_label_set(s_pair_status_lbl, buf);
-        } else {
-            purr_win_label_set(s_pair_status_lbl, "Not paired");
-        }
+    int paired_n = pairing_device_count();
+    if (paired_n > MAX_PAIRED_ROWS) paired_n = MAX_PAIRED_ROWS;
+    for (int i = 0; i < paired_n; i++) {
+        paired_device_t pd;
+        if (!pairing_device_at(i, &pd)) { paired_n = i; break; }
+        snprintf(s_paired_row_bufs[i], sizeof(s_paired_row_bufs[i]), "%s%s",
+                 pd.name, pairing_is_home_base(pd.mac) ? "  [home]" : "");
+        s_paired_row_ptrs[i] = s_paired_row_bufs[i];
+    }
+    if (s_paired_list) purr_win_list_set_items(s_paired_list, s_paired_row_ptrs, paired_n);
+
+    if (s_paired_status_lbl) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Paired devices: %d", paired_n);
+        purr_win_label_set(s_paired_status_lbl, buf);
     }
 }
 
@@ -143,7 +157,12 @@ static void open_pair_dialog(const char *peer_name) {
 // such constraint).
 static void on_pair_click(purr_wid_t w, purr_event_t e, void *user) {
     (void)w; (void)e; (void)user;
-    if (pairing_get_state() != PAIRING_STATE_NONE) return;   // already paired/pending — Unpair first
+    // Only mid-negotiation blocks starting a new one — already having
+    // other paired devices doesn't (pairing_start() enforces the same
+    // rule; this is just an early UI-side bail so on_pair_click() doesn't
+    // even try).
+    pairing_state_t st = pairing_get_state();
+    if (st != PAIRING_STATE_NONE && st != PAIRING_STATE_PAIRED) return;
 
     int idx = purr_win_list_get_selected(s_list);
     if (idx < 0) return;
@@ -159,7 +178,28 @@ static void on_pair_click(purr_wid_t w, purr_event_t e, void *user) {
 
 static void on_unpair_click(purr_wid_t w, purr_event_t e, void *user) {
     (void)w; (void)e; (void)user;
-    pairing_unpair();
+    int idx = purr_win_list_get_selected(s_paired_list);
+    if (idx < 0) return;
+    paired_device_t pd;
+    if (!pairing_device_at(idx, &pd)) return;
+    pairing_forget(pd.mac);
+    refresh();
+}
+
+// Toggles: selecting the current home base clears it, selecting any other
+// paired row makes it the new one (pairing_set_home_base() only allows one
+// at a time — see pairing.h).
+static void on_set_home_base_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    int idx = purr_win_list_get_selected(s_paired_list);
+    if (idx < 0) return;
+    paired_device_t pd;
+    if (!pairing_device_at(idx, &pd)) return;
+    if (pairing_is_home_base(pd.mac)) {
+        pairing_clear_home_base();
+    } else {
+        pairing_set_home_base(pd.mac);
+    }
     refresh();
 }
 
@@ -192,10 +232,12 @@ static int nearby_app_init(void) {
     purr_win_button(s_win, "Refresh", on_refresh_click, NULL);
     purr_win_button(s_win, "Pair", on_pair_click, NULL);
     purr_win_button(s_win, "Unpair", on_unpair_click, NULL);
+    purr_win_button(s_win, "Set Home", on_set_home_base_click, NULL);
     purr_win_layout_end(row);
 
-    s_list = purr_win_list(s_win, 100, 60);
-    s_pair_status_lbl = purr_win_label(s_win, "Not paired");
+    s_list = purr_win_list(s_win, 100, 40);
+    s_paired_status_lbl = purr_win_label(s_win, "Paired devices: 0");
+    s_paired_list = purr_win_list(s_win, 100, 20);
 
     refresh();
     purr_win_show(s_win);
@@ -218,7 +260,8 @@ static void nearby_app_deinit(void) {
 
     close_pair_dialog();
     purr_win_destroy(s_win);
-    s_win = 0; s_list = 0; s_status_lbl = 0; s_pair_status_lbl = 0;
+    s_win = 0; s_list = 0; s_status_lbl = 0;
+    s_paired_list = 0; s_paired_status_lbl = 0;
 }
 
 // ── Module header ─────────────────────────────────────────────────────────

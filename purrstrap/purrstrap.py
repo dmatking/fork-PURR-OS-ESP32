@@ -230,12 +230,17 @@ def apply_radio_companion_defaults(cfg):
         return cfg
 
     for key, val in (("modules.proximity", "proximity"), ("modules.pairing", "pairing"),
-                      ("flash.proximity", "2"), ("flash.pairing", "2")):
+                      ("modules.proximity_rpc", "proximity_rpc"),
+                      ("modules.app_manager_remote", "app_manager_remote"),
+                      ("modules.homebase", "homebase"),
+                      ("modules.msn_relay", "msn_relay"),
+                      ("flash.proximity", "2"), ("flash.pairing", "2"), ("flash.proximity_rpc", "2"),
+                      ("flash.app_manager_remote", "2"), ("flash.homebase", "2"), ("flash.msn_relay", "2")):
         cfg.setdefault(key, val)
 
     if cfg.get("modules.ui", "") in PURR_WIN_UI_BACKENDS:
-        for key, val in (("apps.msn", "true"), ("apps.nearby", "true"),
-                          ("flash.apps/msn", "3"), ("flash.apps/nearby", "3")):
+        for key, val in (("apps.msn", "true"), ("apps.nearby", "true"), ("apps.milkbar", "true"),
+                          ("flash.apps/msn", "3"), ("flash.apps/nearby", "3"), ("flash.apps/milkbar", "3")):
             cfg.setdefault(key, val)
     return cfg
 

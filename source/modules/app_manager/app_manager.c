@@ -946,10 +946,23 @@ static bool app_manager_kill_worst_offender(void)
 
 int app_manager_init(void)
 {
+    // PSRAM-preferred, internal-RAM fallback — PSRAM-less devices (e.g.
+    // Heltec V3, psram=false) have no MALLOC_CAP_SPIRAM pool at all, so a
+    // hard SPIRAM-only allocation here failed unconditionally and disabled
+    // this module via the crash guard after a few boots. Same fallback
+    // pattern as proximity_rpc.c's reassembly buffers. Note this only
+    // covers app_manager's own bookkeeping tables — app task stacks below
+    // (xTaskCreatePinnedToCoreWithCaps(..., MALLOC_CAP_SPIRAM)) still
+    // require real PSRAM per-app (except settings/fileman's static
+    // stacks), so launching most apps on a PSRAM-less device remains
+    // unsupported; only enough to let app_manager itself come up and
+    // answer queries like the app list.
     s_apps = heap_caps_malloc(sizeof(app_entry_t) * MAX_APPS, MALLOC_CAP_SPIRAM);
+    if (!s_apps) s_apps = heap_caps_malloc(sizeof(app_entry_t) * MAX_APPS, MALLOC_CAP_DEFAULT);
     s_ctxs = heap_caps_malloc(sizeof(app_task_ctx_t) * MAX_APPS, MALLOC_CAP_SPIRAM);
+    if (!s_ctxs) s_ctxs = heap_caps_malloc(sizeof(app_task_ctx_t) * MAX_APPS, MALLOC_CAP_DEFAULT);
     if (!s_apps || !s_ctxs) {
-        ESP_LOGE(TAG, "PSRAM alloc failed for s_apps/s_ctxs (%u + %u bytes)",
+        ESP_LOGE(TAG, "alloc failed for s_apps/s_ctxs (%u + %u bytes)",
                  (unsigned)(sizeof(app_entry_t) * MAX_APPS), (unsigned)(sizeof(app_task_ctx_t) * MAX_APPS));
         return -1;
     }

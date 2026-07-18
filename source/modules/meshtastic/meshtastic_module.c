@@ -117,7 +117,16 @@ static void mesh_task(void *arg)
     // sdkconfig_tdeck_plus.overrides, deliberately shorter than
     // purr_kernel.c's own UI_HANG_THRESHOLD_MS so this wins the race and
     // captures a real backtrace instead of crash_guard's blind reboot.
+    //
+    // #ifdef CONFIG_ESP_TASK_WDT_EN, not unconditional — this file is
+    // shared across every device with the meshtastic module, and TWDT is
+    // currently only opted into per-device via that device's own sdkconfig
+    // overrides (T-Deck Plus's, specifically) — esp_task_wdt_add()/_reset()
+    // aren't even linkable when a target hasn't enabled it (confirmed live
+    // building for Heltec, which doesn't have the override yet).
+#ifdef CONFIG_ESP_TASK_WDT_EN
     esp_task_wdt_add(NULL);
+#endif
 
     // Announce ourselves on the mesh immediately, then on the interval above.
     uint32_t last_announce = (uint32_t)(esp_timer_get_time() / 1000ULL) - MESH_ANNOUNCE_INTERVAL_MS + 1000UL;
@@ -325,7 +334,9 @@ static void mesh_task(void *arg)
             }
         }
 
+#ifdef CONFIG_ESP_TASK_WDT_EN
         esp_task_wdt_reset();
+#endif
 
         // Interrupt-driven wake instead of a flat vTaskDelay(10) — the
         // radio's DIO1 ISR (sx1262_rl.cpp) signals this the moment a real

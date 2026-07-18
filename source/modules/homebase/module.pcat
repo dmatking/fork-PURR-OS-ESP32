@@ -1,0 +1,16 @@
+# modules/homebase/module.pcat
+# Tracks whether the paired "home base" device (see pairing.h's
+# pairing_set_home_base()) is currently in proximity range, and notifies on
+# each connect/disconnect transition. Sole consumer today is MSN's
+# Meshtastic backend (source/apps/system/msn/msn_backend_meshtastic.c),
+# which reads homebase_is_present() to decide whether to relay a send
+# through the home base or use the local radio.
+
+name              = "homebase"
+version           = "1.0.0"
+module_type       = "PURR_MOD_SYSTEM"
+kernel_min        = "0.11.1"
+kernel_max        = ""
+
+provides          = ["homebase"]
+required_catcalls = []

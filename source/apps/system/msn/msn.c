@@ -70,6 +70,7 @@ static const msn_backend_t *s_backend = NULL;
 static purr_win_t s_chooser_win        = 0;
 static purr_wid_t s_meshtastic_status  = 0;
 static purr_wid_t s_meshcore_status    = 0;
+static purr_wid_t s_force_local_status = 0;
 static purr_win_t s_switch_confirm_win = 0;
 static purr_wid_t s_switch_confirm_lbl = 0;
 static purr_mesh_backend_t s_pending_switch_target;
@@ -378,6 +379,20 @@ static void refresh_status_label(void) {
             size_t len = strlen(buf);
             snprintf(buf + len, sizeof(buf) - len, "  %s", signal_bars(best_rssi));
         }
+        // Home-base relay indicator (Meshtastic backend only, this pass —
+        // see msn_backend.h's msn_mt_relay_is_active()) — makes the
+        // automatic handoff visible without requiring the user to check
+        // anywhere else. Refreshed every buddy_refresh_task() tick (10s),
+        // same cadence as the rest of this label.
+        if (s_backend == msn_backend_meshtastic() && msn_mt_relay_is_active()) {
+            size_t len = strlen(buf);
+            snprintf(buf + len, sizeof(buf) - len, "  [via home base]");
+            // Contact count above already reflects the home base's own
+            // node table at this point (backend_contact_count() switches
+            // automatically — see msn_backend_meshtastic.c's Phase D2
+            // additions), so no separate "remote view" wording is needed;
+            // the node count itself is the fresh-slate signal.
+        }
         purr_win_label_set(s_status_lbl, buf);
     }
 }
@@ -389,9 +404,38 @@ static void on_refresh_click(purr_wid_t w, purr_event_t e, void *user) {
     refresh_status_label();
 }
 
+// Defined further down (Manage section) — reused here for the remote-mode
+// transition below, forward-declared to avoid reordering the file.
+static void reset_all_buddy_windows(void);
+static void reset_all_room_windows(void);
+
+// True the last time we checked — compared against msn_mt_relay_is_active()
+// each tick to detect the home-base connect/disconnect edge (Phase D2:
+// "fresh slate" remote view). Meshtastic-only, matching msn_mt_relay_*()'s
+// own scope this pass — MeshCore's chooser slot never flips this.
+static bool s_was_remote = false;
+
+static void check_remote_transition(void) {
+    if (s_backend != msn_backend_meshtastic()) return;
+    bool now_remote = msn_mt_relay_is_active();
+    if (now_remote == s_was_remote) return;
+    s_was_remote = now_remote;
+
+    // Contact/channel table indices now mean something entirely different
+    // (home base's own vs. this device's own) — any already-open chat/room
+    // window is showing content keyed to a now-stale index. Same hazard
+    // (and same fix) as on_forget_node()/on_forget_room()'s own comment.
+    reset_all_buddy_windows();
+    reset_all_room_windows();
+    refresh_buddy_list();
+    refresh_room_list();
+    refresh_status_label();
+}
+
 static void buddy_refresh_task(void *arg) {
     (void)arg;
     while (s_running) {
+        check_remote_transition();
         refresh_buddy_list();
         refresh_room_list();
         refresh_status_label();
@@ -866,13 +910,25 @@ static void update_chooser_status(void) {
     bool mc_active = purr_kernel_get_module("meshcore") != NULL;
     if (s_meshtastic_status) purr_win_label_set(s_meshtastic_status, mt_active ? "* active" : "");
     if (s_meshcore_status)   purr_win_label_set(s_meshcore_status,   mc_active ? "* active" : "");
+    if (s_force_local_status) {
+        purr_win_label_set(s_force_local_status, msn_mt_relay_get_force_local() ? "* ON" : "");
+    }
 }
 
 static void close_chooser(void) {
     if (s_chooser_win) {
         purr_win_destroy(s_chooser_win);
         s_chooser_win = 0; s_meshtastic_status = 0; s_meshcore_status = 0;
+        s_force_local_status = 0;
     }
+}
+
+// Manual override for the automatic home-base relay (msn_backend_
+// meshtastic.c) — runtime-only, resets to automatic (OFF) on reboot.
+static void on_force_local_click(purr_wid_t w, purr_event_t e, void *user) {
+    (void)w; (void)e; (void)user;
+    msn_mt_relay_set_force_local(!msn_mt_relay_get_force_local());
+    update_chooser_status();
 }
 
 static void enter_chat_ui(const msn_backend_t *backend) {
@@ -957,6 +1013,13 @@ static void open_chooser(void) {
     purr_win_button(s_chooser_win, "MeshCore", on_meshcore_click, NULL);
     s_meshcore_status = purr_win_label(s_chooser_win, "");
     purr_win_layout_end(mc_row);
+
+    // Manual override for MSN's automatic home-base radio relay (Meshtastic
+    // backend only, this pass) — see msn_backend.h's msn_mt_relay_* comment.
+    purr_wid_t fl_row = purr_win_row(s_chooser_win, 4);
+    purr_win_button(s_chooser_win, "Force local radio", on_force_local_click, NULL);
+    s_force_local_status = purr_win_label(s_chooser_win, "");
+    purr_win_layout_end(fl_row);
 
     update_chooser_status();
     purr_win_show(s_chooser_win);

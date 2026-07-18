@@ -1,0 +1,17 @@
+# modules/msn_relay/module.pcat
+# Home-base-side responder for MSN's automatic radio relay (see
+# homebase.h / msn_backend_meshtastic.c). Answers MSN_RELAY_ACTION_SEND_
+# TEXT over proximity_rpc by calling meshtastic.h's mesh_manager_send_text()
+# on THIS device's own radio. Deliberately its own module rather than part
+# of msn.c/msn_backend_meshtastic.c (which require a purr_win UI backend
+# MSN itself can never run on a headless device like Heltec V3) — same
+# reasoning as app_manager_remote being split out from app_manager.c.
+
+name              = "msn_relay"
+version           = "1.0.0"
+module_type       = "PURR_MOD_SYSTEM"
+kernel_min        = "0.11.1"
+kernel_max        = ""
+
+provides          = ["msn_relay"]
+required_catcalls = []

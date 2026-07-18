@@ -82,6 +82,14 @@ typedef struct {
     void       (*label_set)    (purr_wid_t wid, const char *text);
     void       (*label_align)  (purr_wid_t wid, purr_align_t align);
 
+    // Re-renders an existing label's text in a large, banner-style font
+    // (e.g. Milk Bottle's big incoming-message display) — same wid a plain
+    // label_create() returned, just a different visual treatment on set.
+    // Optional: purr_win_label_set_big() in purr_win.h falls back to
+    // label_set() (normal size) for any backend that leaves this NULL, so
+    // it's always safe to call, just not always literally "big" everywhere.
+    void       (*label_set_big) (purr_wid_t wid, const char *text);
+
     // ── Buttons ────────────────────────────────────────────────────────────
     purr_wid_t (*btn_create)   (purr_win_t win, const char *label,
                                 purr_win_cb_t cb, void *user);

@@ -10,7 +10,11 @@ idf_component_register(
         ../../../kernel/catcalls
         ../../../modules/meshtastic
         ../../../modules/meshcore
+        ../../../modules/pairing
+        ../../../modules/proximity_rpc
+        ../../../modules/homebase
+        ../../../modules/msn_relay
         ../../../lib/lib_mesh_pb
-    REQUIRES esp_common driver freertos miniwin cupcake app_manager meshtastic meshcore mbedtls
+    REQUIRES esp_common driver freertos miniwin cupcake app_manager meshtastic meshcore mbedtls pairing proximity_rpc homebase msn_relay
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-format-truncation)
